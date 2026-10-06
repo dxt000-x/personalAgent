@@ -12,12 +12,12 @@ Issue → Feature Branch → Commit → Pull Request → Merge
 4. Pull Request：说明问题、修改结果、验证方式及未完成事项。
 5. Merge：完成审核及必要检查后合并。
 
-Task 1 已通过 GitHub Pull Request 合并到 main。Task 2 在 `feat/agent-ui-shell` 开发，仅 UI 与演示交互；本任务不 push、创建 PR 或 merge。
+Task 1 与 Task 2 已通过 GitHub Pull Request 合并到 main。Task 3 在 `feat/auth-foundation` 开发，仅认证基础；本任务不 push、创建 PR 或 merge。
 
 ## 开发原则
 
 - 先检查现有文件与 Git 状态，保留有效代码，不覆盖无关修改。
-- 每次只完成约定的任务范围。Day 1 不开发 Memory、RAG、Agent、Supabase 或模型 API。
+- 每次只完成约定的任务范围。Task 3 仅允许 Supabase Auth，不开发 Memory、RAG、Agent、业务数据库或模型 API。
 - 文档明确区分 Implemented 与 Planned。
 - 使用环境变量管理凭据；不提交真实密钥、数据库密码、Supabase Secret、个人机器路径或环境文件。
 - 避免过早引入复杂 UI 框架与基础设施。
@@ -58,3 +58,29 @@ ESLint 9 的安装还提示该版本已停止支持；当前保留与 Next.js �
 ## Task 2 演示边界
 
 用户、任务、项目进度、记忆与文件列表均为固定示例。Agent 时间线手动推进，设置选择仅在页面内存中保存。上传、检索、编辑、删除与服务连接按钮明确禁用。无后端请求、模型接入、RAG、Memory 存储或本地操作。
+
+## Task 3 认证验证
+
+- 无 `web/.env.local` 或两个配置为空：`/login`、`/signup` 可访问，显示未配置提示；受保护页面返回登录。
+- 填入真实项目的公开配置并重启：测试错误密码、确认密码不一致、注册与邮箱确认、登录、刷新保持登录、五个页面导航、退出以及退出后再次访问受保护页面。
+- Supabase Email provider、邮箱确认开关与 Redirect URLs 需在用户的项目控制台设置；应用不管理这些外部配置。
+- 密码和 session token 不记录到日志，不存入业务数据库。主要配置采用 `NEXT_PUBLIC_SUPABASE_URL` 与 `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`，仅公开 publishable key 可传到浏览器；旧 anon key 仅作为兼容回退。
+- 没有真实项目时，不能声称已完成真实邮件发送或实际项目的认证联调。
+
+本阶段已验证无配置的生产页面和登录跳转，并通过临时本地认证测试服务检查密码不一致、Loading/Error、等待确认提示、登录、刷新、页面导航与退出。伪造 session Cookie 被拒绝。测试服务与虚构配置不写入产品代码。真实 Supabase 联调已确认邮箱验证、密码登录、Session Cookie、Proxy 与 Workspace claims 验证及进入 Dashboard 成功；真实账号的刷新、完整导航、退出与重新登录需按上述清单分别验收。
+
+## 本地网络排查
+
+浏览器登录成功但仍返回 `/login` 时，检查 Node 服务端是否能访问 Supabase。浏览器通过系统代理联网，并不代表 Node 会自动采用该代理；`getClaims()` 网络验证失败时，应用仍会拒绝受保护页面。
+
+如果 Node 无法直连 Supabase，可在启动开发服务器前，为当前终端配置代理环境变量。以下示例适用于本次验证使用的 Node 24.19.0；将 `<proxy-port>` 替换为本地代理实际端口：
+
+```powershell
+$env:HTTP_PROXY = "http://127.0.0.1:<proxy-port>"
+$env:HTTPS_PROXY = "http://127.0.0.1:<proxy-port>"
+$env:NO_PROXY = "localhost,127.0.0.1,::1"
+$env:NODE_USE_ENV_PROXY = "1"
+npm run dev
+```
+
+这些设置仅影响当前终端及其子进程；重启开发服务器后生效。不要将个人代理地址提交到 Git，也不要使用 `NEXT_PUBLIC_` 变量传递代理配置。排查时仅记录认证状态布尔值，禁止记录密码、密钥、Token 或 Cookie 内容；不关闭邮箱验证或放宽服务器鉴权。
