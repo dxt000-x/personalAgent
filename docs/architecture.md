@@ -3,8 +3,7 @@
 ## Implemented — Day 1 / Task 3
 
 - Browser → Web：Next.js App Router 提供 Dashboard、Agent、Memory、Knowledge Base 与 Settings UI。
-- `/login`、`/signup` 与 `/auth/confirm` 提供 Supabase Email / Password 认证基础。确认邮件携带 `token_hash` 与 `type=email`，服务端 `verifyOtp` 验证后写入 Cookie Session，再跳转 Dashboard。
-- `/auth/callback` 仅预留 OAuth / PKCE code 交换，不用于 Signup 确认。没有启用 OAuth。
+- `/login`、`/signup` 与 `/auth/callback` 提供 Supabase Email / Password 认证基础。
 - `@supabase/ssr` 使用 Cookie 会话，`web/proxy.ts` 刷新并通过 `getClaims()` 验证身份；`(workspace)` 服务端布局再次验证后渲染原 UI，URL 不变。
 - 缺少或无效的公开配置时不创建客户端，认证页显示提示，受保护页面跳转登录；无开发绕过入口。
 - Agent 通过 React 页面状态演示六步流程及 pending / running / success / error，无真实 Agent 执行。
