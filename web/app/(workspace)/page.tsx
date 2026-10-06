@@ -14,7 +14,7 @@ export default function DashboardPage() {
     <>
       <PageHeader
         eyebrow="YOUR WORKSPACE, AT A GLANCE"
-        title="欢迎回来，林晨"
+        title="欢迎回来"
         description="Your personal AI workspace · 从今天最重要的事开始。"
         action={
           <NewTaskLink className="button-primary">＋ 开始新任务</NewTaskLink>

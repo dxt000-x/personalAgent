@@ -12,12 +12,12 @@ Issue → Feature Branch → Commit → Pull Request → Merge
 4. Pull Request：说明问题、修改结果、验证方式及未完成事项。
 5. Merge：完成审核及必要检查后合并。
 
-Task 1 已通过 GitHub Pull Request 合并到 main。Task 2 在 `feat/agent-ui-shell` 开发，仅 UI 与演示交互；本任务不 push、创建 PR 或 merge。
+Task 1 与 Task 2 已通过 GitHub Pull Request 合并到 main。Task 3 在 `feat/auth-foundation` 开发，仅认证基础；本任务不 push、创建 PR 或 merge。
 
 ## 开发原则
 
 - 先检查现有文件与 Git 状态，保留有效代码，不覆盖无关修改。
-- 每次只完成约定的任务范围。Day 1 不开发 Memory、RAG、Agent、Supabase 或模型 API。
+- 每次只完成约定的任务范围。Task 3 仅允许 Supabase Auth，不开发 Memory、RAG、Agent、业务数据库或模型 API。
 - 文档明确区分 Implemented 与 Planned。
 - 使用环境变量管理凭据；不提交真实密钥、数据库密码、Supabase Secret、个人机器路径或环境文件。
 - 避免过早引入复杂 UI 框架与基础设施。
@@ -58,3 +58,13 @@ ESLint 9 的安装还提示该版本已停止支持；当前保留与 Next.js �
 ## Task 2 演示边界
 
 用户、任务、项目进度、记忆与文件列表均为固定示例。Agent 时间线手动推进，设置选择仅在页面内存中保存。上传、检索、编辑、删除与服务连接按钮明确禁用。无后端请求、模型接入、RAG、Memory 存储或本地操作。
+
+## Task 3 认证验证
+
+- 无 `web/.env.local` 或两个配置为空：`/login`、`/signup` 可访问，显示未配置提示；受保护页面返回登录。
+- 填入真实项目的公开配置并重启：测试错误密码、确认密码不一致、注册与邮箱确认、登录、刷新保持登录、五个页面导航、退出以及退出后再次访问受保护页面。
+- Supabase Email provider、邮箱确认开关与 Redirect URLs 需在用户的项目控制台设置；应用不管理这些外部配置。
+- 密码和 session token 不记录到日志，不存入业务数据库。仅公开 anon key 可传到浏览器。
+- 没有真实项目时，不能声称已完成真实邮件发送或实际项目的认证联调。
+
+本阶段已验证无配置的生产页面和登录跳转，并通过临时本地认证测试服务检查密码不一致、Loading/Error、等待确认提示、登录、刷新、页面导航与退出。伪造 session Cookie 被拒绝。测试服务与虚构配置不写入产品代码；真实 Supabase 项目与邮件确认仍需联调。

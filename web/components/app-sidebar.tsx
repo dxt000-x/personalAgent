@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { NewTaskLink } from "./new-task-link";
+import { AccountMenu } from "./account-menu";
 
 const navigation = [
   { href: "/", label: "Dashboard", symbol: "▦" },
@@ -12,7 +13,7 @@ const navigation = [
   { href: "/settings", label: "Settings", symbol: "⚙" },
 ];
 
-export function AppSidebar() {
+export function AppSidebar({ userEmail }: { userEmail: string }) {
   const pathname = usePathname();
   return (
     <aside className="flex shrink-0 flex-col border-b border-slate-200 bg-white p-5 lg:sticky lg:top-0 lg:h-screen lg:w-64 lg:border-r lg:border-b-0">
@@ -58,20 +59,7 @@ export function AppSidebar() {
           </div>
           <p className="mt-2 text-slate-400">Disconnected · 尚未连接</p>
         </div>
-        <div className="flex items-center gap-3 px-2">
-          <span className="flex size-9 items-center justify-center rounded-full bg-amber-100 text-xs font-bold text-amber-900">
-            LC
-          </span>
-          <div>
-            <p className="text-sm font-semibold">
-              林晨{" "}
-              <span className="text-xs font-normal text-slate-400">
-                Mock User
-              </span>
-            </p>
-            <p className="text-xs text-slate-400">个人工作空间 · 演示</p>
-          </div>
-        </div>
+        <AccountMenu email={userEmail} />
       </div>
     </aside>
   );

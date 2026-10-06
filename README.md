@@ -8,7 +8,7 @@
 
 ## 当前开发阶段
 
-**Day 1 / Task 2：Personal AI Web 界面骨架。** 已在 Task 1 基础上实现统一导航与五个 UI 页面。所有用户、任务、记忆、文档和进度均为演示数据。AI、数据库、后端 API 和本地连接器尚未实现。
+**Day 1 / Task 3：用户认证基础架构。** 已加入 Supabase Auth 邮箱注册、登录、退出及路由保护。Task 2 的任务、记忆、文档和进度仍为演示数据。没有实现用户业务数据、AI、后端 API 或本地连接器。
 
 ## 技术架构概览
 
@@ -41,7 +41,7 @@ npm ci
 npm run dev
 ```
 
-打开 http://localhost:3000。当前页面无需 API Key、数据库或后端，也不需要复制环境文件。
+打开 http://localhost:3000。未登录时进入 `/login`。未配置 Supabase 时应用可正常启动，登录/注册显示配置提示且提交按钮禁用。
 
 检查及生产运行：
 
@@ -56,6 +56,9 @@ npm run start
 
 ## 当前已实现功能
 
+- `/login`、`/signup`：邮箱密码认证、确认密码校验、Loading/Error 状态及邮箱确认回调。
+- Supabase 官方 `@supabase/ssr` 浏览器/服务端客户端，Cookie 会话、Proxy 刷新与服务端身份校验。
+- Dashboard / Agent / Memory / Knowledge / Settings 未登录时跳转 `/login`；侧栏展示认证邮箱及退出入口。
 - 统一侧边导航与 Dashboard：今日重点、项目、最近任务、演示记忆与继续任务入口。
 - `/agent`：任务输入、聊天 UI 与六步执行时间线；支持手动推进、模拟错误、重试和重置。
 - `/agent?new=1`：空白演示任务入口，提交后启动固定前端流程。
@@ -67,21 +70,34 @@ npm run start
 - 后端与本地连接器占位目录。
 - 环境变量示例、敏感文件忽略规则与架构/开发文档。
 
-所有演示状态仅存在于页面内存，刷新后重置；示例结果为固定内容，不随输入生成。没有读取文件、执行命令、数据持久化或 AI 网络请求。
+工作空间的演示状态仅存在于页面内存，刷新后重置；示例结果为固定内容，不随输入生成。仅认证会话由 Supabase 管理，没有业务数据持久化、文件读取、命令执行或 AI 请求。
 
 ## Planned Features
 
 - FastAPI 后端与 Personal Agent。
 - 个性化 Memory、个人知识 RAG 与 Tools。
-- Supabase 数据存储与用户认证。
+- Supabase 用户业务数据存储（认证基础已实现，需配置项目验证）。
 - OpenAI / DeepSeek / Gemini 模型接入与 Model Router。
 - Windows Local Connector、Ollama、本地文件与受控命令执行。
 
 ## 配置与安全
 
-所有 API Key 和数据库凭据必须由环境变量提供。根目录 `.env.example` 仅包含空值，列出的变量保留给未来集成，当前没有代码读取它们。
+所有 API Key 和数据库凭据必须由环境变量提供。根目录 `.env.example` 仅包含空值；本阶段只读取两个公开 Supabase 认证配置。
 
-Next.js 只读取 Web 应用目录中的环境文件；未来 Web 配置应放在 `web/.env.local`，后端私密配置放在 `server/.env` 并由后端加载。根目录示例不会自动被 Web 加载。私密 API Key、数据库密码和 Supabase Secret 不得使用 `NEXT_PUBLIC_` 前缀或传到浏览器。
+Next.js 只读取 Web 应用目录中的环境文件。将以下配置填入 `web/.env.local`：
+
+```dotenv
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+```
+
+使用 Supabase 项目的 Project URL 和公开 anon key。严禁把 service_role、secret key 或数据库密码填入这些公开变量。修改后重启开发服务；生产环境修改后需重新构建。根目录示例不会自动被 Web 加载。
+
+在 Supabase Auth 开启 Email provider。设置 Site URL 为本地开发地址，并在 Redirect URLs 中允许 `http://localhost:3000/auth/callback`（部署时使用实际站点地址）。开启邮箱确认时，注册后按提示在同一浏览器打开邮件链接，回调交换 PKCE code 后进入 Dashboard；若没有即时 session，页面不会假装已经登录。关闭邮箱确认时，注册得到 session 后直接进入 Dashboard。此应用不自动更改 Supabase 的认证策略。
+
+登录成功后进入 `/`；退出只注销当前浏览器会话并返回 `/login`。认证校验失败或服务不可用时不会放行受保护页面。没有配置的本地环境无法登录，也无法直接查看工作空间。
+
+参考 [Supabase 官方 Next.js SSR 文档](https://supabase.com/docs/guides/auth/server-side/creating-a-client?framework=nextjs)。未来后端私密配置放在 `server/.env` 并由后端加载，私密值不得使用 `NEXT_PUBLIC_` 前缀。
 
 `.env` 及 `.env.*` 默认被 Git 忽略，仅 `.env.example` 可提交。不得提交真实密钥、个人机器路径或生成文件。
 
