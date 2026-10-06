@@ -1,46 +1,121 @@
-const plannedFeatures = [
-  { title: "Personal Agent", description: "协助安排学习与工作任务，提供个性化支持。" },
-  { title: "Memory / RAG", description: "在用户授权下管理记忆，检索个人知识。" },
-  { title: "Models / Tools", description: "接入模型路由与工具，连接云端和本地能力。" },
+import Link from "next/link";
+import { DashboardCard } from "@/components/dashboard-card";
+import { PageHeader } from "@/components/page-header";
+import { NewTaskLink } from "@/components/new-task-link";
+
+const recentTasks = [
+  { title: "制定两周开发计划", status: "规划中", date: "演示 · 今天" },
+  { title: "整理比赛资料目录", status: "已完成", date: "演示 · 昨天" },
+  { title: "梳理项目架构", status: "已完成", date: "演示 · 10 月 4 日" },
 ];
 
-export default function Home() {
+export default function DashboardPage() {
   return (
-    <main className="min-h-screen bg-slate-50 px-6 py-16 text-slate-900 sm:px-10">
-      <div className="mx-auto max-w-4xl">
-        <header className="border-b border-slate-200 pb-12">
-          <p className="mb-6 text-sm font-semibold tracking-widest text-teal-700">DAY 1 / TASK 1</p>
-          <h1 className="text-4xl font-bold tracking-tight sm:text-6xl">Personal AI Assistant</h1>
-          <p className="mt-6 max-w-2xl text-lg leading-8 text-slate-600">
-            面向大学生和年轻职场人的 Web Personal AI Agent，让学习与工作更有条理。
+    <>
+      <PageHeader
+        eyebrow="YOUR WORKSPACE, AT A GLANCE"
+        title="欢迎回来，林晨"
+        description="Your personal AI workspace · 从今天最重要的事开始。"
+        action={
+          <NewTaskLink className="button-primary">＋ 开始新任务</NewTaskLink>
+        }
+      />
+      <section className="mb-7 flex flex-wrap items-center justify-between gap-6 rounded-2xl bg-teal-900 p-7 text-white">
+        <div>
+          <p className="text-xs text-teal-200">
+            CONTINUE PREVIOUS TASK · 演示任务
           </p>
-          <p className="mt-8 inline-block rounded-full bg-teal-100 px-4 py-2 text-sm font-medium text-teal-900">
-            当前阶段：基础架构
+          <h2 className="mt-3 text-xl font-semibold">
+            为 AI 比赛制定两周开发计划
+          </h2>
+          <p className="mt-2 text-sm text-teal-100">
+            已梳理项目背景，下一步：规划任务与里程碑。
           </p>
-        </header>
-
-        <section aria-labelledby="implemented-heading" className="py-10">
-          <h2 id="implemented-heading" className="text-xl font-semibold">已实现</h2>
-          <p className="mt-3 leading-7 text-slate-600">
-            Next.js Web 应用、TypeScript、Tailwind CSS 与 App Router 基础页面。
-            本页面用于验证项目可运行，尚未接入 AI 或数据服务。
-          </p>
-        </section>
-
-        <section aria-labelledby="planned-heading">
-          <h2 id="planned-heading" className="text-xl font-semibold">Planned Features</h2>
-          <div className="mt-5 grid gap-4 sm:grid-cols-3">
-            {plannedFeatures.map((feature) => (
-              <article key={feature.title} className="rounded-2xl border border-slate-200 bg-white p-6">
-                <p className="text-xs font-semibold text-slate-500">计划中</p>
-                <h3 className="mt-3 font-semibold">{feature.title}</h3>
-                <p className="mt-3 text-sm leading-6 text-slate-600">{feature.description}</p>
-              </article>
-            ))}
+        </div>
+        <Link
+          href="/agent"
+          className="rounded-xl bg-white px-5 py-3 text-sm font-semibold text-teal-900 hover:bg-teal-50"
+        >
+          继续上次任务 →
+        </Link>
+      </section>
+      <div className="grid gap-6 lg:grid-cols-2">
+        <DashboardCard title="今日重点" subtitle="TODAY’S FOCUS">
+          <div className="flex items-start gap-4">
+            <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
+              ◎
+            </span>
+            <div>
+              <h3 className="font-medium">Build Agent UI</h3>
+              <p className="mt-2 text-sm leading-6 text-slate-500">
+                搭建 Agent 工作空间与执行过程，让每一步都有清晰的状态。
+              </p>
+              <span className="badge mt-4">演示 · 高优先级</span>
+            </div>
           </div>
-        </section>
-        <footer className="mt-12 text-sm text-slate-500">AI 应用比赛项目 · 基础架构阶段</footer>
+        </DashboardCard>
+        <DashboardCard title="进行中的项目" subtitle="ACTIVE PROJECTS">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="font-medium">Personal AI Assistant</h3>
+            <span className="rounded-full bg-teal-50 px-3 py-1 text-xs text-teal-700">
+              Development
+            </span>
+          </div>
+          <p className="mt-3 text-sm text-slate-500">
+            AI 应用比赛 · 从基础架构到个人 Agent
+          </p>
+          <div className="mt-6 flex justify-between text-xs text-slate-500">
+            <span>演示进度</span>
+            <span>35%</span>
+          </div>
+          <div
+            role="progressbar"
+            aria-label="演示项目进度"
+            aria-valuenow={35}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100"
+          >
+            <div className="h-full w-[35%] rounded-full bg-teal-700" />
+          </div>
+        </DashboardCard>
+        <DashboardCard title="最近任务" subtitle="RECENT TASKS">
+          <ul className="divide-y divide-slate-100">
+            {recentTasks.map((task) => (
+              <li
+                key={task.title}
+                className="flex items-center justify-between gap-4 py-3 first:pt-0"
+              >
+                <div>
+                  <p className="text-sm font-medium">{task.title}</p>
+                  <p className="mt-1 text-xs text-slate-400">{task.date}</p>
+                </div>
+                <span className="badge">{task.status}</span>
+              </li>
+            ))}
+          </ul>
+        </DashboardCard>
+        <DashboardCard title="AI 记得的重要事项" subtitle="AI MEMORIES">
+          <div className="rounded-xl bg-amber-50 p-4">
+            <p className="text-sm font-medium text-amber-900">
+              AI competition project in progress
+            </p>
+            <p className="mt-2 text-sm leading-6 text-amber-800">
+              当前重点是 Personal AI Assistant
+              比赛项目，优先完成可演示的产品骨架。
+            </p>
+            <p className="mt-3 text-xs text-amber-700">
+              演示记忆 · 来源：项目背景
+            </p>
+          </div>
+          <Link
+            href="/memory"
+            className="mt-5 inline-block text-sm font-medium text-teal-700"
+          >
+            查看个人记忆 →
+          </Link>
+        </DashboardCard>
       </div>
-    </main>
+    </>
   );
 }

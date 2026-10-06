@@ -12,7 +12,7 @@ Issue → Feature Branch → Commit → Pull Request → Merge
 4. Pull Request：说明问题、修改结果、验证方式及未完成事项。
 5. Merge：完成审核及必要检查后合并。
 
-当前仅初始化本地仓库，尚未配置远程仓库或创建 Issue / Pull Request，也未执行 Merge。
+Task 1 已通过 GitHub Pull Request 合并到 main。Task 2 在 `feat/agent-ui-shell` 开发，仅 UI 与演示交互；本任务不 push、创建 PR 或 merge。
 
 ## 开发原则
 
@@ -54,3 +54,7 @@ ESLint 9 的安装还提示该版本已停止支持；当前保留与 Next.js �
 - `chore: initialize web application`：Web 代码、配置、依赖锁文件及生成文件/环境文件忽略规则。
 - `chore: add project workspace structure`：后端和 Connector 占位说明、空值环境变量示例。
 - `docs: add architecture and development documentation`：项目 README、架构及开发流程。
+
+## Task 2 演示边界
+
+用户、任务、项目进度、记忆与文件列表均为固定示例。Agent 时间线手动推进，设置选择仅在页面内存中保存。上传、检索、编辑、删除与服务连接按钮明确禁用。无后端请求、模型接入、RAG、Memory 存储或本地操作。

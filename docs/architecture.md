@@ -1,8 +1,9 @@
 # Architecture
 
-## Implemented — Day 1 / Task 1
+## Implemented — Day 1 / Task 2
 
-- Browser → Web：Next.js App Router 提供静态内容首页。
+- Browser → Web：Next.js App Router 提供 Dashboard、Agent、Memory、Knowledge Base 与 Settings UI。
+- Agent 通过 React 页面状态演示六步流程及 pending / running / success / error，无真实 Agent 执行。
 - `web/` 使用 TypeScript 与 Tailwind CSS，提供 lint、类型检查与生产构建脚本。
 - `server/`、`connector/` 仅包含占位说明，不提供服务或 API。
 - `.env.example` 提供空值示例；真实环境配置被 Git 忽略。
@@ -24,7 +25,7 @@ Browser
 
 | 组件 | 规划职责 | 当前状态 |
 | --- | --- | --- |
-| Browser / Web | 用户交互与结果展示 | 仅基础首页已实现 |
+| Browser / Web | 用户交互与结果展示 | 五个 UI 页面及前端 Mock 交互已实现 |
 | API | 请求校验、认证、服务端配置边界 | Planned，仅目录占位 |
 | Personal Agent | 组织任务、协调模型和工具 | Planned |
 | Models / Model Router | 路由 OpenAI、DeepSeek、Gemini 等模型 | Planned |
