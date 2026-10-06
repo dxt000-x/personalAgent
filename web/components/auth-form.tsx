@@ -49,7 +49,7 @@ export function AuthForm({
             email,
             password,
             options: {
-              emailRedirectTo: `${window.location.origin}/auth/callback`,
+              emailRedirectTo: `${window.location.origin}/auth/confirm`,
             },
           })
         : await supabase.auth.signInWithPassword({ email, password });
@@ -75,7 +75,7 @@ export function AuthForm({
       } else if (isSignup) {
         // Supabase may deliberately return a generic response for an existing user.
         setMessage(
-          "如果该邮箱可注册，你将收到确认邮件。请在此浏览器打开链接完成确认，再登录。",
+          "如果该邮箱可注册，你将收到确认邮件。请打开最新确认链接，验证成功后将进入工作空间。",
         );
       } else {
         setError("未能建立登录会话，请重试。");

@@ -56,7 +56,7 @@ npm run start
 
 ## 当前已实现功能
 
-- `/login`、`/signup`：邮箱密码认证、确认密码校验、Loading/Error 状态及邮箱确认回调。
+- `/login`、`/signup`：邮箱密码认证、确认密码校验、Loading/Error 状态及 `/auth/confirm` 邮箱确认入口。
 - Supabase 官方 `@supabase/ssr` 浏览器/服务端客户端，Cookie 会话、Proxy 刷新与服务端身份校验。
 - Dashboard / Agent / Memory / Knowledge / Settings 未登录时跳转 `/login`；侧栏展示认证邮箱及退出入口。
 - 统一侧边导航与 Dashboard：今日重点、项目、最近任务、演示记忆与继续任务入口。
@@ -93,7 +93,19 @@ NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=
 
 使用 Supabase 项目的 Project URL 和 publishable key。配置优先读取 `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`；未填写或仅含空白时兼容旧的 `NEXT_PUBLIC_SUPABASE_ANON_KEY`。两者同时存在时使用 publishable key。严禁把 service_role、secret key 或数据库密码填入这些公开变量。修改后重启开发服务；生产环境修改后需重新构建。根目录示例不会自动被 Web 加载。
 
-在 Supabase Auth 开启 Email provider。设置 Site URL 为本地开发地址，并在 Redirect URLs 中允许 `http://localhost:3000/auth/callback`（部署时使用实际站点地址）。开启邮箱确认时，注册后按提示在同一浏览器打开邮件链接，回调交换 PKCE code 后进入 Dashboard；若没有即时 session，页面不会假装已经登录。关闭邮箱确认时，注册得到 session 后直接进入 Dashboard。此应用不自动更改 Supabase 的认证策略。
+在 Supabase Auth 开启 Email provider，保持 **Confirm email** 开启。设置 Site URL 为实际 Web 地址（本地例如 `http://localhost:3000`），并在 Redirect URLs 中允许 `http://localhost:3000/auth/confirm`（部署时使用实际站点地址）。注意浏览器地址与配置中的主机名和端口保持一致。
+
+在 **Authentication → Email Templates → Confirm signup** 中，把确认按钮的链接改为：
+
+```html
+<a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email">确认邮箱</a>
+```
+
+此链接直接进入 Web 的确认 Route Handler，通过服务端 `verifyOtp` 验证 token hash，并由 `@supabase/ssr` 写入 Cookie Session，成功后跳转 Dashboard。不依赖注册浏览器中的 PKCE code verifier。缺失参数、过期/无效链接、验证失败或无 session 时返回 `/login?error=confirmation`，不会绕过邮箱验证。
+
+模板使用 `.SiteURL`，因此邮件链接由 Supabase Site URL 决定；Signup 的 `emailRedirectTo` 已指向 `/auth/confirm`，但不能代替后台模板修改。修改模板后请使用新发送的确认邮件，旧邮件不会自动更新。`/auth/callback` 仅保留给未来 OAuth / PKCE，不再用于 Signup 邮箱确认；尚未实现 OAuth。
+
+方案参考 [Supabase 官方 Next.js 邮箱确认教程](https://supabase.com/docs/guides/getting-started/tutorials/with-nextjs)。
 
 登录成功后进入 `/`；退出只注销当前浏览器会话并返回 `/login`。认证校验失败或服务不可用时不会放行受保护页面。没有配置的本地环境无法登录，也无法直接查看工作空间。
 

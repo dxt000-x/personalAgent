@@ -63,7 +63,7 @@ ESLint 9 的安装还提示该版本已停止支持；当前保留与 Next.js �
 
 - 无 `web/.env.local` 或两个配置为空：`/login`、`/signup` 可访问，显示未配置提示；受保护页面返回登录。
 - 填入真实项目的公开配置并重启：测试错误密码、确认密码不一致、注册与邮箱确认、登录、刷新保持登录、五个页面导航、退出以及退出后再次访问受保护页面。
-- Supabase Email provider、邮箱确认开关与 Redirect URLs 需在用户的项目控制台设置；应用不管理这些外部配置。
+- Supabase Email provider、Site URL、Redirect URLs 和 Confirm signup 模板需在用户的项目控制台设置；邮箱确认保持开启。模板使用 `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email`，详见 README。应用不管理这些外部配置。
 - 密码和 session token 不记录到日志，不存入业务数据库。主要配置采用 `NEXT_PUBLIC_SUPABASE_URL` 与 `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`，仅公开 publishable key 可传到浏览器；旧 anon key 仅作为兼容回退。
 - 没有真实项目时，不能声称已完成真实邮件发送或实际项目的认证联调。
 

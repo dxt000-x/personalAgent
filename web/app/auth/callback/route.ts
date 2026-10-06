@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
 export async function GET(request: NextRequest) {
+  // Retained for future OAuth / PKCE flows; signup emails use /auth/confirm.
   function redirectTo(path: string) {
     const response = NextResponse.redirect(new URL(path, request.url));
     response.headers.set("Cache-Control", "private, no-store");
