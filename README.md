@@ -2,6 +2,30 @@
 
 面向大学生和年轻职场人的 Web Personal AI Agent，目标是帮助用户组织学习、工作与个人知识。
 
+## 在线体验
+
+🌐 **Live Demo：**  
+https://personal-agent-seven-mu.vercel.app
+
+### 当前版本
+
+**V0.1 — Web Foundation + Agent UI + Supabase Authentication**
+
+当前已实现：
+
+- ✅ Next.js Web 应用基础架构
+- ✅ Personal AI Agent Workspace
+- ✅ Dashboard
+- ✅ Agent Execution Timeline UI
+- ✅ Personal Memory UI
+- ✅ Knowledge Base UI
+- ✅ Settings
+- ✅ Supabase 用户注册 / 登录 / 退出
+- ✅ 服务端身份认证与受保护路由
+- ✅ Vercel 公网部署
+
+> 当前 Agent、个人记忆、知识库的 AI 核心能力仍在持续开发中。
+
 ## 比赛项目目标
 
 通过统一的 Web 入口，逐步探索个人 AI 助手如何结合模型、个人记忆、知识检索和工具，提供可理解、可控的个性化支持。
