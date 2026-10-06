@@ -1,0 +1,29 @@
+# Dependencies and generated web files
+node_modules/
+.next/
+out/
+build/
+dist/
+coverage/
+*.tsbuildinfo
+next-env.d.ts
+
+# Secrets: examples are safe to commit
+.env
+.env.*
+!.env.example
+
+# Python / future backend
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Local tooling and logs
+.idea/
+.vscode/
+*.log
+.DS_Store
+Thumbs.db
