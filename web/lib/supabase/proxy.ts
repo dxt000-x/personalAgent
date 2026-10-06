@@ -25,7 +25,7 @@ export async function updateSession(request: NextRequest) {
 
   if (!config) return isAuthPage ? response : redirectTo("/login");
 
-  const supabase = createServerClient(config.url, config.anonKey, {
+  const supabase = createServerClient(config.url, config.publishableKey, {
     cookies: {
       getAll: () => request.cookies.getAll(),
       setAll(cookiesToSet, headers) {

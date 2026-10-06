@@ -88,10 +88,10 @@ Next.js 只读取 Web 应用目录中的环境文件。将以下配置填入 `we
 
 ```dotenv
 NEXT_PUBLIC_SUPABASE_URL=
-NEXT_PUBLIC_SUPABASE_ANON_KEY=
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=
 ```
 
-使用 Supabase 项目的 Project URL 和公开 anon key。严禁把 service_role、secret key 或数据库密码填入这些公开变量。修改后重启开发服务；生产环境修改后需重新构建。根目录示例不会自动被 Web 加载。
+使用 Supabase 项目的 Project URL 和 publishable key。配置优先读取 `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`；未填写或仅含空白时兼容旧的 `NEXT_PUBLIC_SUPABASE_ANON_KEY`。两者同时存在时使用 publishable key。严禁把 service_role、secret key 或数据库密码填入这些公开变量。修改后重启开发服务；生产环境修改后需重新构建。根目录示例不会自动被 Web 加载。
 
 在 Supabase Auth 开启 Email provider。设置 Site URL 为本地开发地址，并在 Redirect URLs 中允许 `http://localhost:3000/auth/callback`（部署时使用实际站点地址）。开启邮箱确认时，注册后按提示在同一浏览器打开邮件链接，回调交换 PKCE code 后进入 Dashboard；若没有即时 session，页面不会假装已经登录。关闭邮箱确认时，注册得到 session 后直接进入 Dashboard。此应用不自动更改 Supabase 的认证策略。
 

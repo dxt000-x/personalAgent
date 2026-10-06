@@ -117,7 +117,7 @@ export function AuthForm({
           >
             <p>{unconfiguredMessage}</p>
             <p className="mt-2 text-xs">
-              在 web/.env.local 配置 Supabase URL 与公开 anon key，然后重启 Web
+              在 web/.env.local 配置 Supabase URL 与 publishable key，然后重启 Web
               服务。
             </p>
           </div>
