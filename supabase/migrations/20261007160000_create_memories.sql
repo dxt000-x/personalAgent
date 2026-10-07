@@ -64,4 +64,9 @@ create trigger set_memories_updated_at
 
 -- Supabase API roles only need row-level operations; anon receives no table access.
 revoke all on table public.memories from anon, authenticated;
-grant select, insert, update, delete on table public.memories to authenticated;
+grant select on table public.memories to authenticated;
+grant insert (user_id, content, category, importance)
+  on table public.memories to authenticated;
+grant update (content, category, importance)
+  on table public.memories to authenticated;
+grant delete on table public.memories to authenticated;
