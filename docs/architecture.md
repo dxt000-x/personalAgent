@@ -14,7 +14,12 @@
 - Agent Chat 通过认证后的 `POST /api/ai/chat` 发送消息。最近最多 20 条消息作为多轮上下文，只保存在前端内存，刷新后清空；不建立会话数据库。
 - Agent Timeline 展示 Received、Validating、Routing、Generating、Completed 请求阶段，并在成功后显示实际 Provider、模型与安全路由原因；未实现 Agent Planning、Memory Retrieval、RAG 或 Tool Calling。
 - 缺少或无效的公开配置时不创建客户端，认证页显示提示，受保护页面跳转登录；无开发绕过入口。
-- Dashboard、Memory 与 Knowledge Base 仍展示演示数据；Agent 页面是真实 Chat UI，但不执行 Agent Planning 或工具。
+- Dashboard 与 Knowledge Base 仍展示演示数据；`/memory` 已使用真实 Supabase 数据，不再显示 Mock Memory。Agent 页面是真实 Chat UI，但不执行 Agent Planning 或工具。
+- Personal Context Layer 当前实现：Authenticated User → Personal Memory UI → Next.js Memory API → Supabase SSR Session → `public.memories` → RLS。API 从已验证 claims 获取用户 ID；请求不接受客户端指定 `user_id`；数据库仅授予 authenticated 必需的 SELECT、受限列 INSERT/UPDATE 与 DELETE 权限。
+- Memory API 提供 `GET/POST /api/memories` 和 `GET/PATCH/DELETE /api/memories/[id]`，强制 private/no-store 响应。SQL 约束类别、重要度和内容长度；POST 省略 `source`，由数据库 `DEFAULT 'manual'` 填充；更新时间由 trigger 维护。
+- 记忆所有权由 SELECT、INSERT、UPDATE、DELETE 四条 authenticated RLS policy 保障。按用户过滤是额外防护，不替代 RLS；跨用户单条访问以 404 安全失败。
+- Migration 已由项目维护者在 Supabase 执行并确认 RLS 与四条 Policy。真实登录态使用最小列权限完成 GET 200、POST 201、PATCH 200 与 DELETE 204；响应中的 source 为 `manual`，更新时间 trigger 产生新时间。匿名五种 API 操作均返回 401 `AUTH_REQUIRED`。A/B 双账号及跨账号单条访问尚未验证，因为当前没有第二个测试账号。
+- 联调期间多次 PATCH 曾返回 503 `MEMORY_SERVICE_ERROR`，重试后 PATCH 返回 200；未观察到权限拒绝 403。该间歇性服务错误应在后续联调中继续留意。
 - `web/` 使用 TypeScript 与 Tailwind CSS，提供 lint、类型检查与生产构建脚本。
 - `server/`、`connector/` 仅包含占位说明，不提供服务或 API。
 - `.env.example` 提供无密钥配置示例及 Ollama 本地默认值；真实环境配置被 Git 忽略。
@@ -43,16 +48,22 @@ Browser
 
 | 组件 | 规划职责 | 当前状态 |
 | --- | --- | --- |
-| Browser / Web | 用户交互与结果展示 | Agent Chat 调用 Gateway；Dashboard、Memory、Knowledge UI 中的示例内容仍为 Mock |
+| Browser / Web | 用户交互与结果展示 | Agent Chat 调用 Gateway；Personal Memory 为真实 CRUD；Dashboard 与 Knowledge UI 中部分示例仍为 Mock |
 | API | 请求校验、认证、服务端配置边界 | Next.js AI Gateway 已实现；独立 FastAPI 服务 Planned |
 | Personal Agent | 组织任务、协调模型和工具 | Planned |
 | Models / Model Router | 调用云模型或本地模型 | OpenAI、DeepSeek、Gemini、Ollama 显式选择与规则 Auto Router 已实现；智能模型评估/质量路由 Planned |
-| Memory / RAG | 个人记忆与知识检索 | Planned |
+| Memory / RAG | 个人记忆与知识检索 | Manual Memory storage/CRUD/RLS 已实现；自动提取、Agent 注入、Embedding、Semantic Search 与 RAG Planned |
 | Tools | 可授权的外部与本地操作 | Planned |
-| Supabase | 数据持久化、身份与存储支持 | Auth 基础已实现，业务存储 Planned |
+| Supabase | 数据持久化、身份与存储支持 | Auth 与 `public.memories` 的用户隔离手动 CRUD 已实现；其他业务存储 Planned |
 | Local Connector | 连接用户设备上的 Ollama、本地文件与受控命令执行 | Planned，仅目录占位；当前 Ollama 仅能由可访问其服务的 Next.js 服务端调用 |
 
-Supabase 目前仅用于 Web 认证；后端数据与本地能力留待后续任务。FastAPI 仍是未来高级 Agent / Python Tools / RAG 的规划，`server/` 保留占位。认证 Cookie 由官方 SDK 管理，不建立自研 Session 系统。`getSession()` 中未经验证的用户字段不用于服务端授权。
+Supabase 用于 Web 认证与 Personal Memory 存储。Memory API 使用现有 SSR Server Client 和经验证的 claims，不建立第二套 Auth 或 service_role 通道。FastAPI 仍是未来高级 Agent / Python Tools / RAG 的规划，`server/` 保留占位。认证 Cookie 由官方 SDK 管理，不建立自研 Session 系统。`getSession()` 中未经验证的用户字段不用于服务端授权。
+
+## Personal Context Layer
+
+**Implemented:** Authenticated User → Personal Memory Store。用户可以手动新增、查看、修改和删除自己的记忆；RLS 对每次数据库操作实施行级隔离。
+
+**Planned:** Conversation → Memory Extraction → Memory Store → Relevant Memory Retrieval → Agent Context。自动提取、Agent 自动读取、Embedding、Semantic Search 与 RAG 当前均未实现。
 
 ## 配置边界
 
