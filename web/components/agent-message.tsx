@@ -1,4 +1,4 @@
-import type { ProviderId } from "@/lib/ai/types";
+import type { MemoryUsage, ProviderId } from "@/lib/ai/types";
 
 export type AgentChatMessage = {
   id: string;
@@ -6,6 +6,7 @@ export type AgentChatMessage = {
   content: string;
   provider?: ProviderId;
   model?: string;
+  memory?: MemoryUsage;
 };
 
 const providerNames: Record<ProviderId, string> = {
@@ -34,6 +35,17 @@ export function AgentMessage({ message }: { message: AgentChatMessage }) {
           {message.provider && message.model && (
             <span className="text-xs text-slate-400">
               {providerNames[message.provider]} · {message.model}
+            </span>
+          )}
+          {message.memory && (
+            <span className="text-xs text-slate-400">
+              {message.memory.status === "used"
+                ? `使用 ${message.memory.count} 条个人记忆`
+                : message.memory.status === "unavailable"
+                  ? "Memory unavailable · 未注入记忆"
+                  : message.memory.status === "omitted"
+                    ? "本次未注入记忆"
+                    : "未使用个人记忆"}
             </span>
           )}
         </div>

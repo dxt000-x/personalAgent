@@ -6,7 +6,7 @@ import { PageHeader } from "./page-header";
 import { AgentTimeline } from "./agent-timeline";
 import { AgentMessage, type AgentChatMessage } from "./agent-message";
 import { AgentProviderSelector } from "./agent-provider-selector";
-import type { ChatMessage, ProviderId, ProviderSelection, ProviderStatus, RoutingPreference, RoutingReason } from "@/lib/ai/types";
+import type { ChatMessage, MemoryUsage, ProviderId, ProviderSelection, ProviderStatus, RoutingPreference, RoutingReason } from "@/lib/ai/types";
 import {
   MAX_INPUT_CHARACTERS,
   MAX_MESSAGE_CHARACTERS,
@@ -24,7 +24,7 @@ type GatewayErrorCode =
 
 type RetryRequest = { provider: ProviderSelection; routingPreference: RoutingPreference; messages: ChatMessage[] };
 type TimelineState =
-  | { state: "idle" | "running" | "success"; resolvedProvider?: ProviderId; model?: string; reason?: RoutingReason }
+  | { state: "idle" | "running" | "success"; resolvedProvider?: ProviderId; model?: string; reason?: RoutingReason; memory?: MemoryUsage }
   | { state: "error"; code: GatewayErrorCode };
 
 const providerLabels: Record<ProviderId, string> = {
@@ -101,6 +101,21 @@ function providerRequestMessages(entries: AgentChatMessage[]): ChatMessage[] {
   return boundedConversation(entries.map(({ role, content }) => ({ role, content })));
 }
 
+function readMemoryUsage(value: unknown): MemoryUsage {
+  if (typeof value !== "object" || value === null) {
+    return { status: "unavailable", used: false, count: 0 };
+  }
+  const memory = value as Partial<MemoryUsage>;
+  if (["used", "none", "unavailable", "omitted"].includes(String(memory.status))
+    && typeof memory.used === "boolean"
+    && typeof memory.count === "number"
+    && Number.isInteger(memory.count)
+    && memory.count >= 0 && memory.count <= 8) {
+    return memory as MemoryUsage;
+  }
+  return { status: "unavailable", used: false, count: 0 };
+}
+
 export function AgentWorkspace({ sessionKey = "default" }: { sessionKey?: string }) {
   const [messages, setMessages] = useState<AgentChatMessage[]>([]);
   const [draft, setDraft] = useState("");
@@ -169,6 +184,7 @@ export function AgentWorkspace({ sessionKey = "default" }: { sessionKey?: string
         text?: unknown;
         provider?: unknown;
         model?: unknown;
+        memory?: unknown;
         routing?: { mode?: unknown; reason?: unknown };
       };
       if (typeof result.text !== "string" || !result.text.trim()
@@ -179,12 +195,14 @@ export function AgentWorkspace({ sessionKey = "default" }: { sessionKey?: string
         throw new Error("PROVIDER_ERROR");
       }
       const actualProvider = result.provider as ProviderId;
+      const memoryUsage = readMemoryUsage(result.memory);
       const assistantMessage: AgentChatMessage = {
         id: crypto.randomUUID(),
         role: "assistant",
         content: result.text as string,
         provider: actualProvider,
         model: result.model as string,
+        memory: memoryUsage,
       };
       setMessages((current) => [...current, assistantMessage].slice(-MAX_MESSAGES));
       setRetryRequest(null);
@@ -193,6 +211,7 @@ export function AgentWorkspace({ sessionKey = "default" }: { sessionKey?: string
         state: "success",
         resolvedProvider: actualProvider,
         model: result.model,
+        memory: memoryUsage,
         ...(typeof reason === "string" && [
           "local_provider_available", "cloud_provider_fallback", "cloud_provider_selected",
           "privacy_local_only", "fallback_after_provider_error",
@@ -301,7 +320,7 @@ export function AgentWorkspace({ sessionKey = "default" }: { sessionKey?: string
                   输入问题后，消息会通过已登录的 AI Gateway 发送给当前选择的模型。
                 </p>
                 <p className="mt-3 text-xs leading-5 text-slate-400">
-                  不会自动读取 Memory 或 Knowledge Base，也不会执行工具。
+                  可在服务端安全使用当前账号的 Personal Memory 作为回答上下文，不会自动读取知识库或执行工具。
                 </p>
               </div>
             ) : messages.map((message) => (
@@ -381,7 +400,8 @@ export function AgentWorkspace({ sessionKey = "default" }: { sessionKey?: string
             <ul className="mt-3 space-y-2 text-xs leading-5 text-slate-500">
               <li>✓ 通过 AI Gateway 调用所选 Provider</li>
               <li>✓ 当前页面内存中的多轮对话</li>
-              <li>○ Memory、RAG 与工具执行尚未接入</li>
+              <li>✓ Memory Context 在服务端按账号隔离并限制注入数量</li>
+              <li>○ RAG 与工具执行尚未接入</li>
               <li>○ Local Connector 尚未实现</li>
             </ul>
           </section>
