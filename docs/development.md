@@ -12,16 +12,18 @@ Issue → Feature Branch → Commit → Pull Request → Merge
 4. Pull Request：说明问题、修改结果、验证方式及未完成事项。
 5. Merge：完成审核及必要检查后合并。
 
-Task 1 与 Task 2 已通过 GitHub Pull Request 合并到 main。Task 3 在 `feat/auth-foundation` 开发，仅认证基础；本任务不 push、创建 PR 或 merge。
+Task 1 与 Task 2 已通过 GitHub Pull Request 合并到 main。Task 3 完成认证基础；Day 2 / Task 1 为 Next.js AI Gateway 与显式 Provider 调用。当前 Ollama Provider 仅由能访问 Ollama 服务的 Next.js 服务端调用。本地 connector、Auto Router 与 Agent 功能仍属后续工作。
 
 ## 开发原则
 
 - 先检查现有文件与 Git 状态，保留有效代码，不覆盖无关修改。
-- 每次只完成约定的任务范围。Task 3 仅允许 Supabase Auth，不开发 Memory、RAG、Agent、业务数据库或模型 API。
+- 每次只完成约定的任务范围；尚未明确纳入任务的 Memory、RAG、Auto Router、Agent Backend 与业务数据库不提前实现。
 - 文档明确区分 Implemented 与 Planned。
 - 使用环境变量管理凭据；不提交真实密钥、数据库密码、Supabase Secret、个人机器路径或环境文件。
 - 避免过早引入复杂 UI 框架与基础设施。
 - 提交前检查差异，执行与修改相关的验证。
+- Ollama 本地 Provider 通过 `OLLAMA_BASE_URL` 与 `OLLAMA_MODEL` 配置，默认连接 `http://127.0.0.1:11434` 的 `qwen3:8b`。本地推理不产生云 API Token 费用，输入交由本机 Ollama 处理。
+- 如果 Next.js 运行在云端，`127.0.0.1` 指云服务器自身，不能直连开发者电脑的 Ollama；需要服务器可达的 Ollama 服务，或后续实现受控 Local Connector。
 
 ## Web 开发与验证
 
