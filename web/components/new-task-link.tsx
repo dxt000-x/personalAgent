@@ -20,7 +20,7 @@ export function NewTaskLink({
         if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)
           return;
         event.preventDefault();
-        // A new UI session remounts the mock workspace, even from an existing new task.
+        // A new query key gives each Agent workspace a fresh in-memory conversation.
         router.push(`/agent?new=1&session=${Date.now()}`);
       }}
     >

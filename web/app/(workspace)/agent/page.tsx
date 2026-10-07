@@ -6,11 +6,7 @@ export default async function AgentPage({
   searchParams: Promise<{ new?: string; session?: string }>;
 }) {
   const params = await searchParams;
-  const isNew = params.new === "1";
   return (
-    <AgentWorkspace
-      key={isNew ? `new-${params.session ?? "initial"}` : "demo"}
-      isNew={isNew}
-    />
+    <AgentWorkspace key={params.session ?? (params.new === "1" ? "new" : "default")} />
   );
 }
