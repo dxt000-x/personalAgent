@@ -17,7 +17,7 @@ Task 1、Task 2 与 Task 3 已完成项目基础架构、Workspace UI 和 Supaba
 ## 开发原则
 
 - 先检查现有文件与 Git 状态，保留有效代码，不覆盖无关修改。
-- 每次只完成约定的任务范围；尚未明确纳入任务的 Memory、RAG、智能质量路由、Agent Planning、Tools、Agent Backend 与业务数据库不提前实现。
+- 每次只完成约定的任务范围；Personal Memory 手动 CRUD 与 RLS 已建立。未纳入任务的 AI Memory Extraction、Agent Memory Injection、RAG、智能质量路由、Agent Planning、Tools 与 Agent Backend 不提前实现。
 - 文档明确区分 Implemented 与 Planned。
 - 使用环境变量管理凭据；不提交真实密钥、数据库密码、Supabase Secret、个人机器路径或环境文件。
 - 避免过早引入复杂 UI 框架与基础设施。
@@ -63,7 +63,15 @@ ESLint 9 的安装还提示该版本已停止支持；当前保留与 Next.js �
 
 ## Task 2 演示边界
 
-Dashboard、Memory 与 Knowledge Base 中的用户、任务、项目进度、记忆与文件列表均为演示示例。Agent Workspace 已连接 AI Gateway，Timeline 只记录真实聊天请求阶段。当前对话保存在前端内存，刷新后清空；不持久化 Supabase 会话数据，不实现 Memory、RAG、Agent Planning、Tool Calling 或 Local Connector。
+Dashboard 与 Knowledge Base 中的用户、任务、项目进度和文件列表仍为演示示例。Personal Memory 已改为 Supabase 手动 CRUD；Agent 不会自动提取或读取这些记忆。Agent Workspace 已连接 AI Gateway，Timeline 只记录真实聊天请求阶段。当前对话保存在前端内存，刷新后清空；不实现 RAG、Agent Planning、Tool Calling 或 Local Connector。
+
+## Personal Memory 数据安全
+
+- Migration：`supabase/migrations/20261007160000_create_memories.sql`。该 Migration 已由项目维护者在 Supabase SQL Editor 执行并确认 RLS 与四条 authenticated ownership policy。
+- API 通过现有 Supabase SSR Server Client 与登录 Cookie 工作，服务端从 `getClaims()` 获取 `user_id`；客户端不能提交或修改所有权及数据库管理字段。
+- `public.memories` 仅授予 authenticated 读取、受限列插入/更新和删除权限；anon 无表权限。POST 不提交 `source`，数据库默认 `manual`；RLS 是最终行级安全边界。
+- API 输入验证内容 1–2000 字符、类别枚举与 1–5 整数重要度；私人响应使用 `private, no-store`。跨用户单条记录访问返回 404，不泄露记录归属。
+- 单个真实账号的 GET、POST、PATCH、更新时间 trigger 与 DELETE 已通过；匿名请求已通过拒绝测试。当前仍需第二个真实账号完成 A/B 与跨账号测试；未完成前不将多用户隔离描述为已实测通过。联调中曾出现多次 503 后 PATCH 重试成功，未观察到 403 权限拒绝。
 
 Ollama `qwen3:8b` 已通过本机 Gateway 真实推理验收。对话文本发送给配置的 Ollama 服务处理，不产生云 API Token 费用。若 Next.js 部署在 Vercel，`127.0.0.1` 指向 Vercel 运行环境，无法访问用户电脑上的 Ollama；需等待后续 Local Connector 方案。
 
