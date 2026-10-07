@@ -12,12 +12,12 @@ Issue → Feature Branch → Commit → Pull Request → Merge
 4. Pull Request：说明问题、修改结果、验证方式及未完成事项。
 5. Merge：完成审核及必要检查后合并。
 
-Task 1 与 Task 2 已通过 GitHub Pull Request 合并到 main。Task 3 完成认证基础；Day 2 / Task 1 为 Next.js AI Gateway 与显式 Provider 调用。当前 Ollama Provider 仅由能访问 Ollama 服务的 Next.js 服务端调用。本地 connector、Auto Router 与 Agent 功能仍属后续工作。
+Task 1、Task 2 与 Task 3 已完成项目基础架构、Workspace UI 和 Supabase 认证。Day 2 / Task 1 建立 Next.js AI Gateway 与 OpenAI、DeepSeek、Gemini、Ollama Provider；Day 2 / Task 2 将 Agent Chat 接入 Gateway。当前 Ollama Provider 仅由能访问该 Ollama 服务的 Next.js 服务端调用。
 
 ## 开发原则
 
 - 先检查现有文件与 Git 状态，保留有效代码，不覆盖无关修改。
-- 每次只完成约定的任务范围；尚未明确纳入任务的 Memory、RAG、Auto Router、Agent Backend 与业务数据库不提前实现。
+- 每次只完成约定的任务范围；尚未明确纳入任务的 Memory、RAG、Auto Router、Agent Planning、Tools、Agent Backend 与业务数据库不提前实现。
 - 文档明确区分 Implemented 与 Planned。
 - 使用环境变量管理凭据；不提交真实密钥、数据库密码、Supabase Secret、个人机器路径或环境文件。
 - 避免过早引入复杂 UI 框架与基础设施。
@@ -59,7 +59,9 @@ ESLint 9 的安装还提示该版本已停止支持；当前保留与 Next.js �
 
 ## Task 2 演示边界
 
-用户、任务、项目进度、记忆与文件列表均为固定示例。Agent 时间线手动推进，设置选择仅在页面内存中保存。上传、检索、编辑、删除与服务连接按钮明确禁用。无后端请求、模型接入、RAG、Memory 存储或本地操作。
+Dashboard、Memory 与 Knowledge Base 中的用户、任务、项目进度、记忆与文件列表均为演示示例。Agent Workspace 已连接 AI Gateway，Timeline 只记录真实聊天请求阶段。当前对话保存在前端内存，刷新后清空；不持久化 Supabase 会话数据，不实现 Memory、RAG、Agent Planning、Tool Calling 或 Local Connector。
+
+Ollama `qwen3:8b` 已通过本机 Gateway 真实推理验收。对话文本发送给配置的 Ollama 服务处理，不产生云 API Token 费用。若 Next.js 部署在 Vercel，`127.0.0.1` 指向 Vercel 运行环境，无法访问用户电脑上的 Ollama；需等待后续 Local Connector 方案。
 
 ## Task 3 认证验证
 
