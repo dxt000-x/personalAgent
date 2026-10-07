@@ -13,7 +13,7 @@ export type ChatRequest = {
 };
 
 export async function readJsonBody(request: Request): Promise<unknown> {
-  if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) {
+  if (request.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() !== "application/json") {
     throw new AIGatewayError("INVALID_REQUEST");
   }
 

@@ -31,7 +31,7 @@ export function providerFailure(error: unknown, signal: AbortSignal) {
     if ("status" in error && error.status === 429) {
       return new AIGatewayError("RATE_LIMITED");
     }
-    if ("name" in error && error.name === "TimeoutError") {
+    if ("name" in error && ["TimeoutError", "APIConnectionTimeoutError", "AbortError"].includes(String(error.name))) {
       return new AIGatewayError("TIMEOUT");
     }
   }
