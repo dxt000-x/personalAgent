@@ -2,6 +2,8 @@ import "server-only";
 import { createClient } from "@/lib/supabase/server";
 import { AIGatewayError } from "./errors";
 
+type AuthenticatedSupabaseClient = NonNullable<Awaited<ReturnType<typeof createClient>>>;
+
 const responseHeaders = {
   "Cache-Control": "private, no-store",
   "X-Content-Type-Options": "nosniff",
@@ -18,17 +20,21 @@ export function aiErrorResponse(error: unknown): Response {
   return aiJson({ error: { code: safeError.code, message: safeError.message } }, safeError.status);
 }
 
-export async function requireUserId(): Promise<string> {
+export async function requireAuthenticatedUser(): Promise<{ supabase: AuthenticatedSupabaseClient; userId: string }> {
   try {
     const supabase = await createClient();
     if (supabase) {
       const { data, error } = await supabase.auth.getClaims();
       if (!error && typeof data?.claims.sub === "string" && data.claims.sub) {
-        return data.claims.sub;
+        return { supabase, userId: data.claims.sub };
       }
     }
   } catch {
     // Do not expose auth SDK errors or session details through the AI API.
   }
   throw new AIGatewayError("AUTH_REQUIRED");
+}
+
+export async function requireUserId(): Promise<string> {
+  return (await requireAuthenticatedUser()).userId;
 }

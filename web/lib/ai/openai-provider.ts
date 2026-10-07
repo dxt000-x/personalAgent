@@ -8,11 +8,12 @@ export function createOpenAIProvider(apiKey: string, model: string): AIProvider 
   const client = new OpenAI({ apiKey, maxRetries: 0, timeout: PROVIDER_TIMEOUT_MS });
 
   return {
-    async generate(messages, signal) {
+    async generate(messages, signal, systemInstruction) {
       const response = await client.responses.create(
         {
           model,
           input: messages.map(({ role, content }) => ({ role, content })),
+          ...(systemInstruction ? { instructions: systemInstruction } : {}),
           max_output_tokens: MAX_OUTPUT_TOKENS,
           store: false,
         },

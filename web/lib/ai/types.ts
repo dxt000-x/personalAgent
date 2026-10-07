@@ -10,6 +10,14 @@ export type RoutingReason =
   | "privacy_local_only"
   | "fallback_after_provider_error";
 
+export type MemoryContextStatus = "used" | "none" | "unavailable" | "omitted";
+
+export type MemoryUsage = {
+  status: MemoryContextStatus;
+  used: boolean;
+  count: number;
+};
+
 export type ChatMessage = {
   role: "user" | "assistant";
   content: string;
@@ -26,6 +34,7 @@ export type AIChatResult = {
   provider: ProviderId;
   model: string;
   usage?: AIUsage;
+  memory?: MemoryUsage;
   routing?: {
     mode: "auto";
     reason: RoutingReason;
@@ -41,5 +50,5 @@ export type ProviderStatus = {
 };
 
 export interface AIProvider {
-  generate(messages: ChatMessage[], signal: AbortSignal): Promise<AIChatResult>;
+  generate(messages: ChatMessage[], signal: AbortSignal, systemInstruction?: string): Promise<AIChatResult>;
 }
