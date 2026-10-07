@@ -32,18 +32,18 @@ https://personal-agent-seven-mu.vercel.app
 
 ## 当前开发阶段
 
-**Day 2 / Task 2：Agent Workspace 真实 AI 对话。** `/agent` 通过受 Supabase 身份保护的 Next.js AI Gateway 调用所选 Provider；默认优先使用本地 Ollama `qwen3:8b`。对话只保存在当前页面内存。Dashboard 示例、Memory 与 Knowledge Base 仍是演示数据；没有 Agent Planning、RAG、工具执行、业务数据存储或 Windows Local Connector。
+**Day 2 / Task 3：Auto Model Router 与调用保护。** `/agent` 默认使用确定性 Auto 路由：本地 Ollama 可用时优先本地；否则最多尝试两个已配置候选。Privacy 模式只使用本地模型，绝不回退云端。对话只保存在当前页面内存；Dashboard 示例、Memory 与 Knowledge Base 仍是演示数据，没有 Agent Planning、RAG、工具执行、业务数据存储或 Windows Local Connector。
 
 ## 技术架构概览
 
 ```text
-当前：Browser → Agent Chat (Next.js) → Next.js AI Gateway ┬→ OpenAI / DeepSeek / Gemini
-                                                          └→ Ollama (qwen3:8b，本地)
+当前：Browser → Agent Chat (Next.js) → Next.js AI Gateway → Rule-based Model Router ┬→ OpenAI / DeepSeek / Gemini
+                                                                                     └→ Ollama (qwen3:8b，本地)
 未来：Browser → Next.js Web → FastAPI → Personal Agent → Memory / RAG / Tools
                                                        └→ Windows Local Connector
 ```
 
-Supabase 当前用于认证。Agent Chat 默认优先选择已配置的 Ollama，用户也可以在界面切换到其他已配置 Provider。云 Provider 与本地 Provider 共存；Auto Router、FastAPI Agent、数据存储与 Windows Local Connector 仍为规划。Gemini Provider 保留，但不据此声称上游真实调用已通过。
+Supabase 当前用于认证。Agent Chat 的 Auto 路由优先选取本地可用的 Ollama；云 Provider 只显示配置状态，健康状态保持未知，真实调用失败后才可按规则尝试下一个候选。用户也可以显式选择 Provider，显式选择不触发切换。FastAPI Agent、持久化数据与 Windows Local Connector 仍为规划。Gemini Provider 保留，但不据此声称上游真实调用已通过。
 
 ```text
 web/          Next.js + TypeScript + Tailwind CSS + App Router
@@ -86,12 +86,12 @@ npm run start
 - 统一侧边导航与 Dashboard：今日重点、项目、最近任务、演示记忆与继续任务入口。
 - `/agent`：真实 AI Chat Workspace，可查看 Provider 配置状态、选择模型、发送多轮对话、查看请求状态、重试和清空会话。
 - Agent 对话通过 `POST /api/ai/chat` 使用认证后的 Next.js AI Gateway；Ollama `qwen3:8b` 已完成真实本地推理验收。
-- Agent Timeline 只显示 Received、Validating、Selecting Provider、Generating、Completed 等请求状态，不模拟 Planning、Memory、RAG 或工具调用。
+- Agent Timeline 显示 Received、Validating、Routing、Generating、Completed 请求阶段，不模拟 Planning、Memory、RAG 或工具调用。
 - `/memory`：五类演示个人记忆；编辑/删除暂不可用。
 - `/knowledge`：演示文件列表；上传与检索暂不可用。
 - `/settings`：模型、自主程度的本地 UI 选择，以及服务商/连接器占位。
-- `POST /api/ai/chat`：认证后显式选择 OpenAI、DeepSeek、Gemini 或 Ollama，验证输入并返回统一的非流式文本结果；Ollama 由服务端调用本机 `/api/chat`。
-- `GET /api/ai/providers`：认证后仅返回 Provider 的配置状态与模型名称。
+- `POST /api/ai/chat`：认证后支持 Auto 或显式选择 OpenAI、DeepSeek、Gemini、Ollama；验证输入并返回统一的非流式文本结果。Auto 按规则路由并最多尝试两个候选；显式选择不回退。
+- `GET /api/ai/providers`：认证后只返回 Provider 名称、类型、配置状态、可用性和模型显示信息，不包含地址或密钥。Ollama 通过短超时模型列表检查；云 Provider 保持健康未知。
 - Ollama 本地推理默认使用 `qwen3:8b`，不需要云 API Token；输入在配置的本地 Ollama 服务处理，不向云模型 Provider 发送。
 - TypeScript 严格类型配置、Tailwind CSS 样式。
 - ESLint、类型检查与构建脚本，npm 锁文件。
@@ -105,7 +105,7 @@ Agent 对话只保存在前端内存，刷新后清空；发送时只传递最�
 - FastAPI 后端与 Personal Agent。
 - 个性化 Memory、个人知识 RAG 与 Tools。
 - Supabase 用户业务数据存储（认证基础已实现，需配置项目验证）。
-- Auto Model Router、per-user daily quota 与 Streaming。
+- per-user daily quota 与 Streaming。
 - Agent Planning、Personal Memory、RAG 与 Tools。
 - Windows Local Connector、本地文件与受控命令执行。当前 Next.js 服务端只能访问自身网络可达的 Ollama；部署在 Vercel 时，`127.0.0.1` 指 Vercel 运行环境，不能访问用户电脑上的 Ollama。
 
@@ -128,11 +128,11 @@ OLLAMA_BASE_URL=http://127.0.0.1:11434
 OLLAMA_MODEL=qwen3:8b
 ```
 
-使用 Supabase 项目的 Project URL 和 publishable key。配置优先读取 `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`；未填写或仅含空白时兼容旧的 `NEXT_PUBLIC_SUPABASE_ANON_KEY`。两者同时存在时使用 publishable key。严禁把 service_role、secret key 或数据库密码填入这些公开变量。至少为希望使用的云 Provider 配置对应 Key；模型变量可覆盖集中默认值。Ollama 使用服务端变量 `OLLAMA_BASE_URL` 与 `OLLAMA_MODEL`，默认地址为 `http://127.0.0.1:11434`，默认模型为 `qwen3:8b`。本地推理不产生云 API Token 费用，但会占用本机计算资源。`AI_DEFAULT_PROVIDER` 仅为未来 Auto Router 预留，本任务不读取。修改后重启开发服务；生产环境修改后需重新构建。根目录示例不会自动被 Web 加载。
+使用 Supabase 项目的 Project URL 和 publishable key。配置优先读取 `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`；未填写或仅含空白时兼容旧的 `NEXT_PUBLIC_SUPABASE_ANON_KEY`。两者同时存在时使用 publishable key。严禁把 service_role、secret key 或数据库密码填入这些公开变量。至少为希望使用的云 Provider 配置对应 Key；模型变量可覆盖集中默认值。Ollama 使用服务端变量 `OLLAMA_BASE_URL` 与 `OLLAMA_MODEL`，默认地址为 `http://127.0.0.1:11434`，默认模型为 `qwen3:8b`。本地推理不产生云 API Token 费用，但会占用本机计算资源。修改后重启开发服务；生产环境修改后需重新构建。根目录示例不会自动被 Web 加载。
 
-登录后可从同源页面调用 `GET /api/ai/providers` 查看配置状态，再向 `POST /api/ai/chat` 发送 `{"provider":"ollama","messages":[{"role":"user","content":"你好"}]}`。Provider 必须显式选择；请求最多 20 条消息、单条 4000 字符、总计 16000 字符、请求体 64 KiB。服务端对模型调用设置 25 秒超时和 1024 输出 token 上限。API 不接受系统角色消息，也不返回 Key。
+登录后可从同源页面调用 `GET /api/ai/providers` 查看配置与可用性，再向 `POST /api/ai/chat` 发送 `{"provider":"auto","routingPreference":"auto","messages":[{"role":"user","content":"你好"}]}`。也可明确设置 `provider` 为 `openai`、`deepseek`、`gemini` 或 `ollama`。Auto 最多尝试两个 Provider，且只有上游错误或超时才会切换；鉴权、请求校验、限流错误不会切换。Privacy 偏好只允许已确认可用的 Ollama，无法使用时直接失败。请求最多 20 条消息、单条 4000 字符、总计 16000 字符、请求体 64 KiB。服务端对显式调用设置 25 秒超时、Auto 每个候选设置 12 秒超时，输出最多 1024 token。API 不接受系统角色消息，也不返回 Key。
 
-使用 Ollama 时，需要让运行 Next.js 的服务器能访问 `OLLAMA_BASE_URL`。本地开发可在机器上运行 Ollama；部署到 Vercel 等云端时，`127.0.0.1` 指云端服务器自身，无法直接访问开发者电脑上的 Ollama。Ollama Provider 不含 Auto Router；云 Provider 与本地 Provider 需在请求中明确选择。
+使用 Ollama 时，需要让运行 Next.js 的服务器能访问 `OLLAMA_BASE_URL`。本地开发可在机器上运行 Ollama；部署到 Vercel 等云端时，`127.0.0.1` 指云端服务器自身，无法直接访问开发者电脑上的 Ollama。当前没有 Local Connector。公开启用付费云 Provider 前，必须先增加持久化 per-user daily quota；本阶段不使用易失内存计数器冒充可靠限额。
 
 在 Supabase Auth 开启 Email provider。设置 Site URL 为本地开发地址，并在 Redirect URLs 中允许 `http://localhost:3000/auth/callback`（部署时使用实际站点地址）。开启邮箱确认时，注册后按提示在同一浏览器打开邮件链接，回调交换 PKCE code 后进入 Dashboard；若没有即时 session，页面不会假装已经登录。关闭邮箱确认时，注册得到 session 后直接进入 Dashboard。此应用不自动更改 Supabase 的认证策略。
 
