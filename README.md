@@ -32,13 +32,12 @@ https://personal-agent-seven-mu.vercel.app
 
 ## 当前开发阶段
 
-**Personal Memory 安全数据层。** `/memory` 使用 Supabase Postgres 与 authenticated Session 实现按用户隔离的手动 CRUD；数据库 RLS 是最终行级边界。AI 自动记忆、Agent 自动读取、Embedding、Semantic Search、RAG 与 Knowledge Base 仍未实现。`/agent` 的确定性 Auto Router 与 Privacy 行为保持不变。
+**Memory-aware Agent。** `/memory` 使用 Supabase Postgres 与 authenticated Session 实现手动 CRUD；`/agent` 在服务端按当前登录用户检索有限的 Personal Memory，并作为不可信背景数据注入模型上下文。数据库 RLS 仍是最终行级边界。AI 自动记忆、Embedding、Semantic Search、Vector RAG 与 Knowledge Base 检索仍未实现。
 
 ## 技术架构概览
 
 ```text
-当前：Browser → Agent Chat (Next.js) → Next.js AI Gateway → Rule-based Model Router ┬→ OpenAI / DeepSeek / Gemini
-                                                                                     └→ Ollama (qwen3:8b，本地)
+当前：Browser → Agent Chat (Next.js) → Authenticated AI Gateway → Session-scoped Memory Retrieval (Supabase + RLS) → Safe Context → Rule-based Model Router → OpenAI / DeepSeek / Gemini / Ollama
 未来：Browser → Next.js Web → FastAPI → Personal Agent → Memory / RAG / Tools
                                                        └→ Windows Local Connector
 ```
@@ -86,7 +85,7 @@ npm run start
 - 统一侧边导航与 Dashboard：今日重点、项目、最近任务、演示记忆与继续任务入口。
 - `/agent`：真实 AI Chat Workspace，可查看 Provider 配置状态、选择模型、发送多轮对话、查看请求状态、重试和清空会话。
 - Agent 对话通过 `POST /api/ai/chat` 使用认证后的 Next.js AI Gateway；Ollama `qwen3:8b` 已完成真实本地推理验收。
-- Agent Timeline 显示 Received、Validating、Routing、Generating、Completed 请求阶段，不模拟 Planning、Memory、RAG 或工具调用。
+- Agent Timeline 显示 Received、Validating、Retrieving Memory、Routing、Generating、Completed；Memory 仅作为当前用户的安全上下文，不模拟 Planning、RAG 或工具调用。
 - `/memory`：通过 `GET/POST /api/memories` 与 `GET/PATCH/DELETE /api/memories/[id]` 访问当前用户的 Personal Memory，支持新增、编辑、删除、加载/空/错误状态；服务端从已验证 Session 获取 `user_id`，不接受客户端指定所有权字段。
 - `/knowledge`：演示文件列表；上传与检索暂不可用。
 - `/settings`：模型、自主程度的本地 UI 选择，以及服务商/连接器占位。
@@ -98,12 +97,12 @@ npm run start
 - 后端与本地连接器占位目录。
 - 环境变量示例、敏感文件忽略规则与架构/开发文档。
 
-Agent 对话只保存在前端内存，刷新后清空；发送时只传递最近且符合 Gateway 限制的消息。Dashboard 与 Knowledge Base 仍使用标明的演示内容。Personal Memory 已持久化到 Supabase，受 RLS 和最小列权限保护。当前没有 AI 自动记忆、Agent Memory Injection、文件读取或命令执行。
+Agent 对话只保存在前端内存，刷新后清空；发送时只传递最近且符合 Gateway 限制的消息。Gateway 在服务端使用当前登录 Session 和 RLS 查询最多 8 条记忆，并在 4000 字符及剩余输入预算内注入；客户端不能提交 Memory Context。Dashboard 与 Knowledge Base 仍使用标明的演示内容。当前没有 AI 自动记忆、Embedding、Semantic Search、Vector RAG、文件读取或命令执行。
 
 ## Planned Features
 
 - FastAPI 后端与 Personal Agent。
-- AI 自动提取 Memory、Agent 自动读取 Memory、Embedding、Semantic Search 与个人知识 RAG。
+- AI 自动提取 Memory、Embedding、Semantic Search 与个人知识 Vector RAG。
 - Agent Planning、Tools 与 Windows Local Connector。
 - per-user daily quota 与 Streaming。
 - Windows Local Connector、本地文件与受控命令执行。当前 Next.js 服务端只能访问自身网络可达的 Ollama；部署在 Vercel 时，`127.0.0.1` 指 Vercel 运行环境，不能访问用户电脑上的 Ollama。

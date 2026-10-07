@@ -12,7 +12,7 @@ type OllamaChatResponse = {
 
 export function createOllamaProvider(baseUrl: string, model: string): AIProvider {
   return {
-    async generate(messages, signal) {
+    async generate(messages, signal, systemInstruction) {
       let response: Response;
       try {
         response = await fetch(`${baseUrl}/api/chat`, {
@@ -20,7 +20,10 @@ export function createOllamaProvider(baseUrl: string, model: string): AIProvider
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             model,
-            messages,
+            messages: [
+              ...(systemInstruction ? [{ role: "system", content: systemInstruction }] : []),
+              ...messages,
+            ],
             stream: false,
             options: { num_predict: MAX_OUTPUT_TOKENS },
           }),

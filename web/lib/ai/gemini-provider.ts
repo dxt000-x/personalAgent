@@ -8,14 +8,18 @@ export function createGeminiProvider(apiKey: string, model: string): AIProvider 
   const client = new GoogleGenAI({ apiKey });
 
   return {
-    async generate(messages, signal) {
+    async generate(messages, signal, systemInstruction) {
       const response = await client.models.generateContent({
         model,
         contents: messages.map(({ role, content }) => ({
           role: role === "assistant" ? "model" : "user",
           parts: [{ text: content }],
         })),
-        config: { maxOutputTokens: MAX_OUTPUT_TOKENS, abortSignal: signal },
+        config: {
+          maxOutputTokens: MAX_OUTPUT_TOKENS,
+          abortSignal: signal,
+          ...(systemInstruction ? { systemInstruction } : {}),
+        },
       });
       const text = response.text?.trim();
       if (!text) throw new AIGatewayError("PROVIDER_ERROR");

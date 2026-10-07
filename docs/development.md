@@ -17,7 +17,7 @@ Task 1、Task 2 与 Task 3 已完成项目基础架构、Workspace UI 和 Supaba
 ## 开发原则
 
 - 先检查现有文件与 Git 状态，保留有效代码，不覆盖无关修改。
-- 每次只完成约定的任务范围；Personal Memory 手动 CRUD 与 RLS 已建立。未纳入任务的 AI Memory Extraction、Agent Memory Injection、RAG、智能质量路由、Agent Planning、Tools 与 Agent Backend 不提前实现。
+- 每次只完成约定的任务范围；Personal Memory 手动 CRUD、RLS 与受限的服务端 Memory Context 注入已建立。未纳入任务的 AI Memory Extraction、Embedding、Semantic Search、Vector RAG、智能质量路由、Agent Planning、Tools 与 Agent Backend 不提前实现。
 - 文档明确区分 Implemented 与 Planned。
 - 使用环境变量管理凭据；不提交真实密钥、数据库密码、Supabase Secret、个人机器路径或环境文件。
 - 避免过早引入复杂 UI 框架与基础设施。
@@ -63,7 +63,7 @@ ESLint 9 的安装还提示该版本已停止支持；当前保留与 Next.js �
 
 ## Task 2 演示边界
 
-Dashboard 与 Knowledge Base 中的用户、任务、项目进度和文件列表仍为演示示例。Personal Memory 已改为 Supabase 手动 CRUD；Agent 不会自动提取或读取这些记忆。Agent Workspace 已连接 AI Gateway，Timeline 只记录真实聊天请求阶段。当前对话保存在前端内存，刷新后清空；不实现 RAG、Agent Planning、Tool Calling 或 Local Connector。
+Dashboard 与 Knowledge Base 中的用户、任务、项目进度和文件列表仍为演示示例。Personal Memory 已改为 Supabase 手动 CRUD；Agent 在服务端读取当前用户的有限记忆并作为不可信背景上下文交给所选 Provider。Agent 不会自动创建或提取记忆。Agent Workspace 已连接 AI Gateway，Timeline 显示真实请求阶段。当前对话保存在前端内存，刷新后清空；不实现 RAG、Agent Planning、Tool Calling 或 Local Connector。
 
 ## Personal Memory 数据安全
 
@@ -72,6 +72,15 @@ Dashboard 与 Knowledge Base 中的用户、任务、项目进度和文件列表
 - `public.memories` 仅授予 authenticated 读取、受限列插入/更新和删除权限；anon 无表权限。POST 不提交 `source`，数据库默认 `manual`；RLS 是最终行级安全边界。
 - API 输入验证内容 1–2000 字符、类别枚举与 1–5 整数重要度；私人响应使用 `private, no-store`。跨用户单条记录访问返回 404，不泄露记录归属。
 - 单个真实账号的 GET、POST、PATCH、更新时间 trigger 与 DELETE 已通过；匿名请求已通过拒绝测试。当前仍需第二个真实账号完成 A/B 与跨账号测试；未完成前不将多用户隔离描述为已实测通过。联调中曾出现多次 503 后 PATCH 重试成功，未观察到 403 权限拒绝。
+
+## Agent Personal Memory Context
+
+- `/api/ai/chat` 只接受普通 user/assistant conversation；system prompt、Memory Context 与 user identity 都由服务端生成，客户端不能伪造或指定 Memory。
+- Gateway 使用当前请求的 Supabase SSR client 和经验证 claims 查询当前用户的 `content/category/importance`，按 importance 降序、created_at 降序，最多 8 条；RLS 继续作为最终行级边界。
+- 格式化后的完整 system instruction 最多 4000 字符，且不会让消息数量超过 20 条或会话与 Memory 合计超过 Gateway 的 16000 字符输入上限。内容用 JSON string quoting 表示为不可信背景数据，不包含数据库 ID、用户 ID 或时间戳。
+- Memory 查询无记录时正常对话并返回 `memory.status = none`；检索临时失败时不输出原始错误、不注入 Memory，并以 `unavailable` metadata 继续安全调用。认证失败仍拒绝请求。服务端不记录 Memory 内容、完整 Prompt 或私人资料。
+- Auto 路由在 Memory 检索后运行。Privacy 偏好仍只调用本地 Ollama；Memory Context 只传给该本地 Provider，不会因为上下文存在而切换到云端。Auto 仍可按既有策略选择云 Provider。
+- 当前检索为 importance/时间排序，不是 Semantic Search 或 RAG；不自动创建、总结、衰减或提取 Memory。
 
 Ollama `qwen3:8b` 已通过本机 Gateway 真实推理验收。对话文本发送给配置的 Ollama 服务处理，不产生云 API Token 费用。若 Next.js 部署在 Vercel，`127.0.0.1` 指向 Vercel 运行环境，无法访问用户电脑上的 Ollama；需等待后续 Local Connector 方案。
 

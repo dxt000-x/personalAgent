@@ -1,6 +1,6 @@
 # Architecture
 
-## Implemented — Day 2 / Task 3
+## Implemented — Memory-aware Agent
 
 - Browser → Web：Next.js App Router 提供 Dashboard、Agent、Memory、Knowledge Base 与 Settings UI。
 - `/login`、`/signup` 与 `/auth/callback` 提供 Supabase Email / Password 认证基础。
@@ -12,7 +12,10 @@
 - `/agent` 默认使用确定性 Auto 路由，可选显式 Provider 与 Privacy 本地优先模式。Ollama 使用短超时 `/api/tags` 检查可用性；云 Provider 只显示已配置与健康未知，不发起健康探测模型调用。
 - Auto 本地可用时优先 Ollama；本地不可用时按固定顺序考虑已配置的云 Provider。最多调用两个候选，且仅在上游错误或超时后 fallback；鉴权、请求校验、限流错误不会触发 fallback。显式 Provider 永不切换。Privacy 模式只尝试本地 Ollama，模型不可用时返回明确错误，不向云端发送消息。
 - Agent Chat 通过认证后的 `POST /api/ai/chat` 发送消息。最近最多 20 条消息作为多轮上下文，只保存在前端内存，刷新后清空；不建立会话数据库。
-- Agent Timeline 展示 Received、Validating、Routing、Generating、Completed 请求阶段，并在成功后显示实际 Provider、模型与安全路由原因；未实现 Agent Planning、Memory Retrieval、RAG 或 Tool Calling。
+- AI Gateway 在模型路由前使用当前 SSR Session 的 Supabase Client 检索 Personal Memory，RLS 是最终所有权边界；当前用户 ID 仅由已验证 claims 获得，客户端不能传入 Memory、用户 ID 或 system prompt。
+- Memory 按 importance 降序、created_at 降序检索，最多 8 条；模型上下文不超过 4000 字符，并受 Gateway 16000 字符总输入与消息数预算约束。只格式化 category、importance、content，不发送记录 ID、user_id 或时间戳。
+- Memory Context 作为服务端 system/developer instruction 参数传给 Provider；明确将保存内容视为不可信数据，禁止其覆盖系统、安全、认证、隐私或路由规则。Memory 查询失败时不记录原始错误或内容，聊天可继续且 metadata 显示 unavailable；认证失败仍返回 AUTH_REQUIRED。
+- Agent Timeline 展示 Received、Validating、Retrieving Memory、Routing、Generating、Completed；响应仅返回 memory status/count，不返回 Memory 内容或数据库标识。
 - 缺少或无效的公开配置时不创建客户端，认证页显示提示，受保护页面跳转登录；无开发绕过入口。
 - Dashboard 与 Knowledge Base 仍展示演示数据；`/memory` 已使用真实 Supabase 数据，不再显示 Mock Memory。Agent 页面是真实 Chat UI，但不执行 Agent Planning 或工具。
 - Personal Context Layer 当前实现：Authenticated User → Personal Memory UI → Next.js Memory API → Supabase SSR Session → `public.memories` → RLS。API 从已验证 claims 获取用户 ID；请求不接受客户端指定 `user_id`；数据库仅授予 authenticated 必需的 SELECT、受限列 INSERT/UPDATE 与 DELETE 权限。
@@ -52,7 +55,7 @@ Browser
 | API | 请求校验、认证、服务端配置边界 | Next.js AI Gateway 已实现；独立 FastAPI 服务 Planned |
 | Personal Agent | 组织任务、协调模型和工具 | Planned |
 | Models / Model Router | 调用云模型或本地模型 | OpenAI、DeepSeek、Gemini、Ollama 显式选择与规则 Auto Router 已实现；智能模型评估/质量路由 Planned |
-| Memory / RAG | 个人记忆与知识检索 | Manual Memory storage/CRUD/RLS 已实现；自动提取、Agent 注入、Embedding、Semantic Search 与 RAG Planned |
+| Memory / RAG | 个人记忆与知识检索 | Manual Memory CRUD/RLS、确定性服务端 Memory Retrieval 与上下文注入已实现；自动提取、Embedding、Semantic Search 与 Vector RAG Planned |
 | Tools | 可授权的外部与本地操作 | Planned |
 | Supabase | 数据持久化、身份与存储支持 | Auth 与 `public.memories` 的用户隔离手动 CRUD 已实现；其他业务存储 Planned |
 | Local Connector | 连接用户设备上的 Ollama、本地文件与受控命令执行 | Planned，仅目录占位；当前 Ollama 仅能由可访问其服务的 Next.js 服务端调用 |
@@ -61,9 +64,9 @@ Supabase 用于 Web 认证与 Personal Memory 存储。Memory API 使用现有 S
 
 ## Personal Context Layer
 
-**Implemented:** Authenticated User → Personal Memory Store。用户可以手动新增、查看、修改和删除自己的记忆；RLS 对每次数据库操作实施行级隔离。
+**Implemented:** Authenticated User → Session-scoped Memory Retrieval → Safe Context → AI Gateway → Selected Provider。用户可以手动 CRUD 自己的记忆；Gateway 使用同一 authenticated SSR client 查询当前用户记录，额外按 claims 用户 ID 过滤，同时由 RLS 执行最终隔离。检索最多 8 条，优先高 importance、再优先较新记录，Context 有 4000 字符硬上限并受对话剩余输入预算约束。Memory 缺失时不注入上下文且正常聊天；数据库临时失败时 fail-soft 并返回 `memory.status = unavailable`。
 
-**Planned:** Conversation → Memory Extraction → Memory Store → Relevant Memory Retrieval → Agent Context。自动提取、Agent 自动读取、Embedding、Semantic Search 与 RAG 当前均未实现。
+**Planned:** AI 自动提取 Memory、Embedding、Semantic Search、Vector Database、Vector RAG、记忆总结与衰减均未实现。当前确定性检索不是 RAG。
 
 ## 配置边界
 

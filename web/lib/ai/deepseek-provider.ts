@@ -13,11 +13,14 @@ export function createDeepSeekProvider(apiKey: string, model: string): AIProvide
   });
 
   return {
-    async generate(messages, signal) {
+    async generate(messages, signal, systemInstruction) {
       const response = await client.chat.completions.create(
         {
           model,
-          messages: messages.map(({ role, content }) => ({ role, content })),
+          messages: [
+            ...(systemInstruction ? [{ role: "system" as const, content: systemInstruction }] : []),
+            ...messages.map(({ role, content }) => ({ role, content })),
+          ],
           max_tokens: MAX_OUTPUT_TOKENS,
           stream: false,
         },
