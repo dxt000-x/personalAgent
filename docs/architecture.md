@@ -1,6 +1,6 @@
 # Architecture
 
-## Implemented — Day 2 / Task 1
+## Implemented — Day 2 / Task 2
 
 - Browser → Web：Next.js App Router 提供 Dashboard、Agent、Memory、Knowledge Base 与 Settings UI。
 - `/login`、`/signup` 与 `/auth/callback` 提供 Supabase Email / Password 认证基础。
@@ -9,18 +9,22 @@
 - `web/lib/ai/` 提供统一 Provider 接口；OpenAI 使用 Responses API，DeepSeek 使用兼容的 Chat Completions API，Gemini 使用 Google Gen AI SDK，Ollama 使用本地 `/api/chat` HTTP API。云模型密钥与 Ollama 地址/模型只在服务端读取。
 - Ollama 默认使用 `http://127.0.0.1:11434` 与 `qwen3:8b`，无云 API Key；Gateway 通过非流式请求取得模型文本，保留统一响应格式。云 Provider 与本地 Provider 可共存，当前必须由请求明确选择 Provider。
 - Chat Gateway 对消息数、单条与总输入长度、请求体大小、Provider 超时和输出长度设限，并将上游错误转换为固定错误码。
+- `/agent` 加载 Provider 状态，默认选择已配置的 Ollama，允许切换 OpenAI、DeepSeek、Gemini；`configured` 仅表示配置存在，不保证上游健康。
+- Agent Chat 通过认证后的 `POST /api/ai/chat` 发送消息。最近最多 20 条消息作为多轮上下文，只保存在前端内存，刷新后清空；不建立会话数据库。
+- Agent Timeline 展示 Received、Validating、Selecting Provider、Generating、Completed 请求阶段，并显示实际请求失败；未实现 Agent Planning、Memory Retrieval、RAG 或 Tool Calling。
 - 缺少或无效的公开配置时不创建客户端，认证页显示提示，受保护页面跳转登录；无开发绕过入口。
-- Agent 通过 React 页面状态演示六步流程及 pending / running / success / error，无真实 Agent 执行。
+- Dashboard、Memory 与 Knowledge Base 仍展示演示数据；Agent 页面是真实 Chat UI，但不执行 Agent Planning 或工具。
 - `web/` 使用 TypeScript 与 Tailwind CSS，提供 lint、类型检查与生产构建脚本。
 - `server/`、`connector/` 仅包含占位说明，不提供服务或 API。
 - `.env.example` 提供无密钥配置示例及 Ollama 本地默认值；真实环境配置被 Git 忽略。
 
-当前 Agent 页面仍为 Mock UI，尚未调用 Chat Gateway。只有经过认证且显式调用 API 的请求才会调用已配置的云模型或 Ollama；不保存用户业务数据，也不访问本地文件。默认本地 Ollama 推理不产生云 API Token 费用；当 Next.js 部署在云端时，`127.0.0.1` 仅指云端运行环境自身。
+Agent Chat 通过认证后的 Gateway 调用显式选择的 Provider。默认本地 Ollama 推理使用 `qwen3:8b`，由配置的 Ollama 服务处理，不产生云 API Token 费用；对话状态只保存在浏览器页面内存。Gemini Provider 保留，但当前文档不声称 Gemini 上游真实调用已验收成功。部署在 Vercel 时，`127.0.0.1` 指 Vercel 自身，不能访问用户电脑上的 Ollama；Windows Local Connector 尚未实现。
 
 ```text
-Browser → Next.js Web → Next.js AI Gateway ┬→ OpenAI / DeepSeek / Gemini
-                            ↑              └→ Ollama (local model)
-                         Supabase Auth
+Browser → Agent Chat (Next.js) → Next.js AI Gateway ┬→ OpenAI / DeepSeek / Gemini
+                                                    └→ Ollama (local model)
+                    ↑
+              Supabase Auth
 ```
 
 ## Planned — 目标架构
@@ -38,7 +42,7 @@ Browser
 
 | 组件 | 规划职责 | 当前状态 |
 | --- | --- | --- |
-| Browser / Web | 用户交互与结果展示 | 五个 UI 页面及前端 Mock 交互已实现 |
+| Browser / Web | 用户交互与结果展示 | Agent Chat 调用 Gateway；Dashboard、Memory、Knowledge UI 中的示例内容仍为 Mock |
 | API | 请求校验、认证、服务端配置边界 | Next.js AI Gateway 已实现；独立 FastAPI 服务 Planned |
 | Personal Agent | 组织任务、协调模型和工具 | Planned |
 | Models / Model Router | 调用云模型或本地模型 | OpenAI、DeepSeek、Gemini 与 Ollama 显式选择已实现；Auto Router Planned |

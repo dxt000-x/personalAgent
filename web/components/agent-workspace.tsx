@@ -1,216 +1,359 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
+import Link from "next/link";
 import { PageHeader } from "./page-header";
 import { AgentTimeline } from "./agent-timeline";
-import type { ExecutionStep } from "./agent-step";
+import { AgentMessage, type AgentChatMessage } from "./agent-message";
+import { AgentProviderSelector } from "./agent-provider-selector";
+import type { ChatMessage, ProviderId, ProviderStatus } from "@/lib/ai/types";
+import {
+  MAX_INPUT_CHARACTERS,
+  MAX_MESSAGE_CHARACTERS,
+  MAX_MESSAGES,
+} from "@/lib/ai/limits";
 
-const demoPrompt = "结合我的比赛资料，帮我制定接下来两周的开发计划。";
-const definitions = [
-  ["Understanding request", "理解目标与两周时间范围"],
-  ["Reading personal memory", "演示：参考项目目标与个人偏好"],
-  ["Searching knowledge base", "演示：参考比赛资料与项目说明"],
-  ["Planning task", "拆分里程碑与每日重点"],
-  ["Executing tools", "演示工具步骤，不执行任何操作"],
-  ["Generating result", "展示固定的示例计划"],
-];
+type GatewayErrorCode =
+  | "AUTH_REQUIRED"
+  | "PROVIDER_NOT_CONFIGURED"
+  | "INVALID_REQUEST"
+  | "PROVIDER_ERROR"
+  | "RATE_LIMITED"
+  | "TIMEOUT";
 
-export function AgentWorkspace({ isNew }: { isNew: boolean }) {
-  const [request, setRequest] = useState(isNew ? "" : demoPrompt);
+type RetryRequest = { provider: ProviderId; messages: ChatMessage[] };
+type TimelineState =
+  | { state: "idle" | "running" | "success" }
+  | { state: "error"; code: GatewayErrorCode };
+
+const providerLabels: Record<ProviderId, string> = {
+  ollama: "Ollama",
+  openai: "OpenAI",
+  deepseek: "DeepSeek",
+  gemini: "Gemini",
+};
+
+const errorMessages: Record<GatewayErrorCode, string> = {
+  AUTH_REQUIRED: "登录状态已失效，请重新登录后再试。",
+  PROVIDER_NOT_CONFIGURED: "所选 Provider 尚未配置，请选择已配置的 Provider。",
+  INVALID_REQUEST: "消息超出当前对话限制，请缩短内容或清空会话后重试。",
+  PROVIDER_ERROR: "模型服务暂时不可用。请检查 Provider 服务状态后重试。",
+  RATE_LIMITED: "请求过于频繁，请稍后重试。",
+  TIMEOUT: "模型响应超时，请稍后重试。",
+};
+
+const gatewayErrorCodes = new Set<GatewayErrorCode>([
+  "AUTH_REQUIRED",
+  "PROVIDER_NOT_CONFIGURED",
+  "INVALID_REQUEST",
+  "PROVIDER_ERROR",
+  "RATE_LIMITED",
+  "TIMEOUT",
+]);
+
+function asGatewayErrorCode(value: unknown): GatewayErrorCode {
+  return typeof value === "string" && gatewayErrorCodes.has(value as GatewayErrorCode)
+    ? value as GatewayErrorCode
+    : "PROVIDER_ERROR";
+}
+
+function boundedConversation(messages: ChatMessage[]): ChatMessage[] {
+  const normalized = messages.map((message) => {
+    if (message.content.length <= MAX_MESSAGE_CHARACTERS) return message;
+    const suffix = "…[历史回复已截断]";
+    return {
+      ...message,
+      content: `${message.content.slice(0, MAX_MESSAGE_CHARACTERS - suffix.length)}${suffix}`,
+    };
+  });
+
+  const selected: ChatMessage[] = [];
+  let totalCharacters = 0;
+  for (let index = normalized.length - 1; index >= 0; index -= 1) {
+    const message = normalized[index];
+    if (selected.length >= MAX_MESSAGES) break;
+    if (totalCharacters + message.content.length > MAX_INPUT_CHARACTERS) break;
+    selected.unshift(message);
+    totalCharacters += message.content.length;
+  }
+  return selected;
+}
+
+function readProviderStatuses(value: unknown): ProviderStatus[] {
+  if (!Array.isArray(value)) throw new Error("invalid provider status");
+  const allowedIds = new Set<ProviderId>(["ollama", "openai", "deepseek", "gemini"]);
+  return value.filter((item): item is ProviderStatus => {
+    if (typeof item !== "object" || item === null) return false;
+    const status = item as Partial<ProviderStatus>;
+    return typeof status.id === "string"
+      && allowedIds.has(status.id as ProviderId)
+      && typeof status.configured === "boolean"
+      && typeof status.model === "string";
+  });
+}
+
+function providerRequestMessages(entries: AgentChatMessage[]): ChatMessage[] {
+  return boundedConversation(entries.map(({ role, content }) => ({ role, content })));
+}
+
+export function AgentWorkspace({ sessionKey = "default" }: { sessionKey?: string }) {
+  const [messages, setMessages] = useState<AgentChatMessage[]>([]);
   const [draft, setDraft] = useState("");
-  const [current, setCurrent] = useState(isNew ? -1 : 3);
-  const [failed, setFailed] = useState(false);
-  const complete = current === definitions.length;
-  const steps: ExecutionStep[] = definitions.map(
-    ([title, description], index) => ({
-      title,
-      description,
-      status:
-        index < current
-          ? "success"
-          : index === current
-            ? failed
-              ? "error"
-              : "running"
-            : "pending",
-    }),
+  const [providers, setProviders] = useState<ProviderStatus[]>([]);
+  const [selectedProvider, setSelectedProvider] = useState<ProviderId>("ollama");
+  const [providersLoading, setProvidersLoading] = useState(true);
+  const [providersError, setProvidersError] = useState(false);
+  const [isSending, setIsSending] = useState(false);
+  const [errorCode, setErrorCode] = useState<GatewayErrorCode | null>(null);
+  const [retryRequest, setRetryRequest] = useState<RetryRequest | null>(null);
+  const [timeline, setTimeline] = useState<TimelineState>({ state: "idle" });
+
+  const selectedStatus = useMemo(
+    () => providers.find(({ id }) => id === selectedProvider),
+    [providers, selectedProvider],
   );
-  const status = failed
-    ? "演示失败"
-    : complete
-      ? "演示完成"
-      : current < 0
-        ? "等待任务"
-        : "演示规划中";
+
+  useEffect(() => {
+    let active = true;
+    async function loadProviders() {
+      setProvidersLoading(true);
+      setProvidersError(false);
+      try {
+        const response = await fetch("/api/ai/providers", { cache: "no-store" });
+        const body: unknown = await response.json();
+        if (!response.ok) throw new Error("provider status unavailable");
+        const result = readProviderStatuses(body);
+        if (!active) return;
+        setProviders(result);
+        const ollama = result.find(({ id, configured }) => id === "ollama" && configured);
+        const firstConfigured = result.find(({ configured }) => configured);
+        setSelectedProvider(ollama?.id ?? firstConfigured?.id ?? "ollama");
+      } catch {
+        if (active) setProvidersError(true);
+      } finally {
+        if (active) setProvidersLoading(false);
+      }
+    }
+    void loadProviders();
+    return () => { active = false; };
+  }, [sessionKey]);
+
+  async function sendRequest(request: RetryRequest) {
+    if (isSending) return;
+    setIsSending(true);
+    setErrorCode(null);
+    setTimeline({ state: "running" });
+    try {
+      const response = await fetch("/api/ai/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: request.provider, messages: request.messages }),
+      });
+      const body: unknown = await response.json();
+      if (!response.ok) {
+        const error = typeof body === "object" && body !== null
+          ? (body as { error?: { code?: unknown } }).error
+          : undefined;
+        throw new Error(asGatewayErrorCode(error?.code));
+      }
+
+      const result = body as { text?: unknown; provider?: unknown; model?: unknown };
+      if (typeof result.text !== "string" || !result.text.trim()
+        || result.provider !== request.provider || typeof result.model !== "string") {
+        throw new Error("PROVIDER_ERROR");
+      }
+      const assistantMessage: AgentChatMessage = {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: result.text as string,
+        provider: request.provider,
+        model: result.model as string,
+      };
+      setMessages((current) => [...current, assistantMessage].slice(-MAX_MESSAGES));
+      setRetryRequest(null);
+      setTimeline({ state: "success" });
+    } catch (error) {
+      const code = asGatewayErrorCode(error instanceof Error ? error.message : undefined);
+      setErrorCode(code);
+      setRetryRequest(request);
+      setTimeline({ state: "error", code });
+    } finally {
+      setIsSending(false);
+    }
+  }
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!draft.trim()) return;
-    setRequest(draft.trim());
+    const content = draft.trim();
+    if (!content || content.length > MAX_MESSAGE_CHARACTERS || !selectedStatus?.configured
+      || isSending || retryRequest) return;
+
+    const userMessage: AgentChatMessage = {
+      id: crypto.randomUUID(),
+      role: "user",
+      content,
+    };
+    const nextMessages = [...messages, userMessage];
+    const request: RetryRequest = {
+      provider: selectedProvider,
+      messages: providerRequestMessages(nextMessages),
+    };
+    setMessages(nextMessages.slice(-MAX_MESSAGES));
     setDraft("");
-    setCurrent(0);
-    setFailed(false);
+    setRetryRequest(request);
+    void sendRequest(request);
   }
-  function reset() {
-    setRequest(demoPrompt);
+
+  function retry() {
+    if (retryRequest && !isSending) void sendRequest(retryRequest);
+  }
+
+  function clearConversation() {
+    if (isSending) return;
+    setMessages([]);
     setDraft("");
-    setCurrent(3);
-    setFailed(false);
+    setErrorCode(null);
+    setRetryRequest(null);
+    setTimeline({ state: "idle" });
   }
+
+  const canSend = !!selectedStatus?.configured && !providersLoading && !providersError
+    && !isSending && !retryRequest && !!draft.trim() && draft.trim().length <= MAX_MESSAGE_CHARACTERS;
 
   return (
     <>
       <PageHeader
-        eyebrow="THINK · PLAN · ACT"
+        eyebrow="PERSONAL AI · CHAT WORKSPACE"
         title="Agent 工作空间"
-        description="将个人背景与任务目标放在一起，清晰查看每一步。"
-        action={<span className="badge">UI Mock · 未连接模型</span>}
+        description="选择模型，与 Personal AI Assistant 开始一段真实对话。"
+        action={<span className="badge">AI Gateway · 实时请求</span>}
       />
+
       <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
         <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-6 py-5">
+          <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-100 px-5 py-5 sm:px-6">
             <div>
-              <p className="text-xs text-slate-400">当前任务 · 演示</p>
-              <h2 className="mt-1 font-semibold">
-                {request === demoPrompt
-                  ? "两周开发计划"
-                  : request
-                    ? "自定义演示任务"
-                    : "新任务"}
-              </h2>
+              <p className="text-xs text-slate-400">当前会话 · 仅保存在本页面内存</p>
+              <h2 className="mt-1 font-semibold">Personal AI Chat</h2>
+              <p className="mt-1 text-xs text-slate-400">刷新页面后，对话内容会清空。</p>
             </div>
-            <span
-              role="status"
-              className={`rounded-full px-3 py-1 text-xs ${failed ? "bg-red-50 text-red-700" : "bg-teal-50 text-teal-700"}`}
+            <button
+              type="button"
+              className="button-secondary"
+              disabled={isSending}
+              onClick={clearConversation}
             >
-              {status}
-            </span>
+              清空对话
+            </button>
           </div>
-          <div className="min-h-80 space-y-6 p-6" aria-label="任务对话">
-            {request ? (
-              <>
-                <div className="ml-auto max-w-lg rounded-2xl rounded-tr-sm bg-slate-100 p-5">
-                  <p className="mb-2 text-xs text-slate-400">你 · 演示输入</p>
-                  <p className="whitespace-pre-wrap text-sm leading-7 break-words">
-                    {request}
-                  </p>
-                </div>
-                <div className="flex gap-3">
-                  <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-teal-50 text-teal-800">
-                    ✦
-                  </span>
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold">
-                      Personal AI{" "}
-                      <span className="ml-2 text-xs font-normal text-slate-400">
-                        Mock response
-                      </span>
-                    </p>
-                    <p className="mt-3 text-sm leading-7 text-slate-500">
-                      这是执行流程演示。我将展示理解目标、参考个人背景、规划任务到输出结果的过程。当前没有读取任何资料或调用模型。
-                    </p>
-                    <div className="mt-4 rounded-xl border border-slate-200 p-4 text-xs text-slate-500">
-                      <p className="font-medium text-slate-700">演示上下文</p>
-                      <p className="mt-2">项目：Personal AI Assistant</p>
-                      <p className="mt-2">
-                        目标：AI 应用比赛 · 偏好：按阶段迭代
-                      </p>
-                    </div>
-                    {failed && (
-                      <p
-                        role="alert"
-                        className="mt-4 rounded-xl bg-red-50 p-4 text-sm text-red-700"
-                      >
-                        模拟步骤失败，未执行真实操作。点击“重试当前步骤”恢复演示。
-                      </p>
-                    )}
-                    {complete && (
-                      <div className="mt-4 rounded-xl bg-teal-50 p-4 text-sm leading-7 text-teal-900">
-                        <p className="font-semibold">固定示例结果 · 未保存</p>
-                        <p>第一周：完成工作空间 UI，梳理用户场景与接口需求。</p>
-                        <p>
-                          第二周：按后续任务安排接入能力，完成验证与比赛演示准备。
-                        </p>
-                        <p className="mt-2 text-xs text-teal-700">
-                          该示例不会根据输入生成内容，也不会形成新记忆。
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </>
-            ) : (
-              <div className="py-12 text-center">
-                <p className="text-3xl text-teal-700">✦</p>
-                <h3 className="mt-4 font-semibold">从一个明确的目标开始</h3>
-                <p className="mt-3 text-sm text-slate-400">
-                  输入任务，或加载两周开发计划演示。
+
+          <div className="border-b border-slate-100 px-5 py-4 sm:px-6">
+            <AgentProviderSelector
+              providers={providers}
+              selectedProvider={selectedProvider}
+              loading={providersLoading}
+              loadError={providersError}
+              locked={isSending || !!retryRequest}
+              onChange={setSelectedProvider}
+            />
+          </div>
+
+          <div
+            className="flex min-h-[360px] max-h-[65vh] flex-col gap-5 overflow-y-auto p-5 sm:min-h-[440px] sm:p-6"
+            aria-label="对话消息"
+            aria-live="polite"
+          >
+            {messages.length === 0 ? (
+              <div className="m-auto max-w-md py-10 text-center">
+                <span className="mx-auto flex size-12 items-center justify-center rounded-2xl bg-teal-50 text-xl text-teal-800" aria-hidden="true">✦</span>
+                <h3 className="mt-4 font-semibold">从你现在要做的事开始</h3>
+                <p className="mt-2 text-sm leading-6 text-slate-500">
+                  输入问题后，消息会通过已登录的 AI Gateway 发送给当前选择的模型。
                 </p>
-                <button onClick={reset} className="button-secondary mt-5">
-                  加载示例任务
-                </button>
+                <p className="mt-3 text-xs leading-5 text-slate-400">
+                  不会自动读取 Memory 或 Knowledge Base，也不会执行工具。
+                </p>
+              </div>
+            ) : messages.map((message) => (
+              <AgentMessage key={message.id} message={message} />
+            ))}
+
+            {isSending && (
+              <div className="flex items-start gap-3" role="status" aria-live="polite">
+                <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-teal-50 text-teal-800" aria-hidden="true">✦</span>
+                <div className="rounded-2xl rounded-tl-sm bg-slate-50 px-4 py-3 text-sm text-slate-500">
+                  AI 正在响应…
+                </div>
+              </div>
+            )}
+
+            {errorCode && (
+              <div className="rounded-xl border border-red-200 bg-red-50 p-4" role="alert">
+                <p className="text-sm font-medium text-red-800">{errorMessages[errorCode]}</p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {errorCode === "AUTH_REQUIRED" ? (
+                    <Link href="/login" className="button-secondary">重新登录</Link>
+                  ) : (
+                    <button type="button" className="button-secondary" disabled={isSending} onClick={retry}>
+                      重试
+                    </button>
+                  )}
+                  <button type="button" className="button-secondary" disabled={isSending} onClick={clearConversation}>
+                    清空对话
+                  </button>
+                </div>
               </div>
             )}
           </div>
-          <form onSubmit={submit} className="border-t border-slate-100 p-5">
-            <label
-              htmlFor="task-input"
-              className="mb-2 block text-xs font-medium text-slate-500"
-            >
-              任务输入
+
+          <form onSubmit={submit} className="border-t border-slate-100 p-5 sm:p-6">
+            <label htmlFor="agent-message" className="mb-2 block text-xs font-medium text-slate-500">
+              发送消息
             </label>
             <textarea
-              id="task-input"
+              id="agent-message"
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
-              maxLength={2000}
+              maxLength={MAX_MESSAGE_CHARACTERS}
               rows={3}
-              placeholder="描述你想完成的目标…"
-              className="w-full resize-y rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm leading-6"
+              disabled={isSending || !!retryRequest || providersLoading || providersError}
+              placeholder="输入你想讨论的问题…"
+              aria-describedby="agent-message-hint"
+              className="w-full resize-y rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm leading-6 disabled:opacity-60"
             />
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-              <p className="text-xs text-slate-400">
-                仅前端演示 · 不保存输入 · {draft.length}/2000
+              <p id="agent-message-hint" className="text-xs text-slate-400">
+                最多 {MAX_MESSAGE_CHARACTERS} 字符 · 最近 {MAX_MESSAGES} 条消息作为上下文 · {draft.length}/{MAX_MESSAGE_CHARACTERS}
               </p>
-              <button
-                type="submit"
-                disabled={!draft.trim()}
-                className="button-primary"
-              >
-                发送演示任务 ↑
+              <button type="submit" disabled={!canSend} className="button-primary">
+                {isSending ? "AI 正在响应…" : "发送消息 ↑"}
               </button>
             </div>
+            {!providersLoading && !providersError && !selectedStatus?.configured && (
+              <p className="mt-3 text-xs text-amber-700">
+                {providerLabels[selectedProvider]} 尚未配置。请切换到可用 Provider。
+              </p>
+            )}
+            {draft.trim().length > MAX_MESSAGE_CHARACTERS && (
+              <p className="mt-3 text-xs text-red-700">单条消息超过 Gateway 限制，请缩短后发送。</p>
+            )}
           </form>
         </section>
+
         <div className="space-y-4">
-          <AgentTimeline steps={steps} />
+          <AgentTimeline
+            state={timeline}
+            provider={selectedProvider}
+            model={selectedStatus?.model}
+          />
           <section className="panel">
-            <h2 className="text-sm font-semibold">演示控制</h2>
-            <p className="mt-2 text-xs leading-5 text-slate-400">
-              手动切换状态，无自动执行或网络请求。
-            </p>
-            <div className="mt-4 flex flex-wrap gap-2">
-              <button
-                className="button-primary"
-                disabled={current < 0 || complete}
-                onClick={() => {
-                  if (failed) setFailed(false);
-                  else setCurrent(current + 1);
-                }}
-              >
-                {failed ? "重试当前步骤" : "推进演示"}
-              </button>
-              <button
-                className="button-secondary"
-                disabled={current < 0 || complete || failed}
-                onClick={() => setFailed(true)}
-              >
-                模拟错误
-              </button>
-              <button className="button-secondary" onClick={reset}>
-                重置示例
-              </button>
-            </div>
+            <h2 className="text-sm font-semibold">当前能力边界</h2>
+            <ul className="mt-3 space-y-2 text-xs leading-5 text-slate-500">
+              <li>✓ 通过 AI Gateway 调用所选 Provider</li>
+              <li>✓ 当前页面内存中的多轮对话</li>
+              <li>○ Memory、RAG 与工具执行尚未接入</li>
+              <li>○ Local Connector 尚未实现</li>
+            </ul>
           </section>
         </div>
       </div>

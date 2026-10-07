@@ -24,7 +24,7 @@ https://personal-agent-seven-mu.vercel.app
 - ✅ 服务端身份认证与受保护路由
 - ✅ Vercel 公网部署
 
-> `feat/ai-gateway` 分支新增的 AI Gateway 尚未部署到上述在线演示地址。Agent、个人记忆与知识库的完整能力仍在开发中。
+> 当前 Agent Chat 与 AI Gateway 的更新尚未部署到上述在线演示地址。个人记忆、知识库、Agent Planning 与工具能力仍在开发中。
 
 ## 比赛项目目标
 
@@ -32,25 +32,25 @@ https://personal-agent-seven-mu.vercel.app
 
 ## 当前开发阶段
 
-**Day 2 / Task 1：真实 AI 对话基础与多模型网关。** 已加入受 Supabase 身份保护的 Next.js AI Route Handler，可显式选择 OpenAI、DeepSeek、Gemini 或本地 Ollama。Agent 页面尚未调用该接口；任务、记忆、文档和进度仍为演示数据。没有用户业务数据存储、独立 FastAPI 服务或 Windows 本地连接器。
+**Day 2 / Task 2：Agent Workspace 真实 AI 对话。** `/agent` 通过受 Supabase 身份保护的 Next.js AI Gateway 调用所选 Provider；默认优先使用本地 Ollama `qwen3:8b`。对话只保存在当前页面内存。Dashboard 示例、Memory 与 Knowledge Base 仍是演示数据；没有 Agent Planning、RAG、工具执行、业务数据存储或 Windows Local Connector。
 
 ## 技术架构概览
 
 ```text
-当前：Browser → Next.js Web → Next.js AI Gateway → OpenAI / DeepSeek / Gemini
-                                                └→ Ollama（本地模型）
+当前：Browser → Agent Chat (Next.js) → Next.js AI Gateway ┬→ OpenAI / DeepSeek / Gemini
+                                                          └→ Ollama (qwen3:8b，本地)
 未来：Browser → Next.js Web → FastAPI → Personal Agent → Memory / RAG / Tools
                                                        └→ Windows Local Connector
 ```
 
-Supabase 当前用于认证。云 Provider 与 Ollama 本地 Provider 可以共存，Gateway 要求用户显式选择服务商；Auto Router、FastAPI Agent、数据存储与 Windows 本地连接器仍为规划。
+Supabase 当前用于认证。Agent Chat 默认优先选择已配置的 Ollama，用户也可以在界面切换到其他已配置 Provider。云 Provider 与本地 Provider 共存；Auto Router、FastAPI Agent、数据存储与 Windows Local Connector 仍为规划。Gemini Provider 保留，但不据此声称上游真实调用已通过。
 
 ```text
 web/          Next.js + TypeScript + Tailwind CSS + App Router
 server/       FastAPI 后端占位说明
 connector/    Windows Local Connector 占位说明
 docs/         架构与开发流程
-.env.example  空值环境变量示例
+.env.example  不含密钥的环境变量示例
 ```
 
 详细边界见 [架构文档](docs/architecture.md)。
@@ -84,8 +84,9 @@ npm run start
 - Supabase 官方 `@supabase/ssr` 浏览器/服务端客户端，Cookie 会话、Proxy 刷新与服务端身份校验。
 - Dashboard / Agent / Memory / Knowledge / Settings 未登录时跳转 `/login`；侧栏展示认证邮箱及退出入口。
 - 统一侧边导航与 Dashboard：今日重点、项目、最近任务、演示记忆与继续任务入口。
-- `/agent`：任务输入、聊天 UI 与六步执行时间线；支持手动推进、模拟错误、重试和重置。
-- `/agent?new=1`：空白演示任务入口，提交后启动固定前端流程。
+- `/agent`：真实 AI Chat Workspace，可查看 Provider 配置状态、选择模型、发送多轮对话、查看请求状态、重试和清空会话。
+- Agent 对话通过 `POST /api/ai/chat` 使用认证后的 Next.js AI Gateway；Ollama `qwen3:8b` 已完成真实本地推理验收。
+- Agent Timeline 只显示 Received、Validating、Selecting Provider、Generating、Completed 等请求状态，不模拟 Planning、Memory、RAG 或工具调用。
 - `/memory`：五类演示个人记忆；编辑/删除暂不可用。
 - `/knowledge`：演示文件列表；上传与检索暂不可用。
 - `/settings`：模型、自主程度的本地 UI 选择，以及服务商/连接器占位。
@@ -97,15 +98,16 @@ npm run start
 - 后端与本地连接器占位目录。
 - 环境变量示例、敏感文件忽略规则与架构/开发文档。
 
-工作空间的演示状态仅存在于页面内存，刷新后重置；示例结果为固定内容，不随输入生成。只有显式调用 AI API 才会发送真实 AI 请求；没有业务数据持久化、文件读取或命令执行。
+Agent 对话只保存在前端内存，刷新后清空；发送时只传递最近且符合 Gateway 限制的消息。Dashboard、Memory 和 Knowledge Base 仍使用标明的演示内容。当前没有业务数据持久化、文件读取或命令执行。
 
 ## Planned Features
 
 - FastAPI 后端与 Personal Agent。
 - 个性化 Memory、个人知识 RAG 与 Tools。
 - Supabase 用户业务数据存储（认证基础已实现，需配置项目验证）。
-- 将 Agent Workspace 接入真实 AI、Auto Model Router、per-user daily quota 与 Streaming。
-- Windows Local Connector、本地文件与受控命令执行。Ollama 本地 Provider 已有基础支持，但当前只可由能访问该 Ollama 服务的 Next.js 服务端使用。
+- Auto Model Router、per-user daily quota 与 Streaming。
+- Agent Planning、Personal Memory、RAG 与 Tools。
+- Windows Local Connector、本地文件与受控命令执行。当前 Next.js 服务端只能访问自身网络可达的 Ollama；部署在 Vercel 时，`127.0.0.1` 指 Vercel 运行环境，不能访问用户电脑上的 Ollama。
 
 ## 配置与安全
 
