@@ -5,6 +5,7 @@ import { getSupabaseConfig } from "./config";
 export async function updateSession(request: NextRequest) {
   const config = getSupabaseConfig();
   const isAuthPage = ["/login", "/signup"].includes(request.nextUrl.pathname);
+  const isApiRoute = request.nextUrl.pathname.startsWith("/api/");
   let response = NextResponse.next({ request });
   response.headers.set("Cache-Control", "private, no-store");
 
@@ -23,7 +24,7 @@ export async function updateSession(request: NextRequest) {
     return redirected;
   }
 
-  if (!config) return isAuthPage ? response : redirectTo("/login");
+  if (!config) return isAuthPage || isApiRoute ? response : redirectTo("/login");
 
   const supabase = createServerClient(config.url, config.publishableKey, {
     cookies: {
@@ -52,7 +53,8 @@ export async function updateSession(request: NextRequest) {
     // Provider failures never grant access or crash the public auth pages.
   }
 
-  if (!authenticated && !isAuthPage) return redirectTo("/login");
+  // API routes must reach their handlers so they can return JSON 401 responses.
+  if (!authenticated && !isAuthPage && !isApiRoute) return redirectTo("/login");
   if (authenticated && isAuthPage) return redirectTo("/");
   return response;
 }

@@ -5,6 +5,7 @@ import { createGeminiProvider } from "./gemini-provider";
 import { createOpenAIProvider } from "./openai-provider";
 import { createOllamaProvider } from "./ollama-provider";
 import type { AIProvider, ProviderId, ProviderStatus } from "./types";
+import { OLLAMA_HEALTH_TIMEOUT_MS } from "./limits";
 
 // Defaults live here only. Deployments can override every model via server env.
 const defaultModels: Record<ProviderId, string> = {
@@ -16,6 +17,7 @@ const defaultModels: Record<ProviderId, string> = {
 
 const defaultOllamaBaseUrl = "http://127.0.0.1:11434";
 const providerIds: ProviderId[] = ["openai", "deepseek", "gemini", "ollama"];
+const providerTypes = { openai: "cloud", deepseek: "cloud", gemini: "cloud", ollama: "local" } as const;
 
 function getOllamaBaseUrl(): string | undefined {
   const value = process.env.OLLAMA_BASE_URL?.trim() || defaultOllamaBaseUrl;
@@ -43,15 +45,45 @@ function getProviderConfig(id: ProviderId) {
   };
 }
 
-export function getProviderStatuses(): ProviderStatus[] {
-  return providerIds.map((id) => {
+async function isOllamaAvailable(baseUrl: string | undefined, model: string): Promise<boolean> {
+  if (!baseUrl) return false;
+  try {
+    const response = await fetch(`${baseUrl}/api/tags`, {
+      method: "GET",
+      cache: "no-store",
+      signal: AbortSignal.timeout(OLLAMA_HEALTH_TIMEOUT_MS),
+    });
+    if (!response.ok) return false;
+    const payload: unknown = await response.json();
+    if (typeof payload !== "object" || payload === null || !Array.isArray((payload as { models?: unknown }).models)) {
+      return false;
+    }
+    return (payload as { models: unknown[] }).models.some((entry) =>
+      typeof entry === "object" && entry !== null && "name" in entry && entry.name === model,
+    );
+  } catch {
+    return false;
+  }
+}
+
+export async function getProviderStatuses(): Promise<ProviderStatus[]> {
+  const ollamaBaseUrl = getOllamaBaseUrl();
+  const statuses: ProviderStatus[] = providerIds.map((id) => {
     const { key, model } = getProviderConfig(id);
+    const configured = id === "ollama" ? !!ollamaBaseUrl : !!key;
     return {
       id,
-      configured: id === "ollama" ? !!getOllamaBaseUrl() : !!key,
+      type: providerTypes[id],
+      configured,
+      availability: id === "ollama" ? "unavailable" : configured ? "unknown" : "unavailable",
       model,
     };
   });
+  const ollamaModel = statuses.find(({ id }) => id === "ollama")?.model;
+  const ollamaAvailable = ollamaModel ? await isOllamaAvailable(ollamaBaseUrl, ollamaModel) : false;
+  return statuses.map((status) => status.id === "ollama"
+    ? { ...status, availability: ollamaAvailable ? "available" : "unavailable" }
+    : status);
 }
 
 export function getProvider(id: ProviderId): AIProvider {

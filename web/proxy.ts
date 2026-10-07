@@ -12,6 +12,7 @@ export const config = {
     "/memory/:path*",
     "/knowledge/:path*",
     "/settings/:path*",
+    "/api/ai/:path*",
     "/login",
     "/signup",
   ],

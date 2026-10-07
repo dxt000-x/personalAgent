@@ -5,10 +5,11 @@ import {
   MAX_MESSAGES,
   MAX_REQUEST_BYTES,
 } from "./limits";
-import type { ChatMessage, ProviderId } from "./types";
+import type { ChatMessage, ProviderId, ProviderSelection, RoutingPreference } from "./types";
 
 export type ChatRequest = {
-  provider: ProviderId;
+  provider: ProviderSelection;
+  routingPreference: RoutingPreference;
   messages: ChatMessage[];
 };
 
@@ -54,7 +55,12 @@ export function validateChatRequest(value: unknown): ChatRequest {
     throw new AIGatewayError("INVALID_REQUEST");
   }
   const input = value as Record<string, unknown>;
-  if (!["openai", "deepseek", "gemini", "ollama"].includes(String(input.provider))) {
+  if (!["auto", "openai", "deepseek", "gemini", "ollama"].includes(String(input.provider))) {
+    throw new AIGatewayError("INVALID_REQUEST");
+  }
+  const routingPreference = input.routingPreference === undefined ? "auto" : input.routingPreference;
+  if (routingPreference !== "auto" && routingPreference !== "privacy") throw new AIGatewayError("INVALID_REQUEST");
+  if (routingPreference === "privacy" && input.provider !== "auto" && input.provider !== "ollama") {
     throw new AIGatewayError("INVALID_REQUEST");
   }
   if (!Array.isArray(input.messages) || input.messages.length < 1 || input.messages.length > MAX_MESSAGES) {
@@ -83,5 +89,5 @@ export function validateChatRequest(value: unknown): ChatRequest {
   if (messages.at(-1)?.role !== "user") {
     throw new AIGatewayError("INVALID_REQUEST");
   }
-  return { provider: input.provider as ProviderId, messages };
+  return { provider: input.provider as ProviderId | "auto", routingPreference, messages };
 }
