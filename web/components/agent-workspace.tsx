@@ -6,7 +6,7 @@ import { PageHeader } from "./page-header";
 import { AgentTimeline } from "./agent-timeline";
 import { AgentMessage, type AgentChatMessage } from "./agent-message";
 import { AgentProviderSelector } from "./agent-provider-selector";
-import type { ChatMessage, ProviderId, ProviderStatus } from "@/lib/ai/types";
+import type { ChatMessage, ProviderId, ProviderSelection, ProviderStatus, RoutingPreference, RoutingReason } from "@/lib/ai/types";
 import {
   MAX_INPUT_CHARACTERS,
   MAX_MESSAGE_CHARACTERS,
@@ -16,14 +16,15 @@ import {
 type GatewayErrorCode =
   | "AUTH_REQUIRED"
   | "PROVIDER_NOT_CONFIGURED"
+  | "PRIVACY_PROVIDER_UNAVAILABLE"
   | "INVALID_REQUEST"
   | "PROVIDER_ERROR"
   | "RATE_LIMITED"
   | "TIMEOUT";
 
-type RetryRequest = { provider: ProviderId; messages: ChatMessage[] };
+type RetryRequest = { provider: ProviderSelection; routingPreference: RoutingPreference; messages: ChatMessage[] };
 type TimelineState =
-  | { state: "idle" | "running" | "success" }
+  | { state: "idle" | "running" | "success"; resolvedProvider?: ProviderId; model?: string; reason?: RoutingReason }
   | { state: "error"; code: GatewayErrorCode };
 
 const providerLabels: Record<ProviderId, string> = {
@@ -36,6 +37,7 @@ const providerLabels: Record<ProviderId, string> = {
 const errorMessages: Record<GatewayErrorCode, string> = {
   AUTH_REQUIRED: "登录状态已失效，请重新登录后再试。",
   PROVIDER_NOT_CONFIGURED: "所选 Provider 尚未配置，请选择已配置的 Provider。",
+  PRIVACY_PROVIDER_UNAVAILABLE: "没有可用的本地模型。Privacy 模式不会将消息发送到云端。",
   INVALID_REQUEST: "消息超出当前对话限制，请缩短内容或清空会话后重试。",
   PROVIDER_ERROR: "模型服务暂时不可用。请检查 Provider 服务状态后重试。",
   RATE_LIMITED: "请求过于频繁，请稍后重试。",
@@ -45,6 +47,7 @@ const errorMessages: Record<GatewayErrorCode, string> = {
 const gatewayErrorCodes = new Set<GatewayErrorCode>([
   "AUTH_REQUIRED",
   "PROVIDER_NOT_CONFIGURED",
+  "PRIVACY_PROVIDER_UNAVAILABLE",
   "INVALID_REQUEST",
   "PROVIDER_ERROR",
   "RATE_LIMITED",
@@ -88,6 +91,8 @@ function readProviderStatuses(value: unknown): ProviderStatus[] {
     return typeof status.id === "string"
       && allowedIds.has(status.id as ProviderId)
       && typeof status.configured === "boolean"
+      && (status.type === "local" || status.type === "cloud")
+      && ["unknown", "available", "unavailable"].includes(String(status.availability))
       && typeof status.model === "string";
   });
 }
@@ -100,7 +105,8 @@ export function AgentWorkspace({ sessionKey = "default" }: { sessionKey?: string
   const [messages, setMessages] = useState<AgentChatMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
-  const [selectedProvider, setSelectedProvider] = useState<ProviderId>("ollama");
+  const [selectedProvider, setSelectedProvider] = useState<ProviderSelection>("auto");
+  const [routingPreference, setRoutingPreference] = useState<RoutingPreference>("auto");
   const [providersLoading, setProvidersLoading] = useState(true);
   const [providersError, setProvidersError] = useState(false);
   const [isSending, setIsSending] = useState(false);
@@ -109,7 +115,7 @@ export function AgentWorkspace({ sessionKey = "default" }: { sessionKey?: string
   const [timeline, setTimeline] = useState<TimelineState>({ state: "idle" });
 
   const selectedStatus = useMemo(
-    () => providers.find(({ id }) => id === selectedProvider),
+    () => selectedProvider === "auto" ? undefined : providers.find(({ id }) => id === selectedProvider),
     [providers, selectedProvider],
   );
 
@@ -125,9 +131,7 @@ export function AgentWorkspace({ sessionKey = "default" }: { sessionKey?: string
         const result = readProviderStatuses(body);
         if (!active) return;
         setProviders(result);
-        const ollama = result.find(({ id, configured }) => id === "ollama" && configured);
-        const firstConfigured = result.find(({ configured }) => configured);
-        setSelectedProvider(ollama?.id ?? firstConfigured?.id ?? "ollama");
+        setSelectedProvider("auto");
       } catch {
         if (active) setProvidersError(true);
       } finally {
@@ -147,7 +151,11 @@ export function AgentWorkspace({ sessionKey = "default" }: { sessionKey?: string
       const response = await fetch("/api/ai/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider: request.provider, messages: request.messages }),
+        body: JSON.stringify({
+          provider: request.provider,
+          ...(request.provider === "auto" ? { routingPreference: request.routingPreference } : {}),
+          messages: request.messages,
+        }),
       });
       const body: unknown = await response.json();
       if (!response.ok) {
@@ -157,21 +165,39 @@ export function AgentWorkspace({ sessionKey = "default" }: { sessionKey?: string
         throw new Error(asGatewayErrorCode(error?.code));
       }
 
-      const result = body as { text?: unknown; provider?: unknown; model?: unknown };
+      const result = body as {
+        text?: unknown;
+        provider?: unknown;
+        model?: unknown;
+        routing?: { mode?: unknown; reason?: unknown };
+      };
       if (typeof result.text !== "string" || !result.text.trim()
-        || result.provider !== request.provider || typeof result.model !== "string") {
+        || typeof result.provider !== "string"
+        || !["openai", "deepseek", "gemini", "ollama"].includes(result.provider)
+        || (request.provider !== "auto" && result.provider !== request.provider)
+        || typeof result.model !== "string") {
         throw new Error("PROVIDER_ERROR");
       }
+      const actualProvider = result.provider as ProviderId;
       const assistantMessage: AgentChatMessage = {
         id: crypto.randomUUID(),
         role: "assistant",
         content: result.text as string,
-        provider: request.provider,
+        provider: actualProvider,
         model: result.model as string,
       };
       setMessages((current) => [...current, assistantMessage].slice(-MAX_MESSAGES));
       setRetryRequest(null);
-      setTimeline({ state: "success" });
+      const reason = result.routing?.reason;
+      setTimeline({
+        state: "success",
+        resolvedProvider: actualProvider,
+        model: result.model,
+        ...(typeof reason === "string" && [
+          "local_provider_available", "cloud_provider_fallback", "cloud_provider_selected",
+          "privacy_local_only", "fallback_after_provider_error",
+        ].includes(reason) ? { reason: reason as RoutingReason } : {}),
+      });
     } catch (error) {
       const code = asGatewayErrorCode(error instanceof Error ? error.message : undefined);
       setErrorCode(code);
@@ -185,7 +211,8 @@ export function AgentWorkspace({ sessionKey = "default" }: { sessionKey?: string
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const content = draft.trim();
-    if (!content || content.length > MAX_MESSAGE_CHARACTERS || !selectedStatus?.configured
+    if (!content || content.length > MAX_MESSAGE_CHARACTERS
+      || (selectedProvider !== "auto" && !selectedStatus?.configured)
       || isSending || retryRequest) return;
 
     const userMessage: AgentChatMessage = {
@@ -196,6 +223,7 @@ export function AgentWorkspace({ sessionKey = "default" }: { sessionKey?: string
     const nextMessages = [...messages, userMessage];
     const request: RetryRequest = {
       provider: selectedProvider,
+      routingPreference,
       messages: providerRequestMessages(nextMessages),
     };
     setMessages(nextMessages.slice(-MAX_MESSAGES));
@@ -217,7 +245,7 @@ export function AgentWorkspace({ sessionKey = "default" }: { sessionKey?: string
     setTimeline({ state: "idle" });
   }
 
-  const canSend = !!selectedStatus?.configured && !providersLoading && !providersError
+  const canSend = (selectedProvider === "auto" || !!selectedStatus?.configured) && !providersLoading && !providersError
     && !isSending && !retryRequest && !!draft.trim() && draft.trim().length <= MAX_MESSAGE_CHARACTERS;
 
   return (
@@ -251,10 +279,12 @@ export function AgentWorkspace({ sessionKey = "default" }: { sessionKey?: string
             <AgentProviderSelector
               providers={providers}
               selectedProvider={selectedProvider}
+              routingPreference={routingPreference}
               loading={providersLoading}
               loadError={providersError}
               locked={isSending || !!retryRequest}
               onChange={setSelectedProvider}
+              onRoutingPreferenceChange={setRoutingPreference}
             />
           </div>
 
@@ -329,7 +359,7 @@ export function AgentWorkspace({ sessionKey = "default" }: { sessionKey?: string
                 {isSending ? "AI 正在响应…" : "发送消息 ↑"}
               </button>
             </div>
-            {!providersLoading && !providersError && !selectedStatus?.configured && (
+            {!providersLoading && !providersError && selectedProvider !== "auto" && !selectedStatus?.configured && (
               <p className="mt-3 text-xs text-amber-700">
                 {providerLabels[selectedProvider]} 尚未配置。请切换到可用 Provider。
               </p>
