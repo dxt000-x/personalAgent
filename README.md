@@ -77,6 +77,14 @@ npm run start
 
 首次安装后，Next.js 在运行或构建时自动生成 `next-env.d.ts`。首次单独执行类型检查前，可先执行 `npm run build`。
 
+### Windows 一键运行
+
+环境要求：Windows 10/11、Node.js LTS（至少满足 `web/package.json` 中的版本要求）、npm 和 Ollama。运行 `qwen3:8b` 建议准备 16 GB 内存，并为模型和依赖预留至少 10 GB 磁盘空间；实际速度取决于电脑配置。Ollama 在用户自己的电脑运行，本地模型推理不会产生云 API Token 费用。
+
+首次在项目根目录双击 `setup-personal-agent.bat`。脚本会检查 Node.js 与 Ollama、确认 Ollama 服务和 `qwen3:8b` 模型、使用 `npm ci` 安装 Web 依赖、创建（但不覆盖）`web/.env.local` 模板并执行 Production build。模型缺失时会先询问是否下载；模型约数 GB，耗时取决于网络。若本机缺少 Node.js 或 Ollama，脚本会说明安装要求，不会静默安装系统软件。
+
+然后在 `web/.env.local` 填写 Supabase 项目的 `NEXT_PUBLIC_SUPABASE_URL` 和 `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`，再双击 `start-personal-agent.bat`。后续启动不重复安装依赖或下载模型。脚本会优先使用 3000 端口，端口占用时查找后续空闲端口；服务健康后打开默认浏览器，并在窗口显示访问地址。按 `Ctrl+C` 停止 Web 服务。若网络需要代理，可从终端运行 `start-personal-agent.ps1 -ProxyUrl "http://127.0.0.1:<proxy-port>"`；不传参数时使用系统网络。代理设置仅作用于该次脚本和其启动的子进程。
+
 ## 当前已实现功能
 
 - `/login`、`/signup`：邮箱密码认证、确认密码校验、Loading/Error 状态及邮箱确认回调。
