@@ -1,0 +1,42 @@
+import "server-only";
+import OpenAI from "openai";
+import { AIGatewayError } from "./errors";
+import { MAX_OUTPUT_CHARACTERS, MAX_OUTPUT_TOKENS, PROVIDER_TIMEOUT_MS } from "./limits";
+import type { AIProvider } from "./types";
+
+export function createDeepSeekProvider(apiKey: string, model: string): AIProvider {
+  const client = new OpenAI({
+    apiKey,
+    baseURL: "https://api.deepseek.com",
+    maxRetries: 0,
+    timeout: PROVIDER_TIMEOUT_MS,
+  });
+
+  return {
+    async generate(messages, signal) {
+      const response = await client.chat.completions.create(
+        {
+          model,
+          messages: messages.map(({ role, content }) => ({ role, content })),
+          max_tokens: MAX_OUTPUT_TOKENS,
+          stream: false,
+        },
+        { signal },
+      );
+      const text = response.choices[0]?.message.content?.trim();
+      if (!text) throw new AIGatewayError("PROVIDER_ERROR");
+      return {
+        text: text.slice(0, MAX_OUTPUT_CHARACTERS),
+        provider: "deepseek",
+        model: response.model || model,
+        usage: response.usage
+          ? {
+              inputTokens: response.usage.prompt_tokens,
+              outputTokens: response.usage.completion_tokens,
+              totalTokens: response.usage.total_tokens,
+            }
+          : undefined,
+      };
+    },
+  };
+}
