@@ -1,4 +1,4 @@
-export type ProviderId = "openai" | "deepseek" | "gemini";
+export type ProviderId = "openai" | "deepseek" | "gemini" | "ollama";
 
 export type ChatMessage = {
   role: "user" | "assistant";

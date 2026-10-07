@@ -54,7 +54,7 @@ export function validateChatRequest(value: unknown): ChatRequest {
     throw new AIGatewayError("INVALID_REQUEST");
   }
   const input = value as Record<string, unknown>;
-  if (!["openai", "deepseek", "gemini"].includes(String(input.provider))) {
+  if (!["openai", "deepseek", "gemini", "ollama"].includes(String(input.provider))) {
     throw new AIGatewayError("INVALID_REQUEST");
   }
   if (!Array.isArray(input.messages) || input.messages.length < 1 || input.messages.length > MAX_MESSAGES) {
