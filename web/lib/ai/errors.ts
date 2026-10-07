@@ -1,6 +1,7 @@
 export type AIErrorCode =
   | "AUTH_REQUIRED"
   | "PROVIDER_NOT_CONFIGURED"
+  | "PRIVACY_PROVIDER_UNAVAILABLE"
   | "INVALID_REQUEST"
   | "PROVIDER_ERROR"
   | "RATE_LIMITED"
@@ -9,6 +10,7 @@ export type AIErrorCode =
 const errorDetails: Record<AIErrorCode, { status: number; message: string }> = {
   AUTH_REQUIRED: { status: 401, message: "请先登录。" },
   PROVIDER_NOT_CONFIGURED: { status: 503, message: "所选模型服务尚未配置。" },
+  PRIVACY_PROVIDER_UNAVAILABLE: { status: 503, message: "当前没有可用的本地模型；隐私模式不会将消息发送到云端。" },
   INVALID_REQUEST: { status: 400, message: "请求格式或内容不符合要求。" },
   PROVIDER_ERROR: { status: 502, message: "模型服务暂时不可用。" },
   RATE_LIMITED: { status: 429, message: "模型服务请求过于频繁，请稍后重试。" },

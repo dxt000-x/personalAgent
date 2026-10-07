@@ -6,7 +6,7 @@ export const runtime = "nodejs";
 export async function GET(): Promise<Response> {
   try {
     await requireUserId();
-    return aiJson(getProviderStatuses());
+    return aiJson(await getProviderStatuses());
   } catch (error) {
     return aiErrorResponse(error);
   }
