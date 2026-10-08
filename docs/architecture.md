@@ -21,13 +21,13 @@
 - Personal Context Layer 当前实现：Authenticated User → Personal Memory UI → Next.js Memory API → Supabase SSR Session → `public.memories` → RLS。API 从已验证 claims 获取用户 ID；请求不接受客户端指定 `user_id`；数据库仅授予 authenticated 必需的 SELECT、受限列 INSERT/UPDATE 与 DELETE 权限。
 - Memory API 提供 `GET/POST /api/memories` 和 `GET/PATCH/DELETE /api/memories/[id]`，强制 private/no-store 响应。SQL 约束类别、重要度和内容长度；POST 省略 `source`，由数据库 `DEFAULT 'manual'` 填充；更新时间由 trigger 维护。
 - 记忆所有权由 SELECT、INSERT、UPDATE、DELETE 四条 authenticated RLS policy 保障。按用户过滤是额外防护，不替代 RLS；跨用户单条访问以 404 安全失败。
-- Migration 已由项目维护者在 Supabase 执行并确认 RLS 与四条 Policy。真实登录态使用最小列权限完成 GET 200、POST 201、PATCH 200 与 DELETE 204；响应中的 source 为 `manual`，更新时间 trigger 产生新时间。匿名五种 API 操作均返回 401 `AUTH_REQUIRED`。A/B 双账号及跨账号单条访问尚未验证，因为当前没有第二个测试账号。
+- Migration 已由项目维护者在 Supabase 执行并确认 RLS 与四条 Policy。真实登录态使用最小列权限完成 GET 200、POST 201、PATCH 200 与 DELETE 204；响应中的 source 为 `manual`，更新时间 trigger 产生新时间。匿名五种 API 操作均返回 401 `AUTH_REQUIRED`。A/B 双账号的 AI Memory Context 隔离已有人工验收；跨账号单条 Memory API 访问的单独复测不与该结果混同。
 - 联调期间多次 PATCH 曾返回 503 `MEMORY_SERVICE_ERROR`，重试后 PATCH 返回 200；未观察到权限拒绝 403。该间歇性服务错误应在后续联调中继续留意。
 - `web/` 使用 TypeScript 与 Tailwind CSS，提供 lint、类型检查与生产构建脚本。
 - `server/`、`connector/` 仅包含占位说明，不提供服务或 API。
 - `.env.example` 提供无密钥配置示例及 Ollama 本地默认值；真实环境配置被 Git 忽略。
 
-Agent Chat 通过认证后的 Gateway 调用 Auto 路由或显式选择的 Provider。OpenRouter 是云 Provider，服务端使用 `OPENROUTER_API_KEY` 与默认模型 `openrouter/free`；配置状态不代表上游已通过真实调用。默认本地 Ollama 推理使用 `qwen3:8b`，由配置的 Ollama 服务处理，不产生云 API Token 费用；对话状态只保存在浏览器页面内存。Gemini Provider 保留，但当前文档不声称 Gemini 上游真实调用已验收成功。部署在 Vercel 时，`127.0.0.1` 指 Vercel 自身，不能访问用户电脑上的 Ollama；配置 OpenRouter 后，Auto 可在本地 Ollama 不可用时尝试该云 Provider。Windows Local Connector 尚未实现。
+Agent Chat 通过认证后的 Gateway 调用 Auto 路由或显式选择的 Provider。OpenRouter 是云 Provider，服务端使用 `OPENROUTER_API_KEY` 与默认模型 `openrouter/free`；本地及 Vercel 真实调用已有阶段性人工验收。默认本地 Ollama 推理使用 `qwen3:8b`，由配置的 Ollama 服务处理，不产生云 API Token 费用；对话状态只保存在浏览器页面内存。OpenAI、DeepSeek 尚无真实成功验收记录，Gemini 仍受上游权限限制。部署在 Vercel 时，`127.0.0.1` 指 Vercel 自身，不能访问用户电脑上的 Ollama；配置 OpenRouter 后，Auto 可在本地 Ollama 不可用时尝试该云 Provider。Windows Local Connector 尚未实现。
 
 ```text
 Browser → Agent Chat (Next.js) → Next.js AI Gateway → Rule-based Model Router ┬→ OpenRouter / OpenAI / DeepSeek / Gemini
@@ -54,7 +54,7 @@ Browser
 | Browser / Web | 用户交互与结果展示 | Agent Chat 调用 Gateway；Personal Memory 为真实 CRUD；Dashboard 与 Knowledge UI 中部分示例仍为 Mock |
 | API | 请求校验、认证、服务端配置边界 | Next.js AI Gateway 已实现；独立 FastAPI 服务 Planned |
 | Personal Agent | 组织任务、协调模型和工具 | Planned |
-| Models / Model Router | 调用云模型或本地模型 | OpenRouter、OpenAI、DeepSeek、Gemini、Ollama 显式选择与规则 Auto Router 已实现；OpenRouter 上游真实调用待验收，智能模型评估/质量路由 Planned |
+| Models / Model Router | 调用云模型或本地模型 | OpenRouter、OpenAI、DeepSeek、Gemini、Ollama 显式选择与规则 Auto Router 已实现；OpenRouter 上游真实调用已阶段性验收，智能模型评估/质量路由 Planned |
 | Memory / RAG | 个人记忆与知识检索 | Manual Memory CRUD/RLS、确定性服务端 Memory Retrieval 与上下文注入已实现；自动提取、Embedding、Semantic Search 与 Vector RAG Planned |
 | Tools | 可授权的外部与本地操作 | Planned |
 | Supabase | 数据持久化、身份与存储支持 | Auth 与 `public.memories` 的用户隔离手动 CRUD 已实现；其他业务存储 Planned |

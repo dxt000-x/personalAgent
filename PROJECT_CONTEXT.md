@@ -16,12 +16,12 @@
 ## 仓库与交接状态
 
 - 当前仓库由用户确认沿用原位置；不要自动迁移或复制项目。原请求中的新路径不存在，启动新对话时应绑定当前实际仓库。
-- 当前 branch：`main`。
-- 交接核对时的基线 HEAD：`2874015`，`Merge pull request #21 from dxt000-x/feat/openrouter-provider`。
+- 当前稳定性任务 branch：`test/ai-gateway-regression`；任务开始时 HEAD 与本地 `main`、`origin/main` 均为 `ac1e55a`（`docs: add project development context`），工作区 clean。
+- OpenRouter 合并基线：`2874015`，`Merge pull request #21 from dxt000-x/feat/openrouter-provider`。
 - origin：`https://github.com/dxt000-x/personalAgent.git`。
 - OpenRouter 功能提交：`7fdf648`（Provider）、`91e176c`（Auto 云候选）、`befa6c5`（文档）。已合并至本地 main。
-- 交接检查开始时工作区 clean；交接仅新增本文件，没有修改业务代码。
-- 未执行 fetch；不以本地 origin/main 状态声称已检查 GitHub 最新状态。
+- 本轮稳定性任务只新增自动测试、测试依赖与文档，不修改正式 AI Gateway 路由或 Provider 实现。
+- 任务开始时尝试 `git ls-remote` 核对远端 main，但本机 Git 返回 `SEC_E_NO_CREDENTIALS`；因此只确认与本地 main 和本地 origin/main 一致，不声称已核对 GitHub 最新状态。
 
 ## 当前架构
 
@@ -104,22 +104,23 @@ Memory 最多 8 条，按 importance 与创建时间排序；上下文最多 400
 | `npm run lint` | 通过，exit 0 |
 | `npm run typecheck` | 通过，exit 0 |
 | `npm run build` | 通过，exit 0；首次沙箱运行因 spawn EPERM 失败，授权环境重跑成功 |
-| 单元/集成/E2E suite | 仓库无 test 脚本或现有测试文件；未声称测试套件通过 |
-| Git 起始状态 | main，clean |
-| 交接范围 | 仅新增 PROJECT_CONTEXT.md，业务代码未修改 |
+| 自动化回归 | 新增 Vitest；5 个测试文件、47 个测试用例全部通过；只使用 fake Provider、配置、认证与 Memory 替身，不访问真实模型或 Supabase |
+| Git 稳定性任务起始状态 | test/ai-gateway-regression，clean；HEAD 与本地 main、origin/main 均为 ac1e55a |
+| 稳定性任务范围 | 测试与文档；正式业务代码未修改 |
+
+自动化基线：在 `web/` 使用 `npm test` 单次运行退出，`npm run test:watch` 用于本地开发。测试文件覆盖 Router 顺序/上限及 Provider 分类、Privacy 云调用为零、全部显式 Provider 不 fallback、Auto 可切换与禁止切换的错误类别、请求输入边界、公开错误脱敏、Memory used/none/unavailable，以及少量 Route Handler 认证与成功响应。`server-only` 仅在 Vitest 中映射为空标记；正式 Next.js 代码未变。安装的直接 devDependency 仅 `vitest`。本轮 `npm test`、`npm run lint`、`npm run typecheck`、`npm run build` 均通过；构建显示正常读取本地 `.env.local`，自动测试本身不需要该文件。
 
 ## 遗留问题与下一阶段候选任务
 
 必须由用户决定下一任务范围，以下仅为交接待办，不自动开始：
 
-1. 建立 Router、请求验证、错误映射、超时与 Privacy 的自动化回归测试；当前依赖工程检查与浏览器人工验收。
-2. 增加跨实例持久化 per-user quota 与滥用保护。当前没有可靠每日限额，不应把现有长度/超时保护当作费用预算。
-3. 评估整个请求的时间预算：30 秒 Route 声明同时包含认证、Memory、健康检查和最多两次模型调用；当前只对各阶段设部分超时，没有完整端到端 deadline。
-4. 跟踪 Gemini 项目权限；需要时配置并分别验收 OpenAI/DeepSeek，勿伪造成功结果。
-5. Memory 联调曾出现间歇 503；后续真实验收已继续通过，但没有持久性根因结论，出现时保留安全错误类别与阶段。
-6. README、architecture、development 中仍有旧的“OpenRouter / 双账号 / 认证部分场景待验收”描述；应按本文件的证据更新。在线 Vercel 版本是否包含当前 main 未在本次核对。
-7. development 中旧 npm audit / ESLint 风险说明未在本次重新联网验证；后续单独检查依赖，不执行未经评估的 force upgrade。
-8. Streaming、会话持久化、AI Memory Extraction、Embedding、Semantic Search/RAG、Agent Planning、Tools、FastAPI 与 Local Connector 均尚未实现。
+1. 增加跨实例持久化 per-user quota 与滥用保护。当前没有可靠每日限额，不应把现有长度/超时保护当作费用预算。
+2. 评估整个请求的时间预算：30 秒 Route 声明同时包含认证、Memory、健康检查和最多两次模型调用；当前只对各阶段设部分超时，没有完整端到端 deadline。现有回归测试覆盖单候选 TIMEOUT 与 fallback，但不模拟完整端到端 deadline。
+3. 跟踪 Gemini 项目权限；需要时配置并分别验收 OpenAI/DeepSeek，勿伪造成功结果。
+4. Memory 联调曾出现间歇 503；后续真实验收已继续通过，但没有持久性根因结论，出现时保留安全错误类别与阶段。
+5. README、architecture、development 的旧 OpenRouter 与双账号状态已按现有验收记录校准；在线 Vercel 当前部署是否包含本地 main 未在本次核对。
+6. development 中旧 npm audit / ESLint 风险说明未在本次重新联网验证；后续单独检查依赖，不执行未经评估的 force upgrade。
+7. Streaming、会话持久化、AI Memory Extraction、Embedding、Semantic Search/RAG、Agent Planning、Tools、FastAPI 与 Local Connector 均尚未实现。
 
 ## 本地运行和复测
 

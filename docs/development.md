@@ -12,7 +12,7 @@ Issue → Feature Branch → Commit → Pull Request → Merge
 4. Pull Request：说明问题、修改结果、验证方式及未完成事项。
 5. Merge：完成审核及必要检查后合并。
 
-Task 1、Task 2 与 Task 3 已完成项目基础架构、Workspace UI 和 Supabase 认证。Day 2 / Task 1 建立 Next.js AI Gateway 与 OpenAI、DeepSeek、Gemini、Ollama Provider；Day 2 / Task 2 接入 Agent Chat；Day 2 / Task 3 添加确定性 Auto Router、Privacy 本地模式和受限 fallback。OpenRouter 云 Provider 现已接入统一接口，待 API Key 配置后完成真实上游验收。当前 Ollama Provider 仅由能访问该 Ollama 服务的 Next.js 服务端调用。
+Task 1、Task 2 与 Task 3 已完成项目基础架构、Workspace UI 和 Supabase 认证。Day 2 / Task 1 建立 Next.js AI Gateway 与 OpenAI、DeepSeek、Gemini、Ollama Provider；Day 2 / Task 2 接入 Agent Chat；Day 2 / Task 3 添加确定性 Auto Router、Privacy 本地模式和受限 fallback。OpenRouter 云 Provider 已接入统一接口，并完成本地与 Vercel 的阶段性真实调用验收。当前 Ollama Provider 仅由能访问该 Ollama 服务的 Next.js 服务端调用。
 
 ## 开发原则
 
@@ -42,12 +42,19 @@ npm run dev
 提交前验证：
 
 ```sh
+npm test
 npm run lint
 npm run build
 npm run typecheck
 ```
 
 构建会生成 Next.js 类型声明，因此全新 checkout 可按以上顺序验证。打开首页确认内容与基础样式正常。后端和 Connector 暂无运行命令。
+
+## Automated Regression Tests
+
+`npm test` 使用 Vitest 单次运行并退出；`npm run test:watch` 是可选的开发模式。测试位于 `web/lib/ai/__tests__/` 与 `web/app/api/ai/chat/route.test.ts`，使用 deterministic fake Provider、fake 配置与受控认证/Memory 替身。它们不访问真实云 Provider、Ollama 或 Supabase，不消耗 API 额度，也不依赖 `web/.env.local`。覆盖 Router 顺序与候选上限、Privacy 只在本地执行、显式 Provider 无 fallback、Auto 错误分类、输入边界、公开错误脱敏及 Gateway Memory Context 行为。
+
+真实 Provider 与双用户 Memory 隔离仍保留独立人工集成验收记录。自动测试不会将 OpenAI、DeepSeek 或 Gemini 记作真实调用成功。
 
 ## 已知依赖问题（2026-10-06）
 
@@ -72,7 +79,7 @@ Dashboard 与 Knowledge Base 中的用户、任务、项目进度和文件列表
 - API 通过现有 Supabase SSR Server Client 与登录 Cookie 工作，服务端从 `getClaims()` 获取 `user_id`；客户端不能提交或修改所有权及数据库管理字段。
 - `public.memories` 仅授予 authenticated 读取、受限列插入/更新和删除权限；anon 无表权限。POST 不提交 `source`，数据库默认 `manual`；RLS 是最终行级安全边界。
 - API 输入验证内容 1–2000 字符、类别枚举与 1–5 整数重要度；私人响应使用 `private, no-store`。跨用户单条记录访问返回 404，不泄露记录归属。
-- 单个真实账号的 GET、POST、PATCH、更新时间 trigger 与 DELETE 已通过；匿名请求已通过拒绝测试。当前仍需第二个真实账号完成 A/B 与跨账号测试；未完成前不将多用户隔离描述为已实测通过。联调中曾出现多次 503 后 PATCH 重试成功，未观察到 403 权限拒绝。
+- 单个真实账号的 GET、POST、PATCH、更新时间 trigger 与 DELETE 已通过；匿名请求已通过拒绝测试。A/B 两个独立真实 Session 的 Memory Context 隔离已通过人工验收；跨账号单条 Memory API 访问的单独复测结果仍应与上下文隔离验收区分。联调中曾出现多次 503 后 PATCH 重试成功，未观察到 403 权限拒绝。
 
 ## Agent Personal Memory Context
 
@@ -93,7 +100,7 @@ Ollama `qwen3:8b` 已通过本机 Gateway 真实推理验收。对话文本发�
 - 密码和 session token 不记录到日志，不存入业务数据库。主要配置采用 `NEXT_PUBLIC_SUPABASE_URL` 与 `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`，仅公开 publishable key 可传到浏览器；旧 anon key 仅作为兼容回退。
 - 没有真实项目时，不能声称已完成真实邮件发送或实际项目的认证联调。
 
-本阶段已验证无配置的生产页面和登录跳转，并通过临时本地认证测试服务检查密码不一致、Loading/Error、等待确认提示、登录、刷新、页面导航与退出。伪造 session Cookie 被拒绝。测试服务与虚构配置不写入产品代码。真实 Supabase 联调已确认邮箱验证、密码登录、Session Cookie、Proxy 与 Workspace claims 验证及进入 Dashboard 成功；真实账号的刷新、完整导航、退出与重新登录需按上述清单分别验收。
+本阶段已验证无配置的生产页面和登录跳转，并通过临时本地认证测试服务检查密码不一致、Loading/Error、等待确认提示、登录、刷新、页面导航与退出。伪造 session Cookie 被拒绝。测试服务与虚构配置不写入产品代码。真实 Supabase 联调已确认邮箱验证、密码登录、Session Cookie、Proxy 与 Workspace claims 验证；真实账号的刷新、完整导航、退出与重新登录均已由用户确认通过。
 
 ## 本地网络排查
 
