@@ -1,4 +1,4 @@
-export type ProviderId = "openai" | "deepseek" | "gemini" | "ollama";
+export type ProviderId = "openai" | "deepseek" | "gemini" | "ollama" | "openrouter";
 export type ProviderSelection = ProviderId | "auto";
 export type RoutingPreference = "auto" | "privacy";
 export type ProviderType = "cloud" | "local";

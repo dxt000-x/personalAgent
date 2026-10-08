@@ -32,6 +32,7 @@ const providerLabels: Record<ProviderId, string> = {
   openai: "OpenAI",
   deepseek: "DeepSeek",
   gemini: "Gemini",
+  openrouter: "OpenRouter",
 };
 
 const errorMessages: Record<GatewayErrorCode, string> = {
@@ -84,7 +85,7 @@ function boundedConversation(messages: ChatMessage[]): ChatMessage[] {
 
 function readProviderStatuses(value: unknown): ProviderStatus[] {
   if (!Array.isArray(value)) throw new Error("invalid provider status");
-  const allowedIds = new Set<ProviderId>(["ollama", "openai", "deepseek", "gemini"]);
+  const allowedIds = new Set<ProviderId>(["ollama", "openrouter", "openai", "deepseek", "gemini"]);
   return value.filter((item): item is ProviderStatus => {
     if (typeof item !== "object" || item === null) return false;
     const status = item as Partial<ProviderStatus>;
@@ -189,7 +190,7 @@ export function AgentWorkspace({ sessionKey = "default" }: { sessionKey?: string
       };
       if (typeof result.text !== "string" || !result.text.trim()
         || typeof result.provider !== "string"
-        || !["openai", "deepseek", "gemini", "ollama"].includes(result.provider)
+        || !["openai", "deepseek", "gemini", "ollama", "openrouter"].includes(result.provider)
         || (request.provider !== "auto" && result.provider !== request.provider)
         || typeof result.model !== "string") {
         throw new Error("PROVIDER_ERROR");

@@ -4,6 +4,7 @@ import { AIGatewayError } from "./errors";
 import { createGeminiProvider } from "./gemini-provider";
 import { createOpenAIProvider } from "./openai-provider";
 import { createOllamaProvider } from "./ollama-provider";
+import { createOpenRouterProvider } from "./openrouter-provider";
 import type { AIProvider, ProviderId, ProviderStatus } from "./types";
 import { OLLAMA_HEALTH_TIMEOUT_MS } from "./limits";
 
@@ -13,11 +14,12 @@ const defaultModels: Record<ProviderId, string> = {
   deepseek: "deepseek-flash",
   gemini: "gemini-3.8-flash",
   ollama: "qwen3:8b",
+  openrouter: "openrouter/free",
 };
 
 const defaultOllamaBaseUrl = "http://127.0.0.1:11434";
-const providerIds: ProviderId[] = ["openai", "deepseek", "gemini", "ollama"];
-const providerTypes = { openai: "cloud", deepseek: "cloud", gemini: "cloud", ollama: "local" } as const;
+const providerIds: ProviderId[] = ["openai", "deepseek", "gemini", "ollama", "openrouter"];
+const providerTypes = { openai: "cloud", deepseek: "cloud", gemini: "cloud", ollama: "local", openrouter: "cloud" } as const;
 
 function getOllamaBaseUrl(): string | undefined {
   const value = process.env.OLLAMA_BASE_URL?.trim() || defaultOllamaBaseUrl;
@@ -38,6 +40,7 @@ function getProviderConfig(id: ProviderId) {
     deepseek: { key: process.env.DEEPSEEK_API_KEY, model: process.env.DEEPSEEK_MODEL },
     gemini: { key: process.env.GEMINI_API_KEY, model: process.env.GEMINI_MODEL },
     ollama: { model: process.env.OLLAMA_MODEL },
+    openrouter: { key: process.env.OPENROUTER_API_KEY, model: process.env.OPENROUTER_MODEL },
   };
   return {
     key: env[id].key?.trim() ?? "",
@@ -98,5 +101,6 @@ export function getProvider(id: ProviderId): AIProvider {
     case "openai": return createOpenAIProvider(key, model);
     case "deepseek": return createDeepSeekProvider(key, model);
     case "gemini": return createGeminiProvider(key, model);
+    case "openrouter": return createOpenRouterProvider(key, model);
   }
 }

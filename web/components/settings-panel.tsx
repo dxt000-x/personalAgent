@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 
-const models = ["Auto", "OpenAI", "DeepSeek", "Gemini", "Ollama"];
+const models = ["Auto", "OpenAI", "DeepSeek", "Gemini", "Ollama", "OpenRouter"];
 const levels = [
   { name: "Answer only", description: "仅回答问题，不执行操作。" },
   { name: "Ask before actions", description: "在执行操作前询问用户。" },
@@ -26,7 +26,7 @@ export function SettingsPanel() {
         <p className="text-xs text-slate-400">MODELS</p>
         <h2 className="mt-1 text-lg font-semibold">模型选择</h2>
         <p className="mt-2 text-xs leading-6 text-slate-400">
-          仅演示选择样式，所有模型均尚未连接。
+          此处仅演示选择样式；实际 Provider 配置与可用性请在 Agent 页面查看。
         </p>
         <fieldset className="mt-5 space-y-2">
           <legend className="sr-only">演示模型选择</legend>
@@ -47,7 +47,7 @@ export function SettingsPanel() {
                 {name}
               </span>
               <span className="text-xs text-slate-400">
-                {name === "Auto" ? "Coming Soon" : "尚未连接"}
+                演示选项
               </span>
             </label>
           ))}
@@ -57,16 +57,16 @@ export function SettingsPanel() {
         <p className="text-xs text-slate-400">API PROVIDERS</p>
         <h2 className="mt-1 text-lg font-semibold">API 服务商</h2>
         <p className="mt-2 text-xs leading-6 text-slate-400">
-          预留未来接入入口，当前不收集 API Key。
+          此处展示服务商，不收集 API Key；实际状态请在 Agent 页面查看。
         </p>
         <ul className="mt-5 divide-y divide-slate-100">
-          {["OpenAI", "DeepSeek", "Gemini"].map((provider) => (
+          {["OpenAI", "DeepSeek", "Gemini", "OpenRouter"].map((provider) => (
             <li
               key={provider}
               className="flex items-center justify-between gap-3 py-4"
             >
               <span className="text-sm font-medium">{provider}</span>
-              <span className="badge">Not connected</span>
+              <span className="badge">Agent 页面查看</span>
             </li>
           ))}
         </ul>

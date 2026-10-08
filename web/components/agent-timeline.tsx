@@ -10,6 +10,7 @@ const providerNames: Record<ProviderId, string> = {
   openai: "OpenAI",
   deepseek: "DeepSeek",
   gemini: "Gemini",
+  openrouter: "OpenRouter",
 };
 
 const reasonLabels: Record<RoutingReason, string> = {
