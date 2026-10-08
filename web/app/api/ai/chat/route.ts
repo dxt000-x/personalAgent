@@ -2,6 +2,7 @@ import { AIGatewayError, providerFailure } from "@/lib/ai/errors";
 import { aiErrorResponse, aiJson, requireAuthenticatedUser } from "@/lib/ai/http";
 import { AUTO_PROVIDER_TIMEOUT_MS, PROVIDER_TIMEOUT_MS } from "@/lib/ai/limits";
 import { getProvider } from "@/lib/ai/provider-registry";
+import { reserveCloudAiQuota } from "@/lib/ai/quota";
 import { getAutoRoute } from "@/lib/ai/router";
 import { readJsonBody, validateChatRequest } from "@/lib/ai/request";
 import type { AIChatResult, ProviderId, RoutingReason } from "@/lib/ai/types";
@@ -20,9 +21,15 @@ export async function POST(request: Request): Promise<Response> {
 
     const { provider: providerId, routingPreference, messages } = validateChatRequest(await readJsonBody(request));
     const memoryContext = await retrievePersonalMemoryContext(supabase, userId, messages);
+    let cloudQuotaReserved = false;
+    async function reserveCloudOnce() {
+      if (cloudQuotaReserved) return;
+      await reserveCloudAiQuota(supabase);
+      cloudQuotaReserved = true;
+    }
 
     if (providerId !== "auto") {
-      const result = await generate(providerId, messages, PROVIDER_TIMEOUT_MS, memoryContext.systemInstruction);
+      const result = await generate(providerId, messages, PROVIDER_TIMEOUT_MS, reserveCloudOnce, memoryContext.systemInstruction);
       return aiJson({ ...result, memory: memoryContext.metadata } satisfies AIChatResult);
     }
 
@@ -31,7 +38,7 @@ export async function POST(request: Request): Promise<Response> {
     for (let index = 0; index < route.length; index += 1) {
       const candidate = route[index];
       try {
-        const result = await generate(candidate.provider, messages, AUTO_PROVIDER_TIMEOUT_MS, memoryContext.systemInstruction);
+        const result = await generate(candidate.provider, messages, AUTO_PROVIDER_TIMEOUT_MS, reserveCloudOnce, memoryContext.systemInstruction);
         const reason: RoutingReason = index > 0 ? "fallback_after_provider_error" : candidate.reason;
         return aiJson({
           ...result,
@@ -56,9 +63,12 @@ async function generate(
   providerId: ProviderId,
   messages: Parameters<ReturnType<typeof getProvider>["generate"]>[0],
   timeoutMs: number,
+  reserveCloudOnce: () => Promise<void>,
   systemInstruction?: string,
 ) {
   const provider = getProvider(providerId);
+  // Construct the provider first: an unconfigured cloud provider must not consume quota.
+  if (providerId !== "ollama") await reserveCloudOnce();
   const signal = AbortSignal.timeout(timeoutMs);
   try {
     return await provider.generate(messages, signal, systemInstruction);

@@ -5,6 +5,8 @@ export type AIErrorCode =
   | "INVALID_REQUEST"
   | "PROVIDER_ERROR"
   | "RATE_LIMITED"
+  | "CLOUD_QUOTA_EXCEEDED"
+  | "QUOTA_UNAVAILABLE"
   | "TIMEOUT";
 
 const errorDetails: Record<AIErrorCode, { status: number; message: string }> = {
@@ -14,6 +16,8 @@ const errorDetails: Record<AIErrorCode, { status: number; message: string }> = {
   INVALID_REQUEST: { status: 400, message: "请求格式或内容不符合要求。" },
   PROVIDER_ERROR: { status: 502, message: "模型服务暂时不可用。" },
   RATE_LIMITED: { status: 429, message: "模型服务请求过于频繁，请稍后重试。" },
+  CLOUD_QUOTA_EXCEEDED: { status: 429, message: "今日云端 AI 使用次数已达到上限，请于下一个 UTC 日期重置后再试。" },
+  QUOTA_UNAVAILABLE: { status: 503, message: "云端 AI 使用额度暂时无法核验，请稍后重试。" },
   TIMEOUT: { status: 504, message: "模型服务响应超时，请稍后重试。" },
 };
 

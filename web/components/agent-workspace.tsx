@@ -20,6 +20,8 @@ type GatewayErrorCode =
   | "INVALID_REQUEST"
   | "PROVIDER_ERROR"
   | "RATE_LIMITED"
+  | "CLOUD_QUOTA_EXCEEDED"
+  | "QUOTA_UNAVAILABLE"
   | "TIMEOUT";
 
 type RetryRequest = { provider: ProviderSelection; routingPreference: RoutingPreference; messages: ChatMessage[] };
@@ -42,6 +44,8 @@ const errorMessages: Record<GatewayErrorCode, string> = {
   INVALID_REQUEST: "消息超出当前对话限制，请缩短内容或清空会话后重试。",
   PROVIDER_ERROR: "模型服务暂时不可用。请检查 Provider 服务状态后重试。",
   RATE_LIMITED: "请求过于频繁，请稍后重试。",
+  CLOUD_QUOTA_EXCEEDED: "今日云端 AI 使用次数已达到上限，请于下一个 UTC 日期重置后再试。",
+  QUOTA_UNAVAILABLE: "云端 AI 使用额度暂时无法核验，请稍后重试。",
   TIMEOUT: "模型响应超时，请稍后重试。",
 };
 
@@ -52,6 +56,8 @@ const gatewayErrorCodes = new Set<GatewayErrorCode>([
   "INVALID_REQUEST",
   "PROVIDER_ERROR",
   "RATE_LIMITED",
+  "CLOUD_QUOTA_EXCEEDED",
+  "QUOTA_UNAVAILABLE",
   "TIMEOUT",
 ]);
 

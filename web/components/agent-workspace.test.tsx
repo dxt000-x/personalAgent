@@ -115,4 +115,16 @@ describe("Agent chat composer", () => {
     expect(JSON.parse(String(chatCalls()[0][1]?.body)).messages[0].content).toBe("按钮消息");
     expect(screen.getByText(/Enter 发送 · Shift\+Enter 换行/)).toBeTruthy();
   });
+
+  it("shows a clear UTC reset message when cloud quota is exhausted", async () => {
+    chatResponse = Promise.resolve({
+      ok: false,
+      json: async () => ({ error: { code: "CLOUD_QUOTA_EXCEEDED" } }),
+    } as Response);
+    const input = await setup();
+    fireEvent.change(input, { target: { value: "测试云额度提示" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(await screen.findByText("今日云端 AI 使用次数已达到上限，请于下一个 UTC 日期重置后再试。")).toBeTruthy();
+    expect(chatCalls()).toHaveLength(1);
+  });
 });
