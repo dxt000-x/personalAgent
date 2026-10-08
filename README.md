@@ -24,7 +24,7 @@ https://personal-agent-seven-mu.vercel.app
 - ✅ 服务端身份认证与受保护路由
 - ✅ Vercel 公网部署
 
-> OpenRouter 在本地及 Vercel 的真实调用已有阶段性人工验收记录；线上部署内容仍应按实际发布版本核对。AI 自动记忆、知识库、Agent Planning 与工具能力仍在开发中。
+> OpenRouter 在本地及 Vercel 的真实调用已有阶段性人工验收记录；线上部署内容仍应按实际发布版本核对。智能记忆候选提取已在本分支实现，仍待人工联调；知识库、Agent Planning 与工具能力仍在开发中。
 
 ## 比赛项目目标
 
@@ -32,7 +32,7 @@ https://personal-agent-seven-mu.vercel.app
 
 ## 当前开发阶段
 
-**Memory-aware Agent。** `/memory` 使用 Supabase Postgres 与 authenticated Session 实现手动 CRUD；`/agent` 在服务端按当前登录用户检索有限的 Personal Memory，并作为不可信背景数据注入模型上下文。数据库 RLS 仍是最终行级边界。AI 自动记忆、Embedding、Semantic Search、Vector RAG 与 Knowledge Base 检索仍未实现。
+**Memory-aware Agent。** `/memory` 使用 Supabase Postgres 与 authenticated Session 实现手动 CRUD；`/agent` 在服务端按当前登录用户检索有限的 Personal Memory，并作为不可信背景数据注入模型上下文。数据库 RLS 仍是最终行级边界。Agent 的智能记忆建议默认关闭，启用后仅生成候选，用户确认后才保存。Embedding、Semantic Search、Vector RAG 与 Knowledge Base 检索仍未实现。
 
 ## 技术架构概览
 
@@ -79,7 +79,7 @@ npm run start
 
 ## Automated Regression Tests
 
-在 `web/` 运行 `npm test`。该命令使用 Vitest 单次执行并退出，覆盖 AI Router、Privacy、显式 Provider、Auto fallback、输入边界、公开错误响应、Memory Context 与少量 Chat Route Handler 行为。测试采用确定性的 fake Provider、fake 配置和受控认证/Memory 替身；不会调用真实 OpenRouter、OpenAI、DeepSeek、Gemini 或 Ollama，也不需要云 API Key、Supabase Secret 或本地 Ollama 服务。`npm run test:watch` 仅供开发时使用。
+在 `web/` 运行 `npm test`。该命令使用 Vitest 单次执行并退出，覆盖 AI Router、Privacy、显式 Provider、Auto fallback、输入边界、公开错误响应、Memory Context、候选提取与确认交互。测试采用确定性的 fake Provider、fake 配置和受控认证/Memory 替身；不会调用真实 OpenRouter、OpenAI、DeepSeek、Gemini 或 Ollama，也不需要云 API Key、Supabase Secret 或本地 Ollama 服务。`npm run test:watch` 仅供开发时使用。
 
 自动回归测试补充独立的真实 Provider 人工集成验收，不替代上游联调。Ollama、OpenRouter、Privacy、Auto 云切换与双用户 Memory 隔离已有阶段性人工验收；OpenAI、DeepSeek 和 Gemini 不因此视为已通过真实调用。
 
@@ -99,6 +99,7 @@ npm run start
 - 统一侧边导航与 Dashboard：今日重点、项目、最近任务、演示记忆与继续任务入口。
 - `/agent`：真实 AI Chat Workspace，可查看 Provider 配置状态、选择模型、发送多轮对话、查看请求状态、重试和清空会话。
 - Agent 对话通过 `POST /api/ai/chat` 使用认证后的 Next.js AI Gateway；Ollama `qwen3:8b` 已完成真实本地推理验收。
+- Agent 可选择开启智能记忆建议：聊天成功后单独分析本轮用户消息，展示最多 3 条候选；点击确认后复用 `POST /api/memories` 保存，忽略则不写入。
 - Agent Timeline 显示 Received、Validating、Retrieving Memory、Routing、Generating、Completed；Memory 仅作为当前用户的安全上下文，不模拟 Planning、RAG 或工具调用。
 - `/memory`：通过 `GET/POST /api/memories` 与 `GET/PATCH/DELETE /api/memories/[id]` 访问当前用户的 Personal Memory，支持新增、编辑、删除、加载/空/错误状态；服务端从已验证 Session 获取 `user_id`，不接受客户端指定所有权字段。
 - `/knowledge`：演示文件列表；上传与检索暂不可用。
@@ -112,12 +113,12 @@ npm run start
 - 后端与本地连接器占位目录。
 - 环境变量示例、敏感文件忽略规则与架构/开发文档。
 
-Agent 对话只保存在前端内存，刷新后清空；发送时只传递最近且符合 Gateway 限制的消息。Gateway 在服务端使用当前登录 Session 和 RLS 查询最多 8 条记忆，并在 4000 字符及剩余输入预算内注入；客户端不能提交 Memory Context。Dashboard 与 Knowledge Base 仍使用标明的演示内容。当前没有 AI 自动记忆、Embedding、Semantic Search、Vector RAG、文件读取或命令执行。
+Agent 对话只保存在前端内存，刷新后清空；发送时只传递最近且符合 Gateway 限制的消息。Gateway 在服务端使用当前登录 Session 和 RLS 查询最多 8 条记忆，并在 4000 字符及剩余输入预算内注入；客户端不能提交 Memory Context。Dashboard 与 Knowledge Base 仍使用标明的演示内容。当前没有自动写入记忆、Embedding、Semantic Search、Vector RAG、文件读取或命令执行。
 
 ## Planned Features
 
 - FastAPI 后端与 Personal Agent。
-- AI 自动提取 Memory、Embedding、Semantic Search 与个人知识 Vector RAG。
+- 更丰富的 Memory 语义去重、Embedding、Semantic Search 与个人知识 Vector RAG。
 - Agent Planning、Tools 与 Windows Local Connector。
 - Streaming 与更细的 token/费用预算。
 - Windows Local Connector、本地文件与受控命令执行。当前 Next.js 服务端只能访问自身网络可达的 Ollama；部署在 Vercel 时，`127.0.0.1` 指 Vercel 运行环境，不能访问用户电脑上的 Ollama。
@@ -156,6 +157,12 @@ OLLAMA_MODEL=qwen3:8b
 每个用户每个 **UTC 日期最多预占 30 次云端 AI Gateway 请求**，在下一个 UTC 日期 00:00 重置。首次尝试云 Provider 前预占一次；上游成功或失败均计一次，同一请求在云 Provider 间 fallback 不重复计数。未配置 Provider 在尝试前被拒绝时不计数。此计数是云端请求次数，**不代表 token 用量或真实费用**。额度用尽时返回 HTTP 429 `CLOUD_QUOTA_EXCEEDED`；数据库无法核验时返回 HTTP 503 `QUOTA_UNAVAILABLE`，均不调用云模型。匿名、无效输入、Ollama 和 Privacy 不消耗云额度。
 
 配额由 Supabase PostgreSQL 的原子 UPSERT 维护，可跨 Vercel 实例共享。自动测试使用 fake RPC；真实 PostgreSQL 并发与权限验收仍待在隔离测试项目完成，步骤见 [开发文档](docs/development.md)。
+
+### 智能记忆建议（本分支，待人工联调）
+
+在 Agent 页面主动勾选“智能记忆建议”；默认关闭。聊天回复显示后，页面只把本轮用户消息送往独立的 `POST /api/ai/memory-candidates`，由真实模型判断长期偏好、持续目标、项目或工作学习背景。普通问候、临时问题和不确定事实可返回零候选；最多展示 3 条。只有点击“确认保存”才调用现有 `POST /api/memories`；“忽略”、关闭开关、清空对话或切换账号都不会保存未确认候选。保存后下一轮聊天可按现有 Memory Context 规则检索。
+
+提取复用 AI Gateway 的 Router 与 Provider，不会读取其他个人记忆给提取模型。Privacy 只调用本地 Ollama；Auto 和显式 Provider 沿用现有规则。**独立的云端提取请求会额外预占一次每日云额度，即使模型调用失败也计数**；本地 Ollama 不计。候选内容按当前用户已有 Memory 做完全一致及 Unicode/空格/标点规范化去重，确认时再检查一次。首版只覆盖简单文本重复，不做语义去重或跨会话并发唯一约束；模型建议仍需用户判断。模型输出异常、去重查询失败或配额不足不会撤回正常聊天回复。本功能不是 RAG，也不会更新模型权重。
 
 在 Supabase Auth 开启 Email provider。设置 Site URL 为本地开发地址，并在 Redirect URLs 中允许 `http://localhost:3000/auth/callback`（部署时使用实际站点地址）。开启邮箱确认时，注册后按提示在同一浏览器打开邮件链接，回调交换 PKCE code 后进入 Dashboard；若没有即时 session，页面不会假装已经登录。关闭邮箱确认时，注册得到 session 后直接进入 Dashboard。此应用不自动更改 Supabase 的认证策略。
 

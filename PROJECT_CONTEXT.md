@@ -1,10 +1,10 @@
 # Personal AI Assistant — 开发交接
 
-更新日期：2026-10-08（Asia/Shanghai）。本文件用于新 Codex 对话接续开发；先核对实际仓库、Git 状态和用户指定任务，再开始修改。
+更新日期：2026-10-09（Asia/Shanghai）。本文件用于新 Codex 对话接续开发；先核对实际仓库、Git 状态和用户指定任务，再开始修改。
 
 ## 项目目标与技术栈
 
-面向大学生和年轻职场人的 Personal AI Workspace。目标是逐步结合个人记忆、知识与受控工具完成任务。当前实现认证、多模型文本对话、确定性路由及手动 Personal Memory；尚未实现自主 Agent。
+面向大学生和年轻职场人的 Personal AI Workspace。目标是逐步结合个人记忆、知识与受控工具完成任务。当前实现认证、多模型文本对话、确定性路由、手动 Personal Memory 与需用户确认的智能记忆候选；尚未实现自主 Agent。
 
 - Web：Next.js 16.3.8 / App Router、React、TypeScript、Tailwind CSS。
 - Auth / Memory：Supabase Auth、`@supabase/ssr`、Supabase Postgres 与 RLS。
@@ -16,13 +16,13 @@
 ## 仓库与交接状态
 
 - 当前仓库由用户确认沿用原位置；不要自动迁移或复制项目。原请求中的新路径不存在，启动新对话时应绑定当前实际仓库。
-- 当前云端配额任务 branch：`feat/ai-usage-quota`；任务开始时 HEAD 为 `5b029a0`（合并 Agent Enter 发送的 PR #24），工作区 clean。
+- 当前智能记忆候选任务 branch：`feat/ai-memory-extraction`；任务开始时 HEAD 为 `a1a13ee`（合并云配额 PR #26），工作区 clean，并与本地 `main`、`origin/main` 一致。未联网核对远端最新 main。
 - 先前 Agent 输入交互任务 branch：`feat/agent-enter-to-send`；该任务已合并到当前基线。
 - 先前稳定性任务 branch 为 `test/ai-gateway-regression`；当时 HEAD 与本地 `main`、`origin/main` 均为 `ac1e55a`。
 - OpenRouter 合并基线：`2874015`，`Merge pull request #21 from dxt000-x/feat/openrouter-provider`。
 - origin：`https://github.com/dxt000-x/personalAgent.git`。
 - OpenRouter 功能提交：`7fdf648`（Provider）、`91e176c`（Auto 云候选）、`befa6c5`（文档）。已合并至本地 main。
-- 本轮稳定性任务只新增自动测试、测试依赖与文档，不修改正式 AI Gateway 路由或 Provider 实现。
+- 历史稳定性任务只新增自动测试、测试依赖与文档；本分支为智能记忆候选提取，复用现有 Gateway 规则。
 - 任务开始时尝试 `git ls-remote` 核对远端 main，但本机 Git 返回 `SEC_E_NO_CREDENTIALS`；因此只确认与本地 main 和本地 origin/main 一致，不声称已核对 GitHub 最新状态。
 
 ## 当前架构
@@ -133,7 +133,17 @@ Agent 输入交互任务：只修改 `web/components/agent-workspace.tsx` 的输
 4. Memory 联调曾出现间歇 503；后续真实验收已继续通过，但没有持久性根因结论，出现时保留安全错误类别与阶段。
 5. README、architecture、development 的旧 OpenRouter 与双账号状态已按现有验收记录校准；在线 Vercel 当前部署是否包含本地 main 未在本次核对。
 6. development 中旧 npm audit / ESLint 风险说明未在本次重新联网验证；后续单独检查依赖，不执行未经评估的 force upgrade。
-7. Streaming、会话持久化、AI Memory Extraction、Embedding、Semantic Search/RAG、Agent Planning、Tools、FastAPI 与 Local Connector 均尚未实现。
+7. Streaming、会话持久化、Embedding、Semantic Search/RAG、Agent Planning、Tools、FastAPI 与 Local Connector 均尚未实现。
+
+## 本分支：AI 智能记忆候选提取
+
+- `web/app/api/ai/memory-candidates/route.ts` 通过当前 Supabase claims 认证与同源/输入校验，只接收本轮用户消息。模型通过现有 Registry/Router 和共用 `web/lib/ai/gateway.ts` 执行真实语义提取；不是关键词规则。候选模型不接收已有 Memory Context 或 AI 回复。
+- `web/lib/ai/memory-candidates.ts` 固定服务端指令与严格 JSON schema 边界，限定现有 7 类、每轮 0～3 条、内容与原因长度，并过滤明显敏感内容。模型输出无效时安全失败。当前用户既有 Memory 只在模型调用后通过 authenticated client + RLS 查询，用 NFKC、小写、空白/标点规范化与候选去重。
+- Agent UI 默认关闭，开启后在成功聊天回复显示之后调用一次提取接口。只有点击“确认保存”才复用现有 `POST /api/memories`，服务端仍从 Session 得到 user_id，RLS 不变；忽略或清空不会写。确认前再经现有 GET 复查重复，保存失败可重试，重复点击由 ref 防护。保存记录沿用 `source=manual`，无新 migration。
+- 提取本身是独立 Gateway 请求：一旦尝试云 Provider，就独立预占一次每日云额度；成功或失败均计，云 fallback 不重复扣。Privacy 只在本地 Ollama 运行，配额不可用时云端 fail-closed。提取失败不影响已经展示的聊天回复。
+- 自动测试覆盖候选结构/去重、认证、Privacy、配额、UI 确认/忽略/重试、防重复及既有 Enter/Shift+Enter/IME。真实模型候选质量、实际账号隔离、配额 SQL 部署与 PostgreSQL 并发验收仍待人工验证；不可把 fake 测试说成真实联调。
+- 本分支验证：`npm test` 为 9 个测试文件、103/103 通过（原基线 75 项，新增 28 项）；`npm run lint`、`npx tsc --noEmit` 与 `npm run build` 均通过。测试替身未调用任何真实 Provider 或 Supabase。Git 提交与人工联调状态应以实际仓库为准。
+- 限制：去重查询上限 1000 条当前用户 Memory；跨标签页并发与语义相似项可能重复。疑似敏感信息过滤是有限规则，不能保证识别全部敏感个人数据；用户必须审核候选。真实模型可能不遵循 JSON 格式，异常时不显示候选。
 
 ## 本地运行和复测
 

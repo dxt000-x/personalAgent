@@ -17,7 +17,7 @@ Task 1、Task 2 与 Task 3 已完成项目基础架构、Workspace UI 和 Supaba
 ## 开发原则
 
 - 先检查现有文件与 Git 状态，保留有效代码，不覆盖无关修改。
-- 每次只完成约定的任务范围；Personal Memory 手动 CRUD、RLS 与受限的服务端 Memory Context 注入已建立。未纳入任务的 AI Memory Extraction、Embedding、Semantic Search、Vector RAG、智能质量路由、Agent Planning、Tools 与 Agent Backend 不提前实现。
+- 每次只完成约定的任务范围；Personal Memory 手动 CRUD、RLS、受限服务端 Memory Context 与需用户确认的 AI 候选建议已建立。Embedding、Semantic Search、Vector RAG、智能质量路由、Agent Planning、Tools 与 Agent Backend 不提前实现。
 - 文档明确区分 Implemented 与 Planned。
 - 使用环境变量管理凭据；不提交真实密钥、数据库密码、Supabase Secret、个人机器路径或环境文件。
 - 避免过早引入复杂 UI 框架与基础设施。
@@ -52,7 +52,7 @@ npm run typecheck
 
 ## Automated Regression Tests
 
-`npm test` 使用 Vitest 单次运行并退出；`npm run test:watch` 是可选的开发模式。测试位于 `web/lib/ai/__tests__/` 与 `web/app/api/ai/chat/route.test.ts`，使用 deterministic fake Provider、fake 配置与受控认证/Memory 替身。它们不访问真实云 Provider、Ollama 或 Supabase，不消耗 API 额度，也不依赖 `web/.env.local`。覆盖 Router 顺序与候选上限、Privacy 只在本地执行、显式 Provider 无 fallback、Auto 错误分类、输入边界、公开错误脱敏及 Gateway Memory Context 行为。
+`npm test` 使用 Vitest 单次运行并退出；`npm run test:watch` 是可选的开发模式。测试位于 `web/lib/ai/`、`web/app/api/ai/` 与 `web/components/`，使用 deterministic fake Provider、fake 配置与受控认证/Memory 替身。它们不访问真实云 Provider、Ollama 或 Supabase，不消耗 API 额度，也不依赖 `web/.env.local`。覆盖 Router 顺序与候选上限、Privacy 只在本地执行、显式 Provider 无 fallback、Auto 错误分类、输入边界、公开错误脱敏、Gateway Memory Context 与智能记忆候选/确认交互。
 
 真实 Provider 与双用户 Memory 隔离仍保留独立人工集成验收记录。自动测试不会将 OpenAI、DeepSeek 或 Gemini 记作真实调用成功。
 
@@ -93,7 +93,7 @@ ESLint 9 的安装还提示该版本已停止支持；当前保留与 Next.js �
 
 ## Task 2 演示边界
 
-Dashboard 与 Knowledge Base 中的用户、任务、项目进度和文件列表仍为演示示例。Personal Memory 已改为 Supabase 手动 CRUD；Agent 在服务端读取当前用户的有限记忆并作为不可信背景上下文交给所选 Provider。Agent 不会自动创建或提取记忆。Agent Workspace 已连接 AI Gateway，Timeline 显示真实请求阶段。当前对话保存在前端内存，刷新后清空；不实现 RAG、Agent Planning、Tool Calling 或 Local Connector。
+Dashboard 与 Knowledge Base 中的用户、任务、项目进度和文件列表仍为演示示例。Personal Memory 已改为 Supabase 手动 CRUD；Agent 在服务端读取当前用户的有限记忆并作为不可信背景上下文交给所选 Provider。智能记忆建议需主动开启，AI 只生成候选，不自动创建记忆。Agent Workspace 已连接 AI Gateway，Timeline 显示真实请求阶段。当前对话保存在前端内存，刷新后清空；不实现 RAG、Agent Planning、Tool Calling 或 Local Connector。
 
 ## Personal Memory 数据安全
 
@@ -110,6 +110,14 @@ Dashboard 与 Knowledge Base 中的用户、任务、项目进度和文件列表
 - 格式化后的完整 system instruction 最多 4000 字符，且不会让消息数量超过 20 条或会话与 Memory 合计超过 Gateway 的 16000 字符输入上限。内容用 JSON string quoting 表示为不可信背景数据，不包含数据库 ID、用户 ID 或时间戳。
 - Memory 查询无记录时正常对话并返回 `memory.status = none`；检索临时失败时不输出原始错误、不注入 Memory，并以 `unavailable` metadata 继续安全调用。认证失败仍拒绝请求。服务端不记录 Memory 内容、完整 Prompt 或私人资料。
 - Auto 路由在 Memory 检索后运行。Privacy 偏好仍只调用本地 Ollama；Memory Context 只传给该本地 Provider，不会因为上下文存在而切换到云端。Auto 仍可按既有策略选择云 Provider。
+
+## AI 智能记忆建议开发与验收
+
+- Agent 页面“智能记忆建议”默认关闭。开启后每次成功聊天回复只针对本轮用户消息发起一次独立提取，回复先显示；关闭、清空任务与组件会话切换会清除未保存候选。额外调用云 Provider 时独立预占一次每日 30 次云额度；上游失败也计，云 fallback 不重复计。Privacy 与 Ollama 不计云额度。
+- `POST /api/ai/memory-candidates` 先验证 Supabase claims、同源请求与严格输入边界，再通过共用 `runAiGateway` 走 Router、Provider Registry 和配额。模型只接收单条用户消息及服务端固定提取指令，不接收当前用户其他 Memory 或 AI 回复。输出必须是规定 JSON 结构，最多 3 条，分类限现有枚举；异常返回安全错误，不影响先前聊天。
+- 候选只在页面内存，确认前不写数据库。确认按钮调用现有 Memory GET 复查重复，再调用现有 POST；`user_id` 从服务端 Session 取得，仍由 RLS 限制。模型无法指定所有权或 `source`；保存记录沿用现有 `manual` 默认值。本功能无新增 migration，部署前仍须按配额文档审核并部署已有云配额 migration。
+- 去重按 NFKC、小写、移除空格与标点比较现有当前用户 Memory 和本轮候选。当前提取查询最多读取 1000 条当前用户记录；超过这个规模、跨标签页并发确认或语义近似表达不能保证去重。疑似 Secret 有额外规则过滤，但模型建议仍必须由用户审核，不应把筛选当作敏感数据识别保证。
+- `npm test` 的提取测试全部使用 fake Provider、fake Session 与 fake Memory；不调用真实模型、Supabase 或付费服务。人工验收应先在隔离环境确认配额 SQL 已部署，再分别测试 Ollama/Privacy、OpenRouter/Auto、A/B 账号隔离、候选质量、确认/忽略与配额扣减；本分支自动测试不代表这些真实场景已通过。
 - 当前检索为 importance/时间排序，不是 Semantic Search 或 RAG；不自动创建、总结、衰减或提取 Memory。
 
 Ollama `qwen3:8b` 已通过本机 Gateway 真实推理验收。对话文本发送给配置的 Ollama 服务处理，不产生云 API Token 费用。若 Next.js 部署在 Vercel，`127.0.0.1` 指向 Vercel 运行环境，无法访问用户电脑上的 Ollama；需等待后续 Local Connector 方案。
