@@ -12,7 +12,7 @@ Issue → Feature Branch → Commit → Pull Request → Merge
 4. Pull Request：说明问题、修改结果、验证方式及未完成事项。
 5. Merge：完成审核及必要检查后合并。
 
-Task 1、Task 2 与 Task 3 已完成项目基础架构、Workspace UI 和 Supabase 认证。Day 2 / Task 1 建立 Next.js AI Gateway 与 OpenAI、DeepSeek、Gemini、Ollama Provider；Day 2 / Task 2 接入 Agent Chat；Day 2 / Task 3 添加确定性 Auto Router、Privacy 本地模式和受限 fallback。当前 Ollama Provider 仅由能访问该 Ollama 服务的 Next.js 服务端调用。
+Task 1、Task 2 与 Task 3 已完成项目基础架构、Workspace UI 和 Supabase 认证。Day 2 / Task 1 建立 Next.js AI Gateway 与 OpenAI、DeepSeek、Gemini、Ollama Provider；Day 2 / Task 2 接入 Agent Chat；Day 2 / Task 3 添加确定性 Auto Router、Privacy 本地模式和受限 fallback。OpenRouter 云 Provider 现已接入统一接口，待 API Key 配置后完成真实上游验收。当前 Ollama Provider 仅由能访问该 Ollama 服务的 Next.js 服务端调用。
 
 ## 开发原则
 
@@ -24,8 +24,9 @@ Task 1、Task 2 与 Task 3 已完成项目基础架构、Workspace UI 和 Supaba
 - 提交前检查差异，执行与修改相关的验证。
 - Ollama 本地 Provider 通过 `OLLAMA_BASE_URL` 与 `OLLAMA_MODEL` 配置，默认连接 `http://127.0.0.1:11434` 的 `qwen3:8b`。本地推理不产生云 API Token 费用，输入交由本机 Ollama 处理。
 - 如果 Next.js 运行在云端，`127.0.0.1` 指云服务器自身，不能直连开发者电脑的 Ollama；需要服务器可达的 Ollama 服务，或后续实现受控 Local Connector。
-- AI Auto Router 采用固定规则，不执行模型评估：本地 Ollama 可用时优先；否则尝试最多两个已配置候选。只有 Provider 错误或超时可 fallback；认证、输入校验和限流错误不得 fallback。显式选择 Provider 不切换。
+- AI Auto Router 采用固定规则，不执行模型评估：本地 Ollama 可用时优先；否则按 OpenRouter、OpenAI、DeepSeek、Gemini 考虑最多两个已配置候选。只有 Provider 错误或超时可 fallback；认证、输入校验和限流错误不得 fallback。显式选择 Provider 不切换。
 - Privacy 模式只允许本地 Ollama；不可用时要清楚失败，不得尝试云 Provider。Provider 配置与可用性是独立字段；云 Provider 未执行真实调用前健康状态保持 unknown。
+- OpenRouter 使用服务端 `OPENROUTER_API_KEY`，默认 `OPENROUTER_MODEL=openrouter/free`。显式选择或 Auto 路由到 OpenRouter 时，当前用户的受限 Memory Context 会发送到该云服务；Privacy 下不得发送。不要将 API Key、完整 Memory、Token 或 Cookie 写入日志。
 - 不用易失内存计数器模拟 per-user daily quota。面向公网开放付费云 Provider 前，先实现跨实例持久化的用户配额和拒绝策略。
 - Vercel 端无法访问用户电脑的 localhost。当前没有 Local Connector，不能把本地模型健康状态解读为用户个人电脑可连接。
 
