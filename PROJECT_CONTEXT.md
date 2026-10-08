@@ -16,7 +16,8 @@
 ## 仓库与交接状态
 
 - 当前仓库由用户确认沿用原位置；不要自动迁移或复制项目。原请求中的新路径不存在，启动新对话时应绑定当前实际仓库。
-- 当前稳定性任务 branch：`test/ai-gateway-regression`；任务开始时 HEAD 与本地 `main`、`origin/main` 均为 `ac1e55a`（`docs: add project development context`），工作区 clean。
+- 当前 Agent 输入交互任务 branch：`feat/agent-enter-to-send`；任务开始时 HEAD 为 `76df9c1`（合并 AI Gateway 回归测试的 PR #23），工作区 clean。
+- 先前稳定性任务 branch 为 `test/ai-gateway-regression`；当时 HEAD 与本地 `main`、`origin/main` 均为 `ac1e55a`。
 - OpenRouter 合并基线：`2874015`，`Merge pull request #21 from dxt000-x/feat/openrouter-provider`。
 - origin：`https://github.com/dxt000-x/personalAgent.git`。
 - OpenRouter 功能提交：`7fdf648`（Provider）、`91e176c`（Auto 云候选）、`befa6c5`（文档）。已合并至本地 main。
@@ -40,6 +41,7 @@ Browser / Agent Workspace
 - `web/app/api/ai/chat/route.ts`：认证、请求校验、Memory、路由、模型调用与安全错误响应。
 - `web/app/api/ai/providers/route.ts`：认证后的配置与可用性查询。
 - `web/lib/ai/`：统一类型、Provider、Registry、Router、输入限制和错误类型。
+- `web/components/agent-workspace.tsx`：Agent 聊天输入与发送；Enter 发送、Shift+Enter 换行，IME 组合输入和 keyCode 229 不触发发送。键盘与按钮共用提交逻辑，发送中的同步 ref 防止重复请求。
 - `web/lib/supabase/`、`web/proxy.ts`、workspace layout：官方 SSR Cookie 会话与路由保护。
 - `web/app/api/memories/`、`web/lib/memories/`：当前用户 Memory CRUD 与受限 Context。
 - `supabase/migrations/20261007160000_create_memories.sql`：表、最小列权限、RLS、索引和更新时间 trigger。
@@ -105,10 +107,13 @@ Memory 最多 8 条，按 importance 与创建时间排序；上下文最多 400
 | `npm run typecheck` | 通过，exit 0 |
 | `npm run build` | 通过，exit 0；首次沙箱运行因 spawn EPERM 失败，授权环境重跑成功 |
 | 自动化回归 | 新增 Vitest；5 个测试文件、47 个测试用例全部通过；只使用 fake Provider、配置、认证与 Memory 替身，不访问真实模型或 Supabase |
+| Agent 输入交互 | 新增 jsdom + React Testing Library 组件测试；合计 6 个测试文件、53 个测试用例通过，覆盖 Enter、Shift+Enter、IME、空白输入、请求中重复发送与原按钮 |
 | Git 稳定性任务起始状态 | test/ai-gateway-regression，clean；HEAD 与本地 main、origin/main 均为 ac1e55a |
 | 稳定性任务范围 | 测试与文档；正式业务代码未修改 |
 
-自动化基线：在 `web/` 使用 `npm test` 单次运行退出，`npm run test:watch` 用于本地开发。测试文件覆盖 Router 顺序/上限及 Provider 分类、Privacy 云调用为零、全部显式 Provider 不 fallback、Auto 可切换与禁止切换的错误类别、请求输入边界、公开错误脱敏、Memory used/none/unavailable，以及少量 Route Handler 认证与成功响应。`server-only` 仅在 Vitest 中映射为空标记；正式 Next.js 代码未变。安装的直接 devDependency 仅 `vitest`。本轮 `npm test`、`npm run lint`、`npm run typecheck`、`npm run build` 均通过；构建显示正常读取本地 `.env.local`，自动测试本身不需要该文件。
+自动化基线：在 `web/` 使用 `npm test` 单次运行退出，`npm run test:watch` 用于本地开发。测试文件覆盖 Router 顺序/上限及 Provider 分类、Privacy 云调用为零、全部显式 Provider 不 fallback、Auto 可切换与禁止切换的错误类别、请求输入边界、公开错误脱敏、Memory used/none/unavailable，以及少量 Route Handler 认证与成功响应。`server-only` 仅在 Vitest 中映射为空标记；正式 Next.js 代码未变。稳定性任务新增的直接 devDependency 仅 `vitest`。该任务的 `npm test`、`npm run lint`、`npm run typecheck`、`npm run build` 均通过；构建显示正常读取本地 `.env.local`，自动测试本身不需要该文件。
+
+Agent 输入交互任务：只修改 `web/components/agent-workspace.tsx` 的输入与发送交互，增加 `web/components/agent-workspace.test.tsx`；测试直接 devDependencies 增加 `@testing-library/react` 与 `jsdom`。Enter 阻止默认换行后调用现有发送流程；Shift+Enter 保留浏览器换行；IME composing 或 keyCode 229 不发送；空白输入及请求进行中不重复发送。发送按钮保留。AI API、Provider、Router、Memory、数据库与认证逻辑未修改。`npm test` 为 53/53，通过 lint、`npx tsc --noEmit` 和生产构建。
 
 ## 遗留问题与下一阶段候选任务
 
