@@ -12,6 +12,9 @@ import {
   MAX_MESSAGE_CHARACTERS,
   MAX_MESSAGES,
 } from "@/lib/ai/limits";
+import type { MemoryCandidate } from "@/lib/ai/memory-candidates";
+
+type CandidateEntry = MemoryCandidate & { id: string; status: "pending" | "saving" | "saved" | "error" };
 
 type GatewayErrorCode =
   | "AUTH_REQUIRED"
@@ -124,6 +127,10 @@ function readMemoryUsage(value: unknown): MemoryUsage {
 }
 
 export function AgentWorkspace({ sessionKey = "default" }: { sessionKey?: string }) {
+  return <AgentWorkspaceSession key={sessionKey} sessionKey={sessionKey} />;
+}
+
+function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
   const [messages, setMessages] = useState<AgentChatMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
@@ -136,6 +143,13 @@ export function AgentWorkspace({ sessionKey = "default" }: { sessionKey?: string
   const [retryRequest, setRetryRequest] = useState<RetryRequest | null>(null);
   const [timeline, setTimeline] = useState<TimelineState>({ state: "idle" });
   const sendingRef = useRef(false);
+  const [memorySuggestionsEnabled, setMemorySuggestionsEnabled] = useState(false);
+  const suggestionsEnabledRef = useRef(false);
+  const [candidates, setCandidates] = useState<CandidateEntry[]>([]);
+  const [extractingCandidates, setExtractingCandidates] = useState(false);
+  const [candidateError, setCandidateError] = useState(false);
+  const candidateGeneration = useRef(0);
+  const candidateSaving = useRef(new Set<string>());
 
   const selectedStatus = useMemo(
     () => selectedProvider === "auto" ? undefined : providers.find(({ id }) => id === selectedProvider),
@@ -164,6 +178,87 @@ export function AgentWorkspace({ sessionKey = "default" }: { sessionKey?: string
     void loadProviders();
     return () => { active = false; };
   }, [sessionKey]);
+
+  useEffect(() => () => { candidateGeneration.current += 1; }, []);
+
+  async function requestCandidates(request: RetryRequest) {
+    const message = request.messages.at(-1);
+    if (!message || message.role !== "user") return;
+    const generation = ++candidateGeneration.current;
+    setCandidates([]);
+    setCandidateError(false);
+    setExtractingCandidates(true);
+    try {
+      const response = await fetch("/api/ai/memory-candidates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: request.provider, routingPreference: request.routingPreference, message: message.content }),
+      });
+      const body: unknown = await response.json();
+      if (!response.ok || typeof body !== "object" || body === null || !Array.isArray((body as { candidates?: unknown }).candidates)) {
+        throw new Error("candidate extraction failed");
+      }
+      if (generation !== candidateGeneration.current) return;
+      const rows = (body as { candidates: unknown[] }).candidates;
+      const valid = rows.slice(0, 3).filter((row): row is MemoryCandidate => {
+        if (typeof row !== "object" || row === null) return false;
+        const candidate = row as Partial<MemoryCandidate>;
+        return typeof candidate.content === "string" && !!candidate.content.trim() && candidate.content.length <= 500
+          && typeof candidate.reason === "string" && typeof candidate.category === "string"
+          && ["preference", "profile", "goal", "work", "study", "habit", "other"].includes(candidate.category)
+          && Number.isInteger(candidate.importance) && Number(candidate.importance) >= 1 && Number(candidate.importance) <= 5;
+      });
+      setCandidates(valid.map((candidate) => ({ ...candidate, id: crypto.randomUUID(), status: "pending" })));
+    } catch {
+      if (generation === candidateGeneration.current) setCandidateError(true);
+    } finally {
+      if (generation === candidateGeneration.current) setExtractingCandidates(false);
+    }
+  }
+
+  async function saveCandidate(candidate: CandidateEntry) {
+    if (candidate.status === "saved" || candidateSaving.current.has(candidate.id)) return;
+    candidateSaving.current.add(candidate.id);
+    const generation = candidateGeneration.current;
+    setCandidates((current) => current.map((entry) => entry.id === candidate.id ? { ...entry, status: "saving" } : entry));
+    try {
+      // Recheck the current user's Memory immediately before saving to avoid common repeats.
+      const existingResponse = await fetch("/api/memories", { cache: "no-store" });
+      if (!existingResponse.ok) throw new Error("memory lookup failed");
+      const existingBody: unknown = await existingResponse.json();
+      const existing = typeof existingBody === "object" && existingBody !== null
+        ? (existingBody as { memories?: unknown }).memories : undefined;
+      if (!Array.isArray(existing)) throw new Error("memory lookup failed");
+      const normalize = (value: string) => value.normalize("NFKC").toLocaleLowerCase().replace(/[\s\p{P}\p{S}]+/gu, "");
+      const duplicate = existing.some((row) => typeof row === "object" && row !== null
+        && typeof (row as { content?: unknown }).content === "string"
+        && normalize((row as { content: string }).content) === normalize(candidate.content));
+      if (generation !== candidateGeneration.current) return;
+      if (!duplicate) {
+        const response = await fetch("/api/memories", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content: candidate.content, category: candidate.category, importance: candidate.importance }),
+        });
+        if (!response.ok) throw new Error("memory save failed");
+      }
+      if (generation !== candidateGeneration.current) return;
+      setCandidates((current) => current.map((entry) => entry.id === candidate.id ? { ...entry, status: "saved" } : entry));
+    } catch {
+      if (generation === candidateGeneration.current) {
+        setCandidates((current) => current.map((entry) => entry.id === candidate.id ? { ...entry, status: "error" } : entry));
+      }
+    } finally {
+      candidateSaving.current.delete(candidate.id);
+    }
+  }
+
+  function resetCandidates() {
+    candidateGeneration.current += 1;
+    setCandidates([]);
+    setExtractingCandidates(false);
+    setCandidateError(false);
+  }
 
   async function sendRequest(request: RetryRequest) {
     if (sendingRef.current) return;
@@ -226,6 +321,7 @@ export function AgentWorkspace({ sessionKey = "default" }: { sessionKey?: string
           "privacy_local_only", "fallback_after_provider_error",
         ].includes(reason) ? { reason: reason as RoutingReason } : {}),
       });
+      if (suggestionsEnabledRef.current) void requestCandidates(request);
     } catch (error) {
       const code = asGatewayErrorCode(error instanceof Error ? error.message : undefined);
       setErrorCode(code);
@@ -283,6 +379,7 @@ export function AgentWorkspace({ sessionKey = "default" }: { sessionKey?: string
     setErrorCode(null);
     setRetryRequest(null);
     setTimeline({ state: "idle" });
+    resetCandidates();
   }
 
   const canSend = (selectedProvider === "auto" || !!selectedStatus?.configured) && !providersLoading && !providersError
@@ -326,6 +423,18 @@ export function AgentWorkspace({ sessionKey = "default" }: { sessionKey?: string
               onChange={setSelectedProvider}
               onRoutingPreferenceChange={setRoutingPreference}
             />
+          </div>
+
+          <div className="border-b border-slate-100 px-5 py-4 sm:px-6">
+            <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
+              <input type="checkbox" checked={memorySuggestionsEnabled} onChange={(event) => {
+                suggestionsEnabledRef.current = event.target.checked;
+                setMemorySuggestionsEnabled(event.target.checked);
+                if (!event.target.checked) resetCandidates();
+              }} />
+              智能记忆建议
+            </label>
+            <p className="mt-1 text-xs leading-5 text-slate-500">默认关闭。开启后，每次成功回复会额外分析本轮消息；云端模型会多消耗一次云端使用额度。候选仅在你确认后保存。</p>
           </div>
 
           <div
@@ -375,6 +484,33 @@ export function AgentWorkspace({ sessionKey = "default" }: { sessionKey?: string
               </div>
             )}
           </div>
+
+          {(extractingCandidates || candidateError || candidates.length > 0) && (
+            <section className="border-t border-slate-100 p-5 sm:p-6" aria-label="智能记忆候选">
+              <h3 className="text-sm font-semibold">智能记忆建议</h3>
+              {extractingCandidates && <p className="mt-2 text-xs text-slate-500" role="status">正在分析本轮消息…</p>}
+              {candidateError && <p className="mt-2 text-xs text-amber-700">本次记忆建议未生成，聊天回复不受影响。</p>}
+              <div className="mt-3 space-y-3">
+                {candidates.map((candidate) => (
+                  <div key={candidate.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-sm text-slate-800">{candidate.content}</p>
+                    <p className="mt-1 text-xs text-slate-500">{candidate.reason}</p>
+                    <div className="mt-3 flex gap-2">
+                      {candidate.status === "saved" ? <span className="text-xs text-teal-700">已保存到 Personal Memory</span> : (
+                        <>
+                          <button type="button" className="button-primary" disabled={candidate.status === "saving"} onClick={() => void saveCandidate(candidate)}>
+                            {candidate.status === "saving" ? "保存中…" : candidate.status === "error" ? "重试保存" : "确认保存"}
+                          </button>
+                          <button type="button" className="button-secondary" disabled={candidate.status === "saving"} onClick={() => setCandidates((current) => current.filter((entry) => entry.id !== candidate.id))}>忽略</button>
+                          {candidate.status === "error" && <span className="self-center text-xs text-red-700">保存失败，可重试。</span>}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
 
           <form onSubmit={submit} className="border-t border-slate-100 p-5 sm:p-6">
             <label htmlFor="agent-message" className="mb-2 block text-xs font-medium text-slate-500">

@@ -1,11 +1,8 @@
-import { AIGatewayError, providerFailure } from "@/lib/ai/errors";
+import { AIGatewayError } from "@/lib/ai/errors";
+import { runAiGateway } from "@/lib/ai/gateway";
 import { aiErrorResponse, aiJson, requireAuthenticatedUser } from "@/lib/ai/http";
-import { AUTO_PROVIDER_TIMEOUT_MS, PROVIDER_TIMEOUT_MS } from "@/lib/ai/limits";
-import { getProvider } from "@/lib/ai/provider-registry";
-import { reserveCloudAiQuota } from "@/lib/ai/quota";
-import { getAutoRoute } from "@/lib/ai/router";
 import { readJsonBody, validateChatRequest } from "@/lib/ai/request";
-import type { AIChatResult, ProviderId, RoutingReason } from "@/lib/ai/types";
+import type { AIChatResult } from "@/lib/ai/types";
 import { retrievePersonalMemoryContext } from "@/lib/memories/context";
 
 export const runtime = "nodejs";
@@ -21,58 +18,11 @@ export async function POST(request: Request): Promise<Response> {
 
     const { provider: providerId, routingPreference, messages } = validateChatRequest(await readJsonBody(request));
     const memoryContext = await retrievePersonalMemoryContext(supabase, userId, messages);
-    let cloudQuotaReserved = false;
-    async function reserveCloudOnce() {
-      if (cloudQuotaReserved) return;
-      await reserveCloudAiQuota(supabase);
-      cloudQuotaReserved = true;
-    }
-
-    if (providerId !== "auto") {
-      const result = await generate(providerId, messages, PROVIDER_TIMEOUT_MS, reserveCloudOnce, memoryContext.systemInstruction);
-      return aiJson({ ...result, memory: memoryContext.metadata } satisfies AIChatResult);
-    }
-
-    const route = await getAutoRoute({ preference: routingPreference });
-    let lastError: AIGatewayError | undefined;
-    for (let index = 0; index < route.length; index += 1) {
-      const candidate = route[index];
-      try {
-        const result = await generate(candidate.provider, messages, AUTO_PROVIDER_TIMEOUT_MS, reserveCloudOnce, memoryContext.systemInstruction);
-        const reason: RoutingReason = index > 0 ? "fallback_after_provider_error" : candidate.reason;
-        return aiJson({
-          ...result,
-          routing: { mode: "auto", reason },
-          memory: memoryContext.metadata,
-        } satisfies AIChatResult);
-      } catch (error) {
-        const safeError = error instanceof AIGatewayError ? error : new AIGatewayError("PROVIDER_ERROR");
-        lastError = safeError;
-        if (index >= route.length - 1 || !["PROVIDER_ERROR", "TIMEOUT"].includes(safeError.code)) {
-          throw safeError;
-        }
-      }
-    }
-    throw lastError ?? new AIGatewayError("PROVIDER_ERROR");
+    const result = await runAiGateway(supabase, {
+      provider: providerId, routingPreference, messages, systemInstruction: memoryContext.systemInstruction,
+    });
+    return aiJson({ ...result, memory: memoryContext.metadata } satisfies AIChatResult);
   } catch (error) {
     return aiErrorResponse(error);
-  }
-}
-
-async function generate(
-  providerId: ProviderId,
-  messages: Parameters<ReturnType<typeof getProvider>["generate"]>[0],
-  timeoutMs: number,
-  reserveCloudOnce: () => Promise<void>,
-  systemInstruction?: string,
-) {
-  const provider = getProvider(providerId);
-  // Construct the provider first: an unconfigured cloud provider must not consume quota.
-  if (providerId !== "ollama") await reserveCloudOnce();
-  const signal = AbortSignal.timeout(timeoutMs);
-  try {
-    return await provider.generate(messages, signal, systemInstruction);
-  } catch (error) {
-    throw error instanceof AIGatewayError ? error : providerFailure(error, signal);
   }
 }
