@@ -15,7 +15,7 @@ export type RouterDecision = {
   reason: RoutingReason;
 };
 
-const cloudPriority: ProviderId[] = ["openai", "deepseek", "gemini"];
+const cloudPriority: ProviderId[] = ["openrouter", "openai", "deepseek", "gemini"];
 export const MAX_AUTO_PROVIDER_ATTEMPTS = 2;
 
 function getStatus(statuses: ProviderStatus[], id: ProviderId) {
