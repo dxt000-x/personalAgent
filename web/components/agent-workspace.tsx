@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import Link from "next/link";
 import { PageHeader } from "./page-header";
 import { AgentTimeline } from "./agent-timeline";
@@ -129,6 +129,7 @@ export function AgentWorkspace({ sessionKey = "default" }: { sessionKey?: string
   const [errorCode, setErrorCode] = useState<GatewayErrorCode | null>(null);
   const [retryRequest, setRetryRequest] = useState<RetryRequest | null>(null);
   const [timeline, setTimeline] = useState<TimelineState>({ state: "idle" });
+  const sendingRef = useRef(false);
 
   const selectedStatus = useMemo(
     () => selectedProvider === "auto" ? undefined : providers.find(({ id }) => id === selectedProvider),
@@ -159,7 +160,8 @@ export function AgentWorkspace({ sessionKey = "default" }: { sessionKey?: string
   }, [sessionKey]);
 
   async function sendRequest(request: RetryRequest) {
-    if (isSending) return;
+    if (sendingRef.current) return;
+    sendingRef.current = true;
     setIsSending(true);
     setErrorCode(null);
     setTimeline({ state: "running" });
@@ -224,16 +226,16 @@ export function AgentWorkspace({ sessionKey = "default" }: { sessionKey?: string
       setRetryRequest(request);
       setTimeline({ state: "error", code });
     } finally {
+      sendingRef.current = false;
       setIsSending(false);
     }
   }
 
-  function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  function sendDraft() {
     const content = draft.trim();
     if (!content || content.length > MAX_MESSAGE_CHARACTERS
       || (selectedProvider !== "auto" && !selectedStatus?.configured)
-      || isSending || retryRequest) return;
+      || providersLoading || providersError || isSending || sendingRef.current || retryRequest) return;
 
     const userMessage: AgentChatMessage = {
       id: crypto.randomUUID(),
@@ -250,6 +252,18 @@ export function AgentWorkspace({ sessionKey = "default" }: { sessionKey?: string
     setDraft("");
     setRetryRequest(request);
     void sendRequest(request);
+  }
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    sendDraft();
+  }
+
+  function handleDraftKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing
+      || event.keyCode === 229 || event.nativeEvent.keyCode === 229) return;
+    event.preventDefault();
+    sendDraft();
   }
 
   function retry() {
@@ -364,6 +378,7 @@ export function AgentWorkspace({ sessionKey = "default" }: { sessionKey?: string
               id="agent-message"
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={handleDraftKeyDown}
               maxLength={MAX_MESSAGE_CHARACTERS}
               rows={3}
               disabled={isSending || !!retryRequest || providersLoading || providersError}
@@ -373,7 +388,7 @@ export function AgentWorkspace({ sessionKey = "default" }: { sessionKey?: string
             />
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
               <p id="agent-message-hint" className="text-xs text-slate-400">
-                最多 {MAX_MESSAGE_CHARACTERS} 字符 · 最近 {MAX_MESSAGES} 条消息作为上下文 · {draft.length}/{MAX_MESSAGE_CHARACTERS}
+                Enter 发送 · Shift+Enter 换行 · 最多 {MAX_MESSAGE_CHARACTERS} 字符 · 最近 {MAX_MESSAGES} 条消息作为上下文 · {draft.length}/{MAX_MESSAGE_CHARACTERS}
               </p>
               <button type="submit" disabled={!canSend} className="button-primary">
                 {isSending ? "AI 正在响应…" : "发送消息 ↑"}
