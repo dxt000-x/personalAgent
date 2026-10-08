@@ -9,7 +9,7 @@ https://personal-agent-seven-mu.vercel.app
 
 ### 当前版本
 
-**线上 V0.1 — Web Foundation + Agent UI + Supabase Authentication**
+**Personal AI Workspace — Auth、Memory 与多 Provider AI Gateway**
 
 当前已实现：
 
@@ -24,7 +24,7 @@ https://personal-agent-seven-mu.vercel.app
 - ✅ 服务端身份认证与受保护路由
 - ✅ Vercel 公网部署
 
-> 当前在线演示地址未包含后续 Agent Chat 与 Personal Memory 数据层更新。AI 自动记忆、知识库、Agent Planning 与工具能力仍在开发中。
+> OpenRouter 在本地及 Vercel 的真实调用已有阶段性人工验收记录；线上部署内容仍应按实际发布版本核对。AI 自动记忆、知识库、Agent Planning 与工具能力仍在开发中。
 
 ## 比赛项目目标
 
@@ -42,7 +42,7 @@ https://personal-agent-seven-mu.vercel.app
                                                        └→ Windows Local Connector
 ```
 
-Supabase 用于认证与 Personal Memory 持久化。Agent Chat 的 Auto 路由优先选取本地可用的 Ollama；本地不可用时优先考虑已配置的 OpenRouter，再考虑其他云 Provider。云 Provider 只显示配置状态，健康状态保持未知，真实调用失败后才可按规则尝试下一个候选。用户也可以显式选择 Provider，显式选择不触发切换。FastAPI Agent 与 Windows Local Connector 仍为规划。OpenRouter 和 Gemini 的上游真实调用结果需分别联调确认。
+Supabase 用于认证与 Personal Memory 持久化。Agent Chat 的 Auto 路由优先选取本地可用的 Ollama；本地不可用时优先考虑已配置的 OpenRouter，再考虑其他云 Provider。云 Provider 只显示配置状态，健康状态保持未知，真实调用失败后才可按规则尝试下一个候选。用户也可以显式选择 Provider，显式选择不触发切换。FastAPI Agent 与 Windows Local Connector 仍为规划。OpenRouter 已完成真实上游验收；OpenAI、DeepSeek 尚无真实成功验收记录，Gemini 仍受上游权限限制。
 
 ```text
 web/          Next.js + TypeScript + Tailwind CSS + App Router
@@ -76,6 +76,12 @@ npm run start
 ```
 
 首次安装后，Next.js 在运行或构建时自动生成 `next-env.d.ts`。首次单独执行类型检查前，可先执行 `npm run build`。
+
+## Automated Regression Tests
+
+在 `web/` 运行 `npm test`。该命令使用 Vitest 单次执行并退出，覆盖 AI Router、Privacy、显式 Provider、Auto fallback、输入边界、公开错误响应、Memory Context 与少量 Chat Route Handler 行为。测试采用确定性的 fake Provider、fake 配置和受控认证/Memory 替身；不会调用真实 OpenRouter、OpenAI、DeepSeek、Gemini 或 Ollama，也不需要云 API Key、Supabase Secret 或本地 Ollama 服务。`npm run test:watch` 仅供开发时使用。
+
+自动回归测试补充独立的真实 Provider 人工集成验收，不替代上游联调。Ollama、OpenRouter、Privacy、Auto 云切换与双用户 Memory 隔离已有阶段性人工验收；OpenAI、DeepSeek 和 Gemini 不因此视为已通过真实调用。
 
 ### Windows 一键运行
 
