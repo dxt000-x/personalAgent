@@ -12,6 +12,8 @@ describe("public AI errors", () => {
     ["INVALID_REQUEST", 400],
     ["PROVIDER_ERROR", 502],
     ["RATE_LIMITED", 429],
+    ["CLOUD_QUOTA_EXCEEDED", 429],
+    ["QUOTA_UNAVAILABLE", 503],
     ["TIMEOUT", 504],
   ] as const)("maps %s to a safe HTTP %i response", async (code, status) => {
     const response = aiErrorResponse(new AIGatewayError(code));

@@ -104,6 +104,7 @@ npm run start
 - `/knowledge`：演示文件列表；上传与检索暂不可用。
 - `/settings`：模型、自主程度的本地 UI 选择，以及服务商/连接器占位。
 - `POST /api/ai/chat`：认证后支持 Auto 或显式选择 OpenRouter、OpenAI、DeepSeek、Gemini、Ollama；验证输入并返回统一的非流式文本结果。Auto 按规则路由并最多尝试两个候选；显式选择不回退。
+- 云端 AI 每用户每日 30 次预占限制已在 Gateway 与迁移文件中实现；数据库迁移须经人工审查并部署后才可用于真实云端调用。
 - `GET /api/ai/providers`：认证后只返回 Provider 名称、类型、配置状态、可用性和模型显示信息，不包含地址或密钥。Ollama 通过短超时模型列表检查；云 Provider 保持健康未知。
 - Ollama 本地推理默认使用 `qwen3:8b`，不需要云 API Token；输入在配置的本地 Ollama 服务处理，不向云模型 Provider 发送。
 - TypeScript 严格类型配置、Tailwind CSS 样式。
@@ -118,7 +119,7 @@ Agent 对话只保存在前端内存，刷新后清空；发送时只传递最�
 - FastAPI 后端与 Personal Agent。
 - AI 自动提取 Memory、Embedding、Semantic Search 与个人知识 Vector RAG。
 - Agent Planning、Tools 与 Windows Local Connector。
-- per-user daily quota 与 Streaming。
+- Streaming 与更细的 token/费用预算。
 - Windows Local Connector、本地文件与受控命令执行。当前 Next.js 服务端只能访问自身网络可达的 Ollama；部署在 Vercel 时，`127.0.0.1` 指 Vercel 运行环境，不能访问用户电脑上的 Ollama。
 
 ## 配置与安全
@@ -146,7 +147,15 @@ OLLAMA_MODEL=qwen3:8b
 
 登录后可从同源页面调用 `GET /api/ai/providers` 查看配置与可用性，再向 `POST /api/ai/chat` 发送 `{"provider":"auto","routingPreference":"auto","messages":[{"role":"user","content":"你好"}]}`。也可明确设置 `provider` 为 `openrouter`、`openai`、`deepseek`、`gemini` 或 `ollama`。Auto 最多尝试两个 Provider，且只有上游错误或超时才会切换；鉴权、请求校验、限流错误不会切换。Privacy 偏好只允许已确认可用的 Ollama，无法使用时直接失败。显式选择 OpenRouter 或 Auto 路由到它时，当前用户的受限 Personal Memory Context 会随请求发送到云端；需要仅本地处理时选择 Privacy。请求最多 20 条消息、单条 4000 字符、总计 16000 字符、请求体 64 KiB。服务端对显式调用设置 25 秒超时、Auto 每个候选设置 12 秒超时，输出最多 1024 token。API 不接受系统角色消息，也不返回 Key。
 
-使用 Ollama 时，需要让运行 Next.js 的服务器能访问 `OLLAMA_BASE_URL`。本地开发可在机器上运行 Ollama；部署到 Vercel 等云端时，`127.0.0.1` 指云端服务器自身，无法直接访问开发者电脑上的 Ollama。当前没有 Local Connector。公开启用付费云 Provider 前，必须先增加持久化 per-user daily quota；本阶段不使用易失内存计数器冒充可靠限额。
+使用 Ollama 时，需要让运行 Next.js 的服务器能访问 `OLLAMA_BASE_URL`。本地开发可在机器上运行 Ollama；部署到 Vercel 等云端时，`127.0.0.1` 指云端服务器自身，无法直接访问开发者电脑上的 Ollama。当前没有 Local Connector。
+
+### 云端 AI 每日配额
+
+在部署包含配额检查的 Web 版本前，先由维护者审查并在对应 Supabase 项目执行 [`supabase/migrations/20261008190000_create_ai_daily_usage.sql`](supabase/migrations/20261008190000_create_ai_daily_usage.sql)。本仓库未自动执行该迁移。迁移未部署或数据库不可用时，云端调用会安全失败；本地 Ollama 和 Privacy 不依赖配额数据库。
+
+每个用户每个 **UTC 日期最多预占 30 次云端 AI Gateway 请求**，在下一个 UTC 日期 00:00 重置。首次尝试云 Provider 前预占一次；上游成功或失败均计一次，同一请求在云 Provider 间 fallback 不重复计数。未配置 Provider 在尝试前被拒绝时不计数。此计数是云端请求次数，**不代表 token 用量或真实费用**。额度用尽时返回 HTTP 429 `CLOUD_QUOTA_EXCEEDED`；数据库无法核验时返回 HTTP 503 `QUOTA_UNAVAILABLE`，均不调用云模型。匿名、无效输入、Ollama 和 Privacy 不消耗云额度。
+
+配额由 Supabase PostgreSQL 的原子 UPSERT 维护，可跨 Vercel 实例共享。自动测试使用 fake RPC；真实 PostgreSQL 并发与权限验收仍待在隔离测试项目完成，步骤见 [开发文档](docs/development.md)。
 
 在 Supabase Auth 开启 Email provider。设置 Site URL 为本地开发地址，并在 Redirect URLs 中允许 `http://localhost:3000/auth/callback`（部署时使用实际站点地址）。开启邮箱确认时，注册后按提示在同一浏览器打开邮件链接，回调交换 PKCE code 后进入 Dashboard；若没有即时 session，页面不会假装已经登录。关闭邮箱确认时，注册得到 session 后直接进入 Dashboard。此应用不自动更改 Supabase 的认证策略。
 
