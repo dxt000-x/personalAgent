@@ -14,6 +14,7 @@ const providerNames: Record<ProviderId, string> = {
   openai: "OpenAI",
   deepseek: "DeepSeek",
   gemini: "Gemini",
+  openrouter: "OpenRouter",
 };
 
 export function AgentMessage({ message }: { message: AgentChatMessage }) {

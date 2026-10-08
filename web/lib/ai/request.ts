@@ -55,7 +55,7 @@ export function validateChatRequest(value: unknown): ChatRequest {
     throw new AIGatewayError("INVALID_REQUEST");
   }
   const input = value as Record<string, unknown>;
-  if (!["auto", "openai", "deepseek", "gemini", "ollama"].includes(String(input.provider))) {
+  if (!["auto", "openai", "deepseek", "gemini", "ollama", "openrouter"].includes(String(input.provider))) {
     throw new AIGatewayError("INVALID_REQUEST");
   }
   const routingPreference = input.routingPreference === undefined ? "auto" : input.routingPreference;
