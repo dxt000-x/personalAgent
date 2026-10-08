@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { AgentWorkspace } from "./agent-workspace";
 
 const statuses = [
@@ -64,6 +64,121 @@ beforeEach(() => {
 });
 
 describe("opt-in memory candidate workflow", () => {
+  it("invalidates the old extraction immediately when a new chat starts", async () => {
+    let resolveOld!: (response: Response) => void;
+    candidateResponse = new Promise((resolve) => { resolveOld = resolve; });
+    const input = await enableSuggestions();
+    await sendMessage(input, "第一轮消息");
+    await waitFor(() => expect(candidateCalls()).toHaveLength(1));
+
+    let resolveSecondChat!: (response: Response) => void;
+    chatResponse = new Promise((resolve) => { resolveSecondChat = resolve; });
+    fireEvent.change(input, { target: { value: "第二轮消息" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(chatCalls()).toHaveLength(2));
+    expect(screen.queryByRole("region", { name: "智能记忆候选" })).toBeNull();
+
+    await act(async () => { resolveOld(fakeResponse({ candidates: [{ ...candidate, content: "旧候选" }] })); });
+    expect(screen.queryByRole("region", { name: "智能记忆候选" })).toBeNull();
+    expect(memoryWrites()).toHaveLength(0);
+
+    candidateResponse = Promise.resolve(fakeResponse({ candidates: [{ ...candidate, content: "新候选" }] }));
+    await act(async () => { resolveSecondChat(fakeResponse({ text: "第二轮回复", provider: "ollama", model: "fake-ollama" })); });
+    expect(await within(await screen.findByRole("region", { name: "智能记忆候选" })).findByText("新候选")).toBeTruthy();
+    expect(screen.queryByText("旧候选")).toBeNull();
+    expect(candidateCalls()).toHaveLength(2);
+  });
+
+  it("does not let an older response overwrite a newer candidate", async () => {
+    let resolveOld!: (response: Response) => void;
+    candidateResponse = new Promise((resolve) => { resolveOld = resolve; });
+    const input = await enableSuggestions();
+    await sendMessage(input, "第一轮消息");
+    await waitFor(() => expect(candidateCalls()).toHaveLength(1));
+
+    candidateResponse = Promise.resolve(fakeResponse({ candidates: [{ ...candidate, content: "新候选" }] }));
+    fireEvent.change(input, { target: { value: "第二轮消息" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(candidateCalls()).toHaveLength(2));
+    expect(await within(await screen.findByRole("region", { name: "智能记忆候选" })).findByText("新候选")).toBeTruthy();
+
+    await act(async () => { resolveOld(fakeResponse({ candidates: [{ ...candidate, content: "旧候选" }] })); });
+    expect(within(screen.getByRole("region", { name: "智能记忆候选" })).getByText("新候选")).toBeTruthy();
+    expect(screen.queryByText("旧候选")).toBeNull();
+    expect(memoryWrites()).toHaveLength(0);
+  });
+
+  it("does not resurrect a pending extraction after suggestions are turned off", async () => {
+    let resolveCandidate!: (response: Response) => void;
+    candidateResponse = new Promise((resolve) => { resolveCandidate = resolve; });
+    const input = await enableSuggestions();
+    await sendMessage(input);
+    await waitFor(() => expect(candidateCalls()).toHaveLength(1));
+    fireEvent.click(screen.getByRole("checkbox", { name: "智能记忆建议" }));
+    await act(async () => { resolveCandidate(fakeResponse({ candidates: [candidate] })); });
+    expect(screen.queryByRole("region", { name: "智能记忆候选" })).toBeNull();
+    expect(memoryWrites()).toHaveLength(0);
+  });
+
+  it("does not resurrect a pending extraction after clearing the conversation", async () => {
+    let resolveCandidate!: (response: Response) => void;
+    candidateResponse = new Promise((resolve) => { resolveCandidate = resolve; });
+    const input = await enableSuggestions();
+    await sendMessage(input);
+    await waitFor(() => expect(candidateCalls()).toHaveLength(1));
+    fireEvent.click(screen.getByRole("button", { name: "清空对话" }));
+    await act(async () => { resolveCandidate(fakeResponse({ candidates: [candidate] })); });
+    expect(screen.queryByRole("region", { name: "智能记忆候选" })).toBeNull();
+    expect(memoryWrites()).toHaveLength(0);
+  });
+
+  it("lets an already confirmed save finish after starting a new chat", async () => {
+    let resolveMemory!: (response: Response) => void;
+    memoryGetResponse = new Promise((resolve) => { resolveMemory = resolve; });
+    const input = await enableSuggestions();
+    await sendMessage(input);
+    expect(await within(await screen.findByRole("region", { name: "智能记忆候选" })).findByText(candidate.content)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "确认保存" }));
+
+    candidateResponse = Promise.resolve(fakeResponse({ candidates: [] }));
+    fireEvent.change(input, { target: { value: "新聊天" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(chatCalls()).toHaveLength(2));
+    await act(async () => { resolveMemory(fakeResponse({ memories: [] })); });
+    await waitFor(() => expect(memoryWrites()).toHaveLength(1));
+  });
+
+  it("does not start a confirmed save under a replacement account when lookup was pending", async () => {
+    let resolveMemory!: (response: Response) => void;
+    memoryGetResponse = new Promise((resolve) => { resolveMemory = resolve; });
+    const view = render(<AgentWorkspace sessionKey="user-a" />);
+    const input = screen.getByRole("textbox", { name: "发送消息" }) as HTMLTextAreaElement;
+    await waitFor(() => expect(input.disabled).toBe(false));
+    fireEvent.click(screen.getByRole("checkbox", { name: "智能记忆建议" }));
+    await sendMessage(input);
+    expect(await within(await screen.findByRole("region", { name: "智能记忆候选" })).findByText(candidate.content)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "确认保存" }));
+    view.rerender(<AgentWorkspace sessionKey="user-b" />);
+    await act(async () => { resolveMemory(fakeResponse({ memories: [] })); });
+    expect(memoryWrites()).toHaveLength(0);
+  });
+
+  it("does not apply an old pending response to a replacement account component", async () => {
+    let resolveCandidate!: (response: Response) => void;
+    candidateResponse = new Promise((resolve) => { resolveCandidate = resolve; });
+    const view = render(<AgentWorkspace sessionKey="user-a" />);
+    const input = screen.getByRole("textbox", { name: "发送消息" }) as HTMLTextAreaElement;
+    await waitFor(() => expect(input.disabled).toBe(false));
+    fireEvent.click(screen.getByRole("checkbox", { name: "智能记忆建议" }));
+    await sendMessage(input);
+    await waitFor(() => expect(candidateCalls()).toHaveLength(1));
+    view.rerender(<AgentWorkspace sessionKey="user-b" />);
+    await act(async () => { resolveCandidate(fakeResponse({ candidates: [candidate] })); });
+    expect(screen.queryByRole("region", { name: "智能记忆候选" })).toBeNull();
+    expect((screen.getByRole("checkbox", { name: "智能记忆建议" }) as HTMLInputElement).checked).toBe(false);
+    expect(memoryWrites()).toHaveLength(0);
+  });
+
   it("is off by default and never analyzes or saves an ordinary chat", async () => {
     const input = await setup();
     await sendMessage(input);
@@ -167,6 +282,18 @@ describe("opt-in memory candidate workflow", () => {
     fireEvent.keyDown(input, { key: "Enter" });
     await waitFor(() => expect(candidateCalls()).toHaveLength(1));
     expect(JSON.parse(String(candidateCalls()[0][1]?.body))).toMatchObject({ routingPreference: "privacy", message: "第一行\n第二行" });
+  });
+
+  it("omits Auto Privacy preference for explicit Provider in both chat and extraction", async () => {
+    const input = await enableSuggestions();
+    fireEvent.change(screen.getByLabelText("自动路由偏好"), { target: { value: "privacy" } });
+    fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "ollama" } });
+    expect(screen.getByText(/Privacy 自动路由偏好不生效/)).toBeTruthy();
+    await sendMessage(input);
+    await waitFor(() => expect(candidateCalls()).toHaveLength(1));
+    expect(JSON.parse(String(chatCalls()[0][1]?.body))).toMatchObject({ provider: "ollama" });
+    expect(JSON.parse(String(candidateCalls()[0][1]?.body))).toMatchObject({ provider: "ollama" });
+    expect(JSON.parse(String(candidateCalls()[0][1]?.body))).not.toHaveProperty("routingPreference");
   });
 });
 

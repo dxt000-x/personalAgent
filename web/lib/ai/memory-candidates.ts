@@ -20,7 +20,8 @@ export const extractionInstruction = [
   "最多 3 条；没有合适事实时输出 {\"candidates\":[]}。content 用中文简洁陈述用户已明确表达的事实，不要添加推断。",
 ].join("\n");
 
-const sensitivePattern = /(?:sk-[a-z0-9_-]{12,}|Bearer\s+\S+|\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+|(?:api[_ -]?key|password|密码|令牌|验证码|身份证|银行卡|手机号)\s*[:：=]\s*\S+)/i;
+// Heuristic guard for obvious secrets and contact details, not a complete PII detector.
+const sensitivePattern = /(?:sk-[a-z0-9_-]{12,}|\bBearer\s+\S+|\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+|(?:api[_ -]?key|password|passwd|pwd|密码|令牌|token|验证码|身份证|银行卡|手机号|邮箱|电子邮箱|电话|联系方式)\s*(?:[:：=]|是|为)\s*\S+|(?:\+?86[-\s]?)?1[3-9]\d{9}\b|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})/i;
 
 export function validateCandidateRequest(value: unknown): {
   provider: ProviderSelection; routingPreference: RoutingPreference; message: string;

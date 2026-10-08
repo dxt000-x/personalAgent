@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { POST } from "./route";
 import { AIGatewayError } from "@/lib/ai/errors";
+import { runAiGateway } from "@/lib/ai/gateway";
 import { getProvider, getProviderStatuses } from "@/lib/ai/provider-registry";
 import { reserveCloudAiQuota } from "@/lib/ai/quota";
 import { createClient } from "@/lib/supabase/server";
@@ -92,6 +93,33 @@ describe("POST /api/ai/memory-candidates", () => {
     for (const id of ids) expect(calls[id]).not.toHaveBeenCalled();
   });
 
+  it.each(["openrouter", "openai", "deepseek", "gemini"] as const)("rejects explicit cloud %s with Privacy before model or quota work", async (provider) => {
+    const { response, body } = await responseFor(undefined, provider, "privacy");
+    expect(response.status).toBe(400);
+    expect(body.error.code).toBe("INVALID_REQUEST");
+    expect(getProvider).not.toHaveBeenCalled();
+    expect(reserveCloudAiQuota).not.toHaveBeenCalled();
+    for (const id of ids) expect(calls[id]).not.toHaveBeenCalled();
+  });
+
+  it("keeps explicit Ollama with Privacy local-only", async () => {
+    const { response } = await responseFor(undefined, "ollama", "privacy");
+    expect(response.status).toBe(200);
+    expect(calls.ollama).toHaveBeenCalledTimes(1);
+    expect(reserveCloudAiQuota).not.toHaveBeenCalled();
+    for (const id of ids.filter((id) => id !== "ollama")) expect(calls[id]).not.toHaveBeenCalled();
+  });
+
+  it("guards shared Gateway against Privacy/cloud conflict even without route validation", async () => {
+    const client = await createClient();
+    if (!client) throw new Error("fake client missing");
+    await expect(runAiGateway(client, {
+      provider: "openrouter", routingPreference: "privacy", messages: [{ role: "user", content: "hello" }],
+    })).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+    expect(getProvider).not.toHaveBeenCalled();
+    expect(reserveCloudAiQuota).not.toHaveBeenCalled();
+  });
+
   it("reserves independent cloud quota before explicit extraction", async () => {
     const { response } = await responseFor(undefined, "openrouter");
     expect(response.status).toBe(200);
@@ -152,5 +180,13 @@ describe("POST /api/ai/memory-candidates", () => {
     const sensitive = await responseFor("密码：abc123");
     expect(sensitive.body.candidates).toEqual([]);
     expect(calls.ollama).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["token=obvious-fake-value", "test@example.invalid", "13800138000"])("does not forward obvious sensitive input to an extra model call: %s", async (message) => {
+    const { response, body } = await responseFor(message, "openrouter");
+    expect(response.status).toBe(200);
+    expect(body.candidates).toEqual([]);
+    expect(reserveCloudAiQuota).not.toHaveBeenCalled();
+    for (const id of ids) expect(calls[id]).not.toHaveBeenCalled();
   });
 });

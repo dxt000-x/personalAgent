@@ -43,4 +43,20 @@ describe("memory candidate boundaries", () => {
     expect(() => validateCandidateRequest({ provider: "auto", message: " ", routingPreference: "auto" })).toThrow();
     expect(() => validateCandidateRequest({ provider: "openrouter", message: "hi", routingPreference: "privacy" })).toThrow();
   });
+
+  it.each([
+    "password: obvious-fake-value",
+    "token=obvious-fake-value",
+    "Bearer obvious-fake-value",
+    "sk-test-secret-do-not-leak",
+    "我的手机号是13800138000",
+    "联系邮箱是test@example.invalid",
+  ])("filters obvious sensitive material: %s", (text) => {
+    expect(containsSensitiveMaterial(text)).toBe(true);
+    expect(parseMemoryCandidates(output(candidate(text)), [])).toEqual([]);
+  });
+
+  it("does not suppress a benign project fact just because it mentions a password manager", () => {
+    expect(containsSensitiveMaterial("我长期开发密码管理器项目")).toBe(false);
+  });
 });

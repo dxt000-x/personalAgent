@@ -149,6 +149,7 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
   const [extractingCandidates, setExtractingCandidates] = useState(false);
   const [candidateError, setCandidateError] = useState(false);
   const candidateGeneration = useRef(0);
+  const accountGeneration = useRef(0);
   const candidateSaving = useRef(new Set<string>());
 
   const selectedStatus = useMemo(
@@ -179,7 +180,10 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
     return () => { active = false; };
   }, [sessionKey]);
 
-  useEffect(() => () => { candidateGeneration.current += 1; }, []);
+  useEffect(() => () => {
+    candidateGeneration.current += 1;
+    accountGeneration.current += 1;
+  }, []);
 
   async function requestCandidates(request: RetryRequest) {
     const message = request.messages.at(-1);
@@ -192,7 +196,11 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
       const response = await fetch("/api/ai/memory-candidates", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider: request.provider, routingPreference: request.routingPreference, message: message.content }),
+        body: JSON.stringify({
+          provider: request.provider,
+          ...(request.provider === "auto" ? { routingPreference: request.routingPreference } : {}),
+          message: message.content,
+        }),
       });
       const body: unknown = await response.json();
       if (!response.ok || typeof body !== "object" || body === null || !Array.isArray((body as { candidates?: unknown }).candidates)) {
@@ -219,7 +227,9 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
   async function saveCandidate(candidate: CandidateEntry) {
     if (candidate.status === "saved" || candidateSaving.current.has(candidate.id)) return;
     candidateSaving.current.add(candidate.id);
-    const generation = candidateGeneration.current;
+    // A new conversation invalidates suggestions, but must not cancel a save the user confirmed.
+    // Only leaving this account/session prevents a not-yet-started Memory POST.
+    const generation = accountGeneration.current;
     setCandidates((current) => current.map((entry) => entry.id === candidate.id ? { ...entry, status: "saving" } : entry));
     try {
       // Recheck the current user's Memory immediately before saving to avoid common repeats.
@@ -233,7 +243,7 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
       const duplicate = existing.some((row) => typeof row === "object" && row !== null
         && typeof (row as { content?: unknown }).content === "string"
         && normalize((row as { content: string }).content) === normalize(candidate.content));
-      if (generation !== candidateGeneration.current) return;
+      if (generation !== accountGeneration.current) return;
       if (!duplicate) {
         const response = await fetch("/api/memories", {
           method: "POST",
@@ -242,10 +252,10 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
         });
         if (!response.ok) throw new Error("memory save failed");
       }
-      if (generation !== candidateGeneration.current) return;
+      if (generation !== accountGeneration.current) return;
       setCandidates((current) => current.map((entry) => entry.id === candidate.id ? { ...entry, status: "saved" } : entry));
     } catch {
-      if (generation === candidateGeneration.current) {
+      if (generation === accountGeneration.current) {
         setCandidates((current) => current.map((entry) => entry.id === candidate.id ? { ...entry, status: "error" } : entry));
       }
     } finally {
@@ -338,6 +348,9 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
     if (!content || content.length > MAX_MESSAGE_CHARACTERS
       || (selectedProvider !== "auto" && !selectedStatus?.configured)
       || providersLoading || providersError || isSending || sendingRef.current || retryRequest) return;
+
+    // Invalidate an older extraction at the start of the new round, before chat resolves.
+    resetCandidates();
 
     const userMessage: AgentChatMessage = {
       id: crypto.randomUUID(),

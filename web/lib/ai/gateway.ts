@@ -14,6 +14,10 @@ export async function runAiGateway(
   supabase: AuthenticatedClient,
   input: { provider: ProviderSelection; routingPreference: RoutingPreference; messages: ChatMessage[]; systemInstruction?: string },
 ): Promise<AIChatResult> {
+  // Public routes already validate this combination; keep the shared boundary safe too.
+  if (input.routingPreference === "privacy" && input.provider !== "auto" && input.provider !== "ollama") {
+    throw new AIGatewayError("INVALID_REQUEST");
+  }
   let cloudQuotaReserved = false;
   async function generate(providerId: ProviderId, timeoutMs: number) {
     const provider = getProvider(providerId);
