@@ -12,6 +12,8 @@
 - `/agent` 默认使用确定性 Auto 路由，可选显式 Provider 与 Privacy 仅本地模式。Ollama 使用短超时 `/api/tags` 检查可用性；云 Provider 只显示已配置与健康未知，不发起健康探测模型调用。
 - Auto 本地可用时优先 Ollama；本地不可用时按 OpenRouter、OpenAI、DeepSeek、Gemini 的固定顺序考虑已配置的云 Provider。最多调用两个候选，且仅在上游错误或超时后 fallback；鉴权、请求校验、限流错误不会触发 fallback。显式 Provider 永不切换。Privacy 模式只尝试本地 Ollama，模型不可用时返回明确错误，不向云端发送消息或 Personal Memory。
 - 云端 Provider 构造成功后、实际调用前，Gateway 通过当前 authenticated SSR Client 调用 `reserve_cloud_ai_quota()`。同一请求仅预占一次；本地 Ollama、Privacy、认证或输入失败不调用该 RPC。云 Provider 间 fallback 复用已预占额度。额度耗尽或配额存储不可用时，云端调用 fail-closed。
+- `POST /api/ai/memory-candidates` 是独立的认证请求，只分析本轮用户消息。它与聊天路由共用 `runAiGateway`，因此沿用相同的 Router、Registry、超时、fallback、安全错误与云额度预占；提取请求若调用云端，会在普通聊天之外独立消耗一次额度。Privacy 仍只有 Ollama 候选。
+- 提取模型的 JSON 输出经严格字段、分类、条数与长度校验；当前用户的 Memory 仅在模型返回后用于规范化去重，不作为提取模型输入。候选只存在页面内存；用户点击确认才调用现有 `POST /api/memories`，由当前 authenticated Session 和 RLS 限定所有权。无新数据库表或 RLS 变更。
 - Agent Chat 通过认证后的 `POST /api/ai/chat` 发送消息。最近最多 20 条消息作为多轮上下文，只保存在前端内存，刷新后清空；不建立会话数据库。
 - AI Gateway 在模型路由前使用当前 SSR Session 的 Supabase Client 检索 Personal Memory，RLS 是最终所有权边界；当前用户 ID 仅由已验证 claims 获得，客户端不能传入 Memory、用户 ID 或 system prompt。
 - Memory 按 importance 降序、created_at 降序检索，最多 8 条；模型上下文不超过 4000 字符，并受 Gateway 16000 字符总输入与消息数预算约束。只格式化 category、importance、content，不发送记录 ID、user_id 或时间戳。

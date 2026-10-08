@@ -81,6 +81,11 @@ export function AgentProviderSelector({
                   ? `${selected.model} · ${selected.availability === "unknown" ? "上游健康状态未知" : selected.availability === "available" ? "当前可用" : "当前不可用"}`
                   : "尚无 Provider 配置信息"}
         </p>
+        {selectedProvider !== "auto" && routingPreference === "privacy" && (
+          <p className="mt-2 text-xs text-amber-700">
+            当前为显式 Provider，Privacy 自动路由偏好不生效；选择云端模型会向云端发送消息。
+          </p>
+        )}
       </div>
       <div className="rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-500">
         {selectedProvider === "auto" ? "首选策略" : "当前模型"}
