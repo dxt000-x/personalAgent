@@ -16,7 +16,8 @@
 ## 仓库与交接状态
 
 - 当前仓库由用户确认沿用原位置；不要自动迁移或复制项目。原请求中的新路径不存在，启动新对话时应绑定当前实际仓库。
-- 当前 Agent 输入交互任务 branch：`feat/agent-enter-to-send`；任务开始时 HEAD 为 `76df9c1`（合并 AI Gateway 回归测试的 PR #23），工作区 clean。
+- 当前云端配额任务 branch：`feat/ai-usage-quota`；任务开始时 HEAD 为 `5b029a0`（合并 Agent Enter 发送的 PR #24），工作区 clean。
+- 先前 Agent 输入交互任务 branch：`feat/agent-enter-to-send`；该任务已合并到当前基线。
 - 先前稳定性任务 branch 为 `test/ai-gateway-regression`；当时 HEAD 与本地 `main`、`origin/main` 均为 `ac1e55a`。
 - OpenRouter 合并基线：`2874015`，`Merge pull request #21 from dxt000-x/feat/openrouter-provider`。
 - origin：`https://github.com/dxt000-x/personalAgent.git`。
@@ -41,6 +42,7 @@ Browser / Agent Workspace
 - `web/app/api/ai/chat/route.ts`：认证、请求校验、Memory、路由、模型调用与安全错误响应。
 - `web/app/api/ai/providers/route.ts`：认证后的配置与可用性查询。
 - `web/lib/ai/`：统一类型、Provider、Registry、Router、输入限制和错误类型。
+- `web/lib/ai/quota.ts`、`supabase/migrations/20261008190000_create_ai_daily_usage.sql`：云 Provider 调用前的 authenticated RPC 预占与 PostgreSQL 持久化每日计数；迁移尚待用户审查和部署。
 - `web/components/agent-workspace.tsx`：Agent 聊天输入与发送；Enter 发送、Shift+Enter 换行，IME 组合输入和 keyCode 229 不触发发送。键盘与按钮共用提交逻辑，发送中的同步 ref 防止重复请求。
 - `web/lib/supabase/`、`web/proxy.ts`、workspace layout：官方 SSR Cookie 会话与路由保护。
 - `web/app/api/memories/`、`web/lib/memories/`：当前用户 Memory CRUD 与受限 Context。
@@ -59,6 +61,7 @@ Browser / Agent Workspace
 - Auto 云切换 HTTP 200 的证据为 UI 成功响应及 Gateway 成功分支固定返回 200；当次未保存原始 HTTP 网络记录。不可用的 Ollama 未被调用，OpenRouter 作为首个可用候选成功，无 Provider 错误后的额外重试。
 - 恢复：移除测试进程覆盖，Ollama `/api/tags` HTTP 200，`qwen3:8b` 仍存在；正常 Auto 再次选择 Ollama 并回复 `Auto Local 联调成功`。
 - 匿名 AI 接口：上一轮真实请求中 GET providers 与 POST chat 均返回 401 `AUTH_REQUIRED`。
+- 云端配额代码已添加，但 SQL 尚未执行；当前没有真实数据库并发或部署后的云调用验收，不将自动测试描述为已完成数据库原子性验收。
 - Dashboard 与 Knowledge Base 仍含明确的演示数据；Knowledge 上传/检索未接入。Settings 部分为 UI 设置或占位。
 
 ## 各 Provider 状态
@@ -79,11 +82,12 @@ Browser / Agent Workspace
 
 - Auto：可用 Ollama 优先；云候选依次 OpenRouter、OpenAI、DeepSeek、Gemini。最多两个候选。
 - 仅 `PROVIDER_ERROR`、`TIMEOUT` 可触发第二候选；限流、认证与输入错误不触发切换。显式 Provider 不 fallback。
+- 每个 authenticated Gateway 请求首次尝试云 Provider 前通过同一 SSR Client 预占 1 次云配额；固定每用户每 UTC 日期 30 次。云端成功或失败都消耗一次，云端 fallback 不重复预占；Ollama、Privacy、认证/输入失败不计。额度耗尽返回 `CLOUD_QUOTA_EXCEEDED` 429，配额不可用返回 `QUOTA_UNAVAILABLE` 503，均不调用云端。
 - Privacy 仅允许本地 Ollama；本地 unavailable 时返回 `PRIVACY_PROVIDER_UNAVAILABLE`，不调用云 Provider。显式云 Provider 与 privacy 组合被输入校验拒绝。
 - 请求体最多 64 KiB，最多 20 条 user/assistant 消息，单条 4000 字符，总计 16000 字符；最后一条必须是 user。
 - 输出最多 1024 token，并将返回文本截断到 12000 字符。
 - 显式调用超时 25 秒；Auto 每候选 12 秒；Ollama 健康检查 1.5 秒。使用 OpenAI SDK 的 Provider 将 `maxRetries` 设为 0；请求 AbortSignal 传入 Provider。
-- 错误码：AUTH_REQUIRED 401、INVALID_REQUEST 400（请求体超限可为 413）、PROVIDER_NOT_CONFIGURED 503、PRIVACY_PROVIDER_UNAVAILABLE 503、PROVIDER_ERROR 502、RATE_LIMITED 429、TIMEOUT 504。
+- 错误码：AUTH_REQUIRED 401、INVALID_REQUEST 400（请求体超限可为 413）、PROVIDER_NOT_CONFIGURED 503、PRIVACY_PROVIDER_UNAVAILABLE 503、PROVIDER_ERROR 502、RATE_LIMITED 429、CLOUD_QUOTA_EXCEEDED 429、QUOTA_UNAVAILABLE 503、TIMEOUT 504。
 - 上游 429 映射 RATE_LIMITED；超时/中止映射 TIMEOUT；其余上游错误用固定 PROVIDER_ERROR。客户端不会收到 SDK stack 或原始错误。
 - 本次对错误映射和超时进行代码审查；未重新执行真实 429、强制超时或 SDK 故障注入，不能描述成这些故障场景均已实测。
 
@@ -98,6 +102,7 @@ Memory 最多 8 条，按 importance 与创建时间排序；上下文最多 400
 - API providers 只返回 id/type/configured/availability/model；AI 响应不返回密钥、Cookie、Token、完整 Memory 或内部 Prompt。
 - 已审查 AI/Memory 源码没有记录完整 Memory/Prompt 的日志调用。
 - 云调用会发送当前会话与受限个人上下文至最终云 Provider；Privacy 才是仅本地模型处理边界。
+- 云配额表对 `anon`、`authenticated` 无直接权限，启用 RLS 且无开放策略；无 service_role 用于普通请求。无参数 `SECURITY DEFINER` RPC 从 `auth.uid()` 获得用户，固定空 search_path、固定上限 30，仅 authenticated 可执行。迁移等待人工 SQL 审查。
 
 ## 工程验证（本次交接）
 
@@ -108,6 +113,7 @@ Memory 最多 8 条，按 importance 与创建时间排序；上下文最多 400
 | `npm run build` | 通过，exit 0；首次沙箱运行因 spawn EPERM 失败，授权环境重跑成功 |
 | 自动化回归 | 新增 Vitest；5 个测试文件、47 个测试用例全部通过；只使用 fake Provider、配置、认证与 Memory 替身，不访问真实模型或 Supabase |
 | Agent 输入交互 | 新增 jsdom + React Testing Library 组件测试；合计 6 个测试文件、53 个测试用例通过，覆盖 Enter、Shift+Enter、IME、空白输入、请求中重复发送与原按钮 |
+| 云配额自动测试 | 合计 7 个测试文件、75 个测试用例通过；fake RPC 验证 Gateway/错误边界，不代表真实 PostgreSQL 并发验收 |
 | Git 稳定性任务起始状态 | test/ai-gateway-regression，clean；HEAD 与本地 main、origin/main 均为 ac1e55a |
 | 稳定性任务范围 | 测试与文档；正式业务代码未修改 |
 
@@ -115,11 +121,13 @@ Memory 最多 8 条，按 importance 与创建时间排序；上下文最多 400
 
 Agent 输入交互任务：只修改 `web/components/agent-workspace.tsx` 的输入与发送交互，增加 `web/components/agent-workspace.test.tsx`；测试直接 devDependencies 增加 `@testing-library/react` 与 `jsdom`。Enter 阻止默认换行后调用现有发送流程；Shift+Enter 保留浏览器换行；IME composing 或 keyCode 229 不发送；空白输入及请求进行中不重复发送。发送按钮保留。AI API、Provider、Router、Memory、数据库与认证逻辑未修改。`npm test` 为 53/53，通过 lint、`npx tsc --noEmit` 和生产构建。
 
+云配额任务：新增 `public.ai_daily_usage` 迁移与无参数原子预占 RPC，Gateway 只在云 Provider 构造成功后、上游调用前预占。表以 `(user_id, usage_date)` 为主键，使用数据库 UTC 日期与条件 UPSERT；每用户每天最多 30 次。数据库真实并发验收脚本位于 `web/scripts/verify-ai-quota-concurrency.mjs`，必须在隔离测试项目执行。SQL 尚未执行，真实 PostgreSQL 原子性、权限与部署后云调用均为**待实测**。不能在代码和数据库迁移均完成前把云配额视为线上生效；配额是请求次数，不是 token/费用预算。
+
 ## 遗留问题与下一阶段候选任务
 
 必须由用户决定下一任务范围，以下仅为交接待办，不自动开始：
 
-1. 增加跨实例持久化 per-user quota 与滥用保护。当前没有可靠每日限额，不应把现有长度/超时保护当作费用预算。
+1. 审查并部署云配额 SQL，在隔离测试 Supabase 项目完成真实并发、权限及 A/B 验收，再决定目标环境部署；不要把 fake RPC 测试视为数据库证明。配额仍不是 token/费用预算，更细的滥用保护待规划。
 2. 评估整个请求的时间预算：30 秒 Route 声明同时包含认证、Memory、健康检查和最多两次模型调用；当前只对各阶段设部分超时，没有完整端到端 deadline。现有回归测试覆盖单候选 TIMEOUT 与 fallback，但不模拟完整端到端 deadline。
 3. 跟踪 Gemini 项目权限；需要时配置并分别验收 OpenAI/DeepSeek，勿伪造成功结果。
 4. Memory 联调曾出现间歇 503；后续真实验收已继续通过，但没有持久性根因结论，出现时保留安全错误类别与阶段。

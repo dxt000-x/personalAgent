@@ -11,6 +11,7 @@
 - Chat Gateway 对消息数、单条与总输入长度、请求体大小、Provider 超时和输出长度设限，并将上游错误转换为固定错误码。
 - `/agent` 默认使用确定性 Auto 路由，可选显式 Provider 与 Privacy 仅本地模式。Ollama 使用短超时 `/api/tags` 检查可用性；云 Provider 只显示已配置与健康未知，不发起健康探测模型调用。
 - Auto 本地可用时优先 Ollama；本地不可用时按 OpenRouter、OpenAI、DeepSeek、Gemini 的固定顺序考虑已配置的云 Provider。最多调用两个候选，且仅在上游错误或超时后 fallback；鉴权、请求校验、限流错误不会触发 fallback。显式 Provider 永不切换。Privacy 模式只尝试本地 Ollama，模型不可用时返回明确错误，不向云端发送消息或 Personal Memory。
+- 云端 Provider 构造成功后、实际调用前，Gateway 通过当前 authenticated SSR Client 调用 `reserve_cloud_ai_quota()`。同一请求仅预占一次；本地 Ollama、Privacy、认证或输入失败不调用该 RPC。云 Provider 间 fallback 复用已预占额度。额度耗尽或配额存储不可用时，云端调用 fail-closed。
 - Agent Chat 通过认证后的 `POST /api/ai/chat` 发送消息。最近最多 20 条消息作为多轮上下文，只保存在前端内存，刷新后清空；不建立会话数据库。
 - AI Gateway 在模型路由前使用当前 SSR Session 的 Supabase Client 检索 Personal Memory，RLS 是最终所有权边界；当前用户 ID 仅由已验证 claims 获得，客户端不能传入 Memory、用户 ID 或 system prompt。
 - Memory 按 importance 降序、created_at 降序检索，最多 8 条；模型上下文不超过 4000 字符，并受 Gateway 16000 字符总输入与消息数预算约束。只格式化 category、importance、content，不发送记录 ID、user_id 或时间戳。
@@ -30,7 +31,7 @@
 Agent Chat 通过认证后的 Gateway 调用 Auto 路由或显式选择的 Provider。OpenRouter 是云 Provider，服务端使用 `OPENROUTER_API_KEY` 与默认模型 `openrouter/free`；本地及 Vercel 真实调用已有阶段性人工验收。默认本地 Ollama 推理使用 `qwen3:8b`，由配置的 Ollama 服务处理，不产生云 API Token 费用；对话状态只保存在浏览器页面内存。OpenAI、DeepSeek 尚无真实成功验收记录，Gemini 仍受上游权限限制。部署在 Vercel 时，`127.0.0.1` 指 Vercel 自身，不能访问用户电脑上的 Ollama；配置 OpenRouter 后，Auto 可在本地 Ollama 不可用时尝试该云 Provider。Windows Local Connector 尚未实现。
 
 ```text
-Browser → Agent Chat (Next.js) → Next.js AI Gateway → Rule-based Model Router ┬→ OpenRouter / OpenAI / DeepSeek / Gemini
+Browser → Agent Chat (Next.js) → Next.js AI Gateway → Rule-based Model Router ┬→ DB quota reservation → OpenRouter / OpenAI / DeepSeek / Gemini
                                                                                └→ Ollama (local model)
                     ↑
               Supabase Auth
@@ -57,7 +58,7 @@ Browser
 | Models / Model Router | 调用云模型或本地模型 | OpenRouter、OpenAI、DeepSeek、Gemini、Ollama 显式选择与规则 Auto Router 已实现；OpenRouter 上游真实调用已阶段性验收，智能模型评估/质量路由 Planned |
 | Memory / RAG | 个人记忆与知识检索 | Manual Memory CRUD/RLS、确定性服务端 Memory Retrieval 与上下文注入已实现；自动提取、Embedding、Semantic Search 与 Vector RAG Planned |
 | Tools | 可授权的外部与本地操作 | Planned |
-| Supabase | 数据持久化、身份与存储支持 | Auth 与 `public.memories` 的用户隔离手动 CRUD 已实现；其他业务存储 Planned |
+| Supabase | 数据持久化、身份与存储支持 | Auth 与 `public.memories` 的用户隔离手动 CRUD 已实现；`public.ai_daily_usage` 迁移待人工审查部署；其他业务存储 Planned |
 | Local Connector | 连接用户设备上的 Ollama、本地文件与受控命令执行 | Planned，仅目录占位；当前 Ollama 仅能由可访问其服务的 Next.js 服务端调用 |
 
 Supabase 用于 Web 认证与 Personal Memory 存储。Memory API 使用现有 SSR Server Client 和经验证的 claims，不建立第二套 Auth 或 service_role 通道。FastAPI 仍是未来高级 Agent / Python Tools / RAG 的规划，`server/` 保留占位。认证 Cookie 由官方 SDK 管理，不建立自研 Session 系统。`getSession()` 中未经验证的用户字段不用于服务端授权。
@@ -80,5 +81,6 @@ Supabase 用于 Web 认证与 Personal Memory 存储。Memory API 使用现有 S
 - Auto 候选顺序固定为：可用 Ollama，然后按 OpenRouter、OpenAI、DeepSeek、Gemini；最多两次调用。仅 `PROVIDER_ERROR` 与 `TIMEOUT` 允许切换。
 - Auto 或显式云 Provider 请求会将当前登录用户的受限 Memory Context 交给最终调用的云服务；Privacy 只允许本地 Ollama。Memory 仍由当前 SSR Session 和 RLS 隔离，响应不返回完整内容，服务端不记录完整 Memory。
 - Privacy 偏好只调用已确认可用的 Ollama；没有本地模型时立即拒绝，不发送到云端。云端状态 `unknown` 仅表示没有做健康探测，不代表服务可用。
-- 当前没有可靠的持久化 per-user daily quota。启用付费云 Provider 面向公网用户前，必须先实现服务端持久化配额与相应滥用控制；不使用单实例内存计数器替代。
+- `public.ai_daily_usage` 以 `(user_id, usage_date)` 为主键，固定每 UTC 日期 30 次。`reserve_cloud_ai_quota()` 在数据库侧使用 `auth.uid()` 与条件 UPSERT 原子预占；表对 `anon` 和 `authenticated` 无直接权限、启用 RLS 且无开放策略。函数无用户 ID、上限或退款参数；只授权 `authenticated` 执行。跨 Vercel 实例共享同一数据库计数。
+- 预占成功后无退款：云端调用成功或失败均消耗一次；云端 fallback 不重复预占。计数是云端请求次数，不是 token 或真实费用预算。迁移尚待人工审查、部署和真实 PostgreSQL 并发验收；上线配额 Web 代码前须先部署迁移。
 - Vercel 中的 `localhost` / `127.0.0.1` 指云端运行环境，不能连接用户电脑。访问用户设备上的模型或文件需要未来的 Local Connector；本阶段没有实现该连接器。

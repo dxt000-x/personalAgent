@@ -27,7 +27,7 @@ Task 1、Task 2 与 Task 3 已完成项目基础架构、Workspace UI 和 Supaba
 - AI Auto Router 采用固定规则，不执行模型评估：本地 Ollama 可用时优先；否则按 OpenRouter、OpenAI、DeepSeek、Gemini 考虑最多两个已配置候选。只有 Provider 错误或超时可 fallback；认证、输入校验和限流错误不得 fallback。显式选择 Provider 不切换。
 - Privacy 模式只允许本地 Ollama；不可用时要清楚失败，不得尝试云 Provider。Provider 配置与可用性是独立字段；云 Provider 未执行真实调用前健康状态保持 unknown。
 - OpenRouter 使用服务端 `OPENROUTER_API_KEY`，默认 `OPENROUTER_MODEL=openrouter/free`。显式选择或 Auto 路由到 OpenRouter 时，当前用户的受限 Memory Context 会发送到该云服务；Privacy 下不得发送。不要将 API Key、完整 Memory、Token 或 Cookie 写入日志。
-- 不用易失内存计数器模拟 per-user daily quota。面向公网开放付费云 Provider 前，先实现跨实例持久化的用户配额和拒绝策略。
+- 云端调用依赖 Supabase PostgreSQL 的持久化 per-user daily quota；迁移未部署或配额不可用时必须拒绝云调用。不要用易失内存计数器替代，也不要把 30 次请求计数解释为费用预算。
 - Vercel 端无法访问用户电脑的 localhost。当前没有 Local Connector，不能把本地模型健康状态解读为用户个人电脑可连接。
 
 ## Web 开发与验证
@@ -55,6 +55,28 @@ npm run typecheck
 `npm test` 使用 Vitest 单次运行并退出；`npm run test:watch` 是可选的开发模式。测试位于 `web/lib/ai/__tests__/` 与 `web/app/api/ai/chat/route.test.ts`，使用 deterministic fake Provider、fake 配置与受控认证/Memory 替身。它们不访问真实云 Provider、Ollama 或 Supabase，不消耗 API 额度，也不依赖 `web/.env.local`。覆盖 Router 顺序与候选上限、Privacy 只在本地执行、显式 Provider 无 fallback、Auto 错误分类、输入边界、公开错误脱敏及 Gateway Memory Context 行为。
 
 真实 Provider 与双用户 Memory 隔离仍保留独立人工集成验收记录。自动测试不会将 OpenAI、DeepSeek 或 Gemini 记作真实调用成功。
+
+## 云端 AI 配额部署与验收
+
+配额代码对应新的 [`supabase/migrations/20261008190000_create_ai_daily_usage.sql`](../supabase/migrations/20261008190000_create_ai_daily_usage.sql)；历史 Memory migration 不变。先人工审查 SQL，在隔离测试 Supabase 项目执行并验收，再在目标项目部署，最后部署包含配额检查的 Web 版本。若先部署 Web，云端 Provider 会因缺少 RPC 返回安全的 `QUOTA_UNAVAILABLE`，本地 Ollama 与 Privacy 仍可工作。本任务不自动执行 SQL，也不修改 Vercel Production 环境。
+
+`public.ai_daily_usage` 的主键是 `(user_id, usage_date)`；`usage_date` 取数据库 UTC 日期。`reserve_cloud_ai_quota()` 无参数，从 `auth.uid()` 获取用户，固定上限 30。表启用 RLS 且不给 `anon`、`authenticated` 直接读写权限；`SECURITY DEFINER` 函数固定空 `search_path`，仅授予 `authenticated` EXECUTE。直接调用 RPC 最多消耗调用者自己的额度，不能增加上限或退款。条件 UPSERT 在同一用户/日期的主键冲突上串行化更新，供所有 Vercel 实例共享。服务端在云 Provider 创建成功后、调用前预占；云端失败仍计一次，同一 Gateway 请求的云端 fallback 不重复计。Ollama、Privacy、未认证与输入无效不计。计数代表云端请求次数，不代表 token 或真实费用。
+
+`npm test` 中的 quota 用例仅通过 fake RPC 验证应用边界，**不证明真实数据库并发原子性**。真实验收需在隔离测试项目先应用迁移，准备两个当天尚未调用配额 RPC 的新测试账号，通过正常登录获得各自的短期 JWT，然后在 `web/` 设置以下进程环境变量并运行：
+
+```text
+AI_QUOTA_TEST_PROJECT_KIND=isolated-test-project
+AI_QUOTA_TEST_SUPABASE_URL=<隔离测试项目 URL>
+AI_QUOTA_TEST_PUBLISHABLE_KEY=<该项目公开 publishable key>
+AI_QUOTA_TEST_USER_A_JWT=<测试用户 A 的短期 JWT>
+AI_QUOTA_TEST_USER_B_JWT=<测试用户 B 的短期 JWT>
+```
+
+```sh
+node scripts/verify-ai-quota-concurrency.mjs
+```
+
+脚本不输出 JWT 或 Key，拒绝在未明确标为隔离测试项目时运行；请勿将变量写入仓库文件。每次重复验收使用**新的两个测试用户**，并避开 UTC 午夜前两分钟。它并发发送 40 次 A 的直接 RPC，要求恰好 30 次允许、10 次拒绝，检查 0–29 的唯一剩余值、A 的第 41 次拒绝、B 的独立额度、匿名 RPC 拒绝及直接表读写拒绝。脚本不会调用任何 AI Provider。真实执行结果须另行记录；当前标记为**待实测**。验收后再进行登录态云 Provider 人工联调与部署判断。
 
 ## 已知依赖问题（2026-10-06）
 
