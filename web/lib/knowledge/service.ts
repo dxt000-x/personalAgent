@@ -41,7 +41,7 @@ export async function processKnowledgeDocument(
     return ready;
   } catch (error) {
     const invalidFile = error instanceof KnowledgeError && [
-      "EMPTY_FILE", "FILE_TOO_LARGE", "INVALID_FILE_CONTENT", "PDF_PARSE_FAILED",
+      "EMPTY_FILE", "FILE_TOO_LARGE", "INVALID_FILE_CONTENT", "PDF_PARSE_FAILED", "PDF_NO_TEXT",
     ].includes(error.code);
     // A temporary failure keeps the original file and makes a same-document
     // retry available immediately. If this transition fails, the claim can

@@ -185,6 +185,12 @@ Agent 输入交互任务：只修改 `web/components/agent-workspace.tsx` 的输
 - 隔离项目并发脚本在写入前校验 A/B JWT 身份，异常允许的限额插入也追踪为清理夹具；数据库错误和清理异常不输出原始连接错误或敏感内容。`parse.ts` 的四类明确错误码均已在 `service.ts` 列为不可重试；补充空正文、超限、非法 UTF-8 的服务层状态与清理测试。真实 Supabase 脚本仍**未运行、待人工批准后验收**。
 - 本轮本地自动化测试 20 文件、202/202 通过；lint、`npx tsc --noEmit` 与 production build 通过。未执行 Supabase SQL 或隔离项目验收脚本。
 
+### 2026-10-10 Knowledge Base PDF 解析修复（同分支）
+
+- 用户在独立 Supabase 测试项目 `personal-agent-quota-test` 已人工确认 TXT 与 Markdown 上传解析为 ready，PDF 上传失败；迁移、受限角色与 TLS 已通过先前检查。原失败 PDF 在直接 Node.js 中可提取 1 页、259 个字符。另用本机 Word 导出的无敏感两页文字 PDF 复现：直接 Node.js 成功，但修复前 Next.js 生产路由返回 `PDF_PARSE_FAILED`，底层错误是 worker 从 `.next/server/chunks/pdf.worker.mjs` 加载失败。`serverExternalPackages: ["pdfjs-dist"]` 后，本地生产路由能解析 Word 样本及用户原失败文件（后者返回 1 个片段、259 字符）。诊断路由和用户文件均未提交。
+- 解析器将无文字层 PDF 明确报告为暂不支持 OCR；已知损坏/加密 PDF 继续拒绝，未知运行时故障按临时错误处理并保留原件。4 MiB、50 页、200,000 字符、200 片段限制不变。真实 Supabase/Vercel 重新上传验收仍待人工执行；旧 `failed/invalid_file` 记录可能已清理原件，需要新建上传。
+- `next.config.ts` 也明确将 `pdf.worker.mjs` 纳入知识库处理路由的文件追踪；最终 `.nft.json` 已确认包含 worker。全量 Vitest 23 文件、212/212 项通过，lint、`npx tsc --noEmit`、production build 通过。新增测试夹具仅为自制 Word 导出 PDF，用户桌面原件未复制到仓库。
+
 ## 本地运行和复测
 
 在仓库根目录使用 Windows setup/start 脚本，或在 `web/` 执行：

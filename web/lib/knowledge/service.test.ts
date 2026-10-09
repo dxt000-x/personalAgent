@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readFile } from "node:fs/promises";
 import { deleteKnowledgeDocument, processKnowledgeDocument, type KnowledgeRepository } from "./service";
 import { KnowledgeError } from "./errors";
 import type { KnowledgeDocument, UploadInput } from "./types";
@@ -172,6 +173,29 @@ describe("knowledge ingestion and cleanup", () => {
     expect(doc.status).toBe("failed");
     expect(doc.failure_kind).toBe("invalid_file");
     expect(repo.objects.has(doc.storage_path)).toBe(false);
+  });
+  it("removes an image-only PDF after reporting that OCR is unsupported", async () => {
+    const repo = new FakeRepository();
+    const doc = repo.documents.get(id)!;
+    const imagePdf = await readFile(new URL("./fixtures/word-export-image-only.pdf", import.meta.url));
+    doc.file_type = "pdf";
+    doc.byte_size = imagePdf.length;
+    repo.objects.set(doc.storage_path, imagePdf);
+    await expect(processKnowledgeDocument(repo, userA, id)).rejects.toMatchObject({ code: "PDF_NO_TEXT" });
+    expect(doc.status).toBe("failed");
+    expect(doc.failure_kind).toBe("invalid_file");
+    expect(repo.objects.has(doc.storage_path)).toBe(false);
+  });
+  it("keeps the original for retry after a PDF runtime failure", async () => {
+    const repo = new FakeRepository();
+    const originalRead = repo.read.bind(repo);
+    repo.read = async () => { throw new KnowledgeError("KNOWLEDGE_UNAVAILABLE"); };
+    await expect(processKnowledgeDocument(repo, userA, id))
+      .rejects.toMatchObject({ code: "KNOWLEDGE_UNAVAILABLE" });
+    expect(repo.documents.get(id)?.failure_kind).toBe("temporary");
+    expect(repo.objects.size).toBe(1);
+    repo.read = originalRead;
+    expect((await processKnowledgeDocument(repo, userA, id)).status).toBe("ready");
   });
   it("preserves failed metadata for retryable deletion if cleanup Storage fails", async () => {
     const repo = new FakeRepository();

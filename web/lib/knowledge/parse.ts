@@ -6,7 +6,7 @@ export async function parseDocument(bytes: Uint8Array, type: KnowledgeFileType):
   if (bytes.byteLength > MAX_FILE_BYTES) throw new KnowledgeError("FILE_TOO_LARGE");
   const text = type === "pdf" ? await parsePdf(bytes) : decodeText(bytes);
   const normalized = text.replace(/\r\n?/gu, "\n").trim();
-  if (!normalized) throw new KnowledgeError("EMPTY_FILE");
+  if (!normalized) throw new KnowledgeError(type === "pdf" ? "PDF_NO_TEXT" : "EMPTY_FILE");
   if (normalized.length > MAX_TEXT_CHARS) throw new KnowledgeError("INVALID_FILE_CONTENT");
   return chunkText(normalized);
 }
@@ -33,10 +33,14 @@ async function parsePdf(bytes: Uint8Array): Promise<string> {
   if (bytes.byteLength < 8 || new TextDecoder().decode(bytes.subarray(0, 5)) !== "%PDF-") {
     throw new KnowledgeError("INVALID_FILE_CONTENT");
   }
+  // Import failures are deployment/runtime failures, not evidence that the
+  // user's PDF is damaged. Keep the original available for a later retry.
+  let pdfjs: typeof import("pdfjs-dist/legacy/build/pdf.mjs");
+  try { pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs"); }
+  catch { throw new KnowledgeError("KNOWLEDGE_UNAVAILABLE"); }
   let task: { destroy(): Promise<void> } | undefined;
   try {
-    const { getDocument } = await import("pdfjs-dist/legacy/build/pdf.mjs");
-    const loading = getDocument({
+    const loading = pdfjs.getDocument({
       data: new Uint8Array(bytes),
       useSystemFonts: true,
       isEvalSupported: false,
@@ -60,7 +64,11 @@ async function parsePdf(bytes: Uint8Array): Promise<string> {
     return pages.join("\n\n");
   } catch (error) {
     if (error instanceof KnowledgeError) throw error;
-    throw new KnowledgeError("PDF_PARSE_FAILED");
+    if (error instanceof pdfjs.InvalidPDFException || error instanceof pdfjs.MissingPDFException ||
+        (error instanceof Error && (error.name === "PasswordException" || error.name === "FormatError"))) {
+      throw new KnowledgeError("PDF_PARSE_FAILED");
+    }
+    throw new KnowledgeError("KNOWLEDGE_UNAVAILABLE");
   } finally {
     if (task) await task.destroy().catch(() => undefined);
   }

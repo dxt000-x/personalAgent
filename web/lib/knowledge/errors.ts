@@ -1,6 +1,6 @@
 export type KnowledgeErrorCode =
   | "AUTH_REQUIRED" | "INVALID_REQUEST" | "UNSUPPORTED_FILE" | "FILE_TOO_LARGE"
-  | "EMPTY_FILE" | "INVALID_FILE_CONTENT" | "PDF_PARSE_FAILED"
+  | "EMPTY_FILE" | "INVALID_FILE_CONTENT" | "PDF_PARSE_FAILED" | "PDF_NO_TEXT"
   | "DOCUMENT_NOT_FOUND" | "DOCUMENT_BUSY" | "STORAGE_UNAVAILABLE"
   | "KNOWLEDGE_UNAVAILABLE" | "FILE_NOT_UPLOADED"
   | "KNOWLEDGE_LIMIT_REACHED" | "UPLOAD_RATE_LIMITED" | "PROCESS_RATE_LIMITED";
@@ -12,7 +12,8 @@ const details: Record<KnowledgeErrorCode, { status: number; message: string }> =
   FILE_TOO_LARGE: { status: 413, message: "文件大小不能超过 4 MiB。" },
   EMPTY_FILE: { status: 400, message: "文件没有可读取的正文。" },
   INVALID_FILE_CONTENT: { status: 400, message: "文件实际内容与格式不符，或无法作为文本读取。" },
-  PDF_PARSE_FAILED: { status: 400, message: "PDF 无法解析或没有可提取的文字。" },
+  PDF_PARSE_FAILED: { status: 400, message: "PDF 文件损坏、加密或无法解析。" },
+  PDF_NO_TEXT: { status: 400, message: "PDF 没有可提取的文字；暂不支持扫描图片 OCR。" },
   DOCUMENT_NOT_FOUND: { status: 404, message: "未找到该文档。" },
   DOCUMENT_BUSY: { status: 409, message: "文档正在处理；如长时间未完成，请稍后重试或删除。" },
   FILE_NOT_UPLOADED: { status: 409, message: "原始文件尚未上传或已经不存在，请重新选择文件上传。" },
