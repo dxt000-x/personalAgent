@@ -2,12 +2,11 @@
 // No .env.local file is read; credentials come from the invoking process only.
 import { createInterface } from "node:readline/promises";
 import {
-  AcceptanceError,
   ESTIMATED_DOCUMENTS, ESTIMATED_STORAGE_OBJECTS,
   PROJECT_NAME, PROJECT_REF,
   cleanupRegistered, closeConnections, createManifestStore, createRunManifest,
   executeScenario, inspectFromConfig, newRunId, parseMode, runPreflight,
-  validateConfiguration,
+  safePreflightDiagnostic, validateConfiguration,
 } from "./knowledge-db-acceptance.mjs";
 
 let context;
@@ -15,6 +14,7 @@ let manifest;
 let store;
 let interrupted = false;
 let mode;
+let preflightProgress = { stage: "PROJECT_IDENTITY", lastPassed: "NONE" };
 const onInterrupt = () => {
   interrupted = true;
   console.error("中断已记录；当前操作将在截止时间内结束，随后停止写入并保留运行清单。");
@@ -24,6 +24,8 @@ try {
   const selected = parseMode(process.argv.slice(2));
   mode = selected.mode;
   const config = validateConfiguration(mode, process.env, process.cwd());
+  preflightProgress = { stage: "AUTH_C", lastPassed: "PROJECT_IDENTITY" };
+  if (mode !== "inspect") console.log("PROJECT_IDENTITY: PASS");
   store = createManifestStore(process.cwd());
 
   if (mode === "inspect") {
@@ -35,7 +37,10 @@ try {
     }
     console.log(`事件保留：C 上传 ${inspection.events.C.uploads}、处理 ${inspection.events.C.processes}；D 上传 ${inspection.events.D.uploads}、处理 ${inspection.events.D.processes}`);
   } else {
-    context = await runPreflight(config);
+    context = await runPreflight(config, { onStage: (progress) => {
+      preflightProgress = progress;
+      if (progress.passed) console.log(`${progress.stage}: PASS`);
+    } });
     console.log(`只读预检: PASS；项目 ${PROJECT_NAME} (${PROJECT_REF})；C/D 身份不同，文档、Storage 对象和事件均为空。`);
     if (mode === "execute") {
       if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error("TTY_REQUIRED");
@@ -62,12 +67,9 @@ try {
   }
 } catch (error) {
   // Never print raw Supabase/pg errors: they may include credentials or bodies.
-  const publicCodes = new Set(["28P01", "28000", "42501", "08001", "08006", "57P01",
-    "ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "ENOTFOUND", "EAI_AGAIN"]);
-  const safe = typeof error?.code === "string" &&
-    (publicCodes.has(error.code) || error instanceof AcceptanceError)
-    ? error.code : "UNKNOWN_FAILURE";
-  console.error(`Knowledge DB ${mode ?? "startup"}: FAIL; stage: ${manifest?.stage ?? "preflight"}; code: ${safe}`);
+  const diagnosis = safePreflightDiagnostic(error, preflightProgress);
+  const stage = manifest?.stage ?? diagnosis.stage;
+  console.error(`Knowledge DB ${mode ?? "startup"}: FAIL; stage: ${stage}; lastPassed: ${diagnosis.lastPassed}; category: ${diagnosis.category}; code: ${diagnosis.code}`);
   if (manifest && store) {
     manifest.status = "needs-inspection";
     try { await store.save(manifest); }

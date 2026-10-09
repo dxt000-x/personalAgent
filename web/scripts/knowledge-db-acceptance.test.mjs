@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import tls from "node:tls";
 import {
+  AcceptanceError,
   boundedProjectFetch, cleanupRegistered, createManifestStore, createRunManifest,
-  executeScenario, inspectFromConfig, parseMode, requireTestWorktree, runPreflight, validateConfiguration,
+  executeScenario, inspectFromConfig, parseMode, requireTestWorktree, runPreflight,
+  safePreflightDiagnostic, validateConfiguration,
 } from "./knowledge-db-acceptance.mjs";
 import { PROJECT_REF, PROJECT_URL, TEST_WEB_DIRECTORY } from "./knowledge-storage-interactive.mjs";
 
@@ -39,18 +41,27 @@ function fakeStore() {
   return { store: createManifestStore(TEST_WEB_DIRECTORY, ops), files };
 }
 
-function fakeDatabase({ existing = false, onQuery } = {}) {
+function fakeDatabase({ existing = false, storageExisting = false, eventsExisting = false,
+  stringCounts = false, onQuery } = {}) {
   const calls = [];
   const createPg = (settings) => ({
     async connect() {}, async end() {},
     async query(sql, values = []) {
       calls.push({ role: settings.user.split(".")[0], sql, values });
-      onQuery?.(sql, values);
+      onQuery?.(sql, values, settings.user.split(".")[0]);
       if (sql.includes("current_user as role_name")) return { rows: [{ role_name: settings.user.split(".")[0], db_name: "postgres" }] };
       if (sql.includes("has_function_privilege")) return { rows: [{ claim_allowed: true,
         complete_allowed: true, fail_allowed: true, mark_allowed: true, finish_allowed: true }] };
-      if (sql.includes("as documents")) return { rows: [{ documents: existing ? 1 : 0, chunks: 0,
+      if (sql.includes("as documents")) return { rows: [{ documents: existing ? 1 : stringCounts ? "0" : 0,
+        chunks: stringCounts ? "0" : 0,
         objects: 0, uploads: 0, processes: 0 }] };
+      if (sql.includes("count(*)::integer as objects")) {
+        return { rows: [{ objects: storageExisting ? 1 : stringCounts ? "0" : 0 }] };
+      }
+      if (sql.includes("as uploads") && sql.includes("as processes")) {
+        return { rows: [{ uploads: eventsExisting ? 1 : stringCounts ? "0" : 0,
+          processes: stringCounts ? "0" : 0 }] };
+      }
       if (sql.includes("count(*)::integer as value")) return { rows: [{ value: 0 }] };
       if (sql.includes("from public.knowledge_documents where id=any")) return { rows: [] };
       if (sql.includes("from storage.objects where bucket_id") && sql.includes("any(")) return { rows: [] };
@@ -99,18 +110,129 @@ describe("Knowledge DB acceptance safety boundaries", () => {
 
   it("preflight checks fresh C/D identities and all four empty data categories using reads", async () => {
     const fake = fakeDatabase();
-    const result = await runPreflight(config(), fake);
+    const stages = [];
+    const result = await runPreflight(config(), { ...fake,
+      onStage: (progress) => { if (progress.passed) stages.push(progress.stage); } });
     expect(result.ids).toEqual({ C, D });
     expect(fake.calls.filter((entry) => entry.sql.includes("as documents"))).toHaveLength(2);
-    expect(fake.calls.filter((entry) => entry.sql === "begin read only")).toHaveLength(1);
+    expect(fake.calls.filter((entry) => entry.sql.includes("count(*)::integer as objects"))).toHaveLength(2);
+    expect(fake.calls.filter((entry) => entry.sql.includes("as uploads"))).toHaveLength(2);
+    expect(fake.calls.filter((entry) => entry.sql === "begin isolation level repeatable read read only"))
+      .toHaveLength(1);
     expect(fake.calls.filter((entry) => entry.sql === "rollback")).toHaveLength(1);
-    expect(fake.calls.every((entry) => /^(select|begin read only|rollback)/iu.test(entry.sql))).toBe(true);
+    expect(fake.calls.every((entry) => /^(select|begin isolation level repeatable read read only|rollback)/iu.test(entry.sql))).toBe(true);
+    expect(stages.at(-1)).toBe("PREFLIGHT_COMPLETE");
   });
 
   it("rejects C/D with any prior Knowledge data without mutating it", async () => {
     const fake = fakeDatabase({ existing: true });
     await expect(runPreflight(config(), fake)).rejects.toThrow("TEST_USER_NOT_EMPTY");
-    expect(fake.calls.every((entry) => /^(select|begin read only|rollback)/iu.test(entry.sql))).toBe(true);
+    expect(fake.calls.every((entry) => /^(select|begin isolation level repeatable read read only|rollback)/iu.test(entry.sql))).toBe(true);
+  });
+
+  it("accepts integer and decimal-string zero counts, but rejects existing Storage or events", async () => {
+    await expect(runPreflight(config(), fakeDatabase({ stringCounts: true }))).resolves.toHaveProperty("ids");
+    for (const [options, stage] of [[{ storageExisting: true }, "EMPTY_STORAGE_CHECK_C"],
+      [{ eventsExisting: true }, "EMPTY_EVENT_CHECK_C"]]) {
+      let diagnosis;
+      try { await runPreflight(config(), fakeDatabase(options)); }
+      catch (error) { diagnosis = safePreflightDiagnostic(error); }
+      expect(diagnosis).toMatchObject({ stage, category: "ASSERTION", code: "TEST_USER_NOT_EMPTY" });
+    }
+  });
+
+  it.each(["C", "D"])("identifies %s Auth rejection without attempting a database connection", async (account) => {
+    const fake = fakeDatabase();
+    const createSupabase = () => ({ auth: { getUser: async (jwt) => jwt === `fake-${account.toLowerCase()}-jwt`
+      ? { data: null, error: { code: "bad_jwt" } }
+      : { data: { user: { id: C } }, error: null } } });
+    let diagnosis;
+    try { await runPreflight(config(), { ...fake, createSupabase }); }
+    catch (error) { diagnosis = safePreflightDiagnostic(error); }
+    expect(diagnosis).toMatchObject({ stage: `AUTH_${account}`, category: "AUTH", code: "AUTH_ERROR" });
+    expect(fake.calls).toHaveLength(0);
+  });
+
+  it("distinguishes a returned Auth network error without exposing its raw message", async () => {
+    const fake = fakeDatabase();
+    const secret = "sk-test-secret-do-not-leak";
+    const createSupabase = () => ({ auth: { getUser: async () => ({ data: null,
+      error: { name: "AuthRetryableFetchError", message: secret, cause: { code: "ECONNRESET" } } }) } });
+    let diagnosis;
+    try { await runPreflight(config(), { ...fake, createSupabase }); }
+    catch (error) { diagnosis = safePreflightDiagnostic(error); }
+    expect(diagnosis).toMatchObject({ stage: "AUTH_C", category: "NETWORK", code: "ECONNRESET" });
+    expect(JSON.stringify(diagnosis)).not.toContain(secret);
+  });
+
+  it.each([["postgres", "ADMIN_CONNECTION"],
+    ["knowledge_writer_login", "WRITER_CONNECTION_1"]])("identifies %s connection authentication failure", async (role, stage) => {
+    const fake = fakeDatabase();
+    const createPg = (settings) => {
+      if (settings.user.startsWith(`${role}.`)) {
+        const error = new Error("fake connection rejection");
+        error.code = "28P01";
+        throw error;
+      }
+      return fake.createPg(settings);
+    };
+    let diagnosis;
+    try { await runPreflight(config(), { ...fake, createPg }); }
+    catch (error) { diagnosis = safePreflightDiagnostic(error); }
+    expect(diagnosis).toMatchObject({ stage, category: "DB_AUTH", code: "28P01" });
+  });
+
+  it.each([
+    ["admin role query", "ADMIN_ROLE_CHECK", "SQL_PERMISSION", "42501",
+      (sql, _values, role) => role === "postgres" && sql.includes("current_user as role_name")],
+    ["writer role query", "WRITER_ROLE_CHECK_1", "SQL_PERMISSION", "42501",
+      (sql, _values, role) => role === "knowledge_writer_login" && sql.includes("current_user as role_name")],
+    ["Storage query", "EMPTY_STORAGE_CHECK_C", "SQL_SCHEMA", "42P01",
+      (sql) => sql.includes("count(*)::integer as objects")],
+    ["event query", "EMPTY_EVENT_CHECK_C", "SQL_PERMISSION", "42501",
+      (sql) => sql.includes("as uploads")],
+    ["document query timeout", "EMPTY_DOCUMENT_CHECK_C", "TIMEOUT", "57014",
+      (sql) => sql.includes("as documents")],
+  ])("reports the exact %s failure stage", async (_label, expectedStage, category, code, match) => {
+    const fake = fakeDatabase({ onQuery: (sql, values, role) => {
+      if (match(sql, values, role)) {
+        const error = new Error("fake database failure");
+        error.code = code;
+        throw error;
+      }
+    } });
+    let diagnosis;
+    try { await runPreflight(config(), fake); }
+    catch (error) { diagnosis = safePreflightDiagnostic(error); }
+    expect(diagnosis.stage).toBe(expectedStage);
+    expect(diagnosis.category).toBe(category);
+    expect(diagnosis.code).toBe(code === "57014" ? "REQUEST_TIMEOUT" : code);
+    expect(diagnosis.lastPassed).not.toBe(expectedStage);
+  });
+
+  it("classifies an unknown failure without exposing raw errors or credentials", async () => {
+    const secret = "sk-test-secret-do-not-leak";
+    const fake = fakeDatabase({ onQuery: (sql) => {
+      if (sql.includes("as documents")) throw new Error(`database response ${secret}`);
+    } });
+    let diagnosis;
+    try { await runPreflight(config(), fake); }
+    catch (error) { diagnosis = safePreflightDiagnostic(error); }
+    expect(diagnosis).toMatchObject({ stage: "EMPTY_DOCUMENT_CHECK_C",
+      lastPassed: "WRITER_PERMISSION_CHECK", category: "UNKNOWN", code: "UNCLASSIFIED_ERROR" });
+    expect(JSON.stringify(diagnosis)).not.toContain(secret);
+    expect(safePreflightDiagnostic(new AcceptanceError(secret)).code).toBe("ASSERTION_FAILED");
+  });
+
+  it("classifies a pg client-side query timeout without a SQLSTATE", async () => {
+    const fake = fakeDatabase({ onQuery: (sql) => {
+      if (sql.includes("as documents")) throw new Error("Query read timeout");
+    } });
+    let diagnosis;
+    try { await runPreflight(config(), fake); }
+    catch (error) { diagnosis = safePreflightDiagnostic(error); }
+    expect(diagnosis).toMatchObject({ stage: "EMPTY_DOCUMENT_CHECK_C",
+      category: "TIMEOUT", code: "REQUEST_TIMEOUT" });
   });
 
   it("registers exact fixture identifiers in a durable manifest before writes", async () => {

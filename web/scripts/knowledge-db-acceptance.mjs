@@ -23,7 +23,55 @@ const EVENT_TABLES = new Set(["knowledge_upload_events", "knowledge_process_even
 export class AcceptanceError extends Error {
   constructor(code) { super(code); this.code = code; }
 }
+export class PreflightFailure extends Error {
+  constructor(stage, lastPassed, category, code) {
+    super(code);
+    this.stage = stage;
+    this.lastPassed = lastPassed;
+    this.category = category;
+    this.code = code;
+  }
+}
 const check = (condition, code) => { if (!condition) throw new AcceptanceError(code); };
+
+const NETWORK_CODES = new Set(["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "ENOTFOUND",
+  "EAI_AGAIN", "08001", "08006"]);
+const SQL_SCHEMA_CODES = new Set(["42P01", "42703", "42883", "3F000"]);
+
+function classifyFailure(error, stage) {
+  if (error instanceof AcceptanceError) {
+    const safeCode = typeof error.code === "string" && /^[A-Z][A-Z0-9_]{2,60}$/u.test(error.code)
+      ? error.code : "ASSERTION_FAILED";
+    return { category: safeCode === "AUTH_REJECTED" ? "AUTH" : "ASSERTION", code: safeCode };
+  }
+  const code = error?.code ?? error?.cause?.code;
+  if (code === "57014" || code === "QUERY_TIMEOUT" || code === "ETIMEDOUT" ||
+      code === "UND_ERR_CONNECT_TIMEOUT" || code === "UND_ERR_HEADERS_TIMEOUT" ||
+      error?.name === "AbortError" || error?.name === "TimeoutError" ||
+      error?.message === "Query read timeout") {
+    return { category: "TIMEOUT", code: "REQUEST_TIMEOUT" };
+  }
+  if (NETWORK_CODES.has(code) || error?.name === "AuthRetryableFetchError") {
+    return { category: "NETWORK", code: NETWORK_CODES.has(code) ? code : "NETWORK_ERROR" };
+  }
+  if (code === "28P01" || code === "28000") return { category: "DB_AUTH", code };
+  if (code === "42501") return { category: "SQL_PERMISSION", code };
+  if (SQL_SCHEMA_CODES.has(code)) return { category: "SQL_SCHEMA", code };
+  if (typeof code === "string" && /^[0-9A-Z]{5}$/u.test(code)) {
+    return { category: "SQL", code: "SQL_ERROR" };
+  }
+  if (stage.startsWith("AUTH_")) return { category: "AUTH", code: "AUTH_ERROR" };
+  return { category: "UNKNOWN", code: "UNCLASSIFIED_ERROR" };
+}
+
+export function safePreflightDiagnostic(error, progress = {}) {
+  if (error instanceof PreflightFailure) {
+    return { stage: error.stage, lastPassed: error.lastPassed,
+      category: error.category, code: error.code };
+  }
+  const stage = progress.stage ?? "PROJECT_IDENTITY";
+  return { stage, lastPassed: progress.lastPassed ?? "NONE", ...classifyFailure(error, stage) };
+}
 
 export function parseMode(args) {
   if (args.length === 1 && ["--preflight", "--execute"].includes(args[0])) {
@@ -168,48 +216,96 @@ const completeSql = "select knowledge_private.complete_knowledge_document($1::uu
 const markSql = "select knowledge_private.mark_knowledge_deleting($1::uuid,$2::uuid) as value";
 const finishSql = "select knowledge_private.finish_knowledge_deletion($1::uuid,$2::uuid) as value";
 
-async function counts(admin, userId) {
-  const { rows } = await admin.query(
-    "select (select count(*)::integer from public.knowledge_documents where user_id=$1) as documents, (select count(*)::integer from public.knowledge_chunks where user_id=$1) as chunks, (select count(*)::integer from storage.objects where bucket_id='knowledge-files' and left(name,length($2)+1)=$2||'/') as objects, (select count(*)::integer from knowledge_private.knowledge_upload_events where user_id=$1) as uploads, (select count(*)::integer from knowledge_private.knowledge_process_events where user_id=$1) as processes",
-    [userId, userId],
-  );
-  return rows[0];
+function assertEmptyCounts(row, fields) {
+  check(row && fields.every((field) => {
+    const value = row[field];
+    const count = typeof value === "number" ? value :
+      typeof value === "string" && /^\d+$/u.test(value) ? Number(value) : NaN;
+    return Number.isSafeInteger(count) && count === 0;
+  }), "TEST_USER_NOT_EMPTY");
 }
 
 export async function runPreflight(config, {
   createSupabase = createClient, createPg = (settings) => new pg.Client(settings),
   fetcher = boundedProjectFetch(),
+  onStage = () => undefined,
 } = {}) {
   const connections = [];
+  let lastPassed = "PROJECT_IDENTITY";
+  const step = async (stage, action) => {
+    onStage({ stage, lastPassed });
+    try {
+      const result = await action();
+      lastPassed = stage;
+      onStage({ stage, lastPassed, passed: true });
+      return result;
+    } catch (error) {
+      const diagnosis = classifyFailure(error, stage);
+      throw new PreflightFailure(stage, lastPassed, diagnosis.category, diagnosis.code);
+    }
+  };
   const session = (identity) => createSupabase(PROJECT_URL, config.key, {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
     global: { headers: { Authorization: `Bearer ${identity.jwt}` }, fetch: fetcher },
   });
-  const c = session(config.c);
-  const d = session(config.d);
   try {
-    for (const [client, identity] of [[c, config.c], [d, config.d]]) {
-      const verified = await client.auth.getUser(identity.jwt);
-      check(!verified.error && verified.data?.user?.id === identity.id, "TEST_USER_IDENTITY_MISMATCH");
+    const c = await step("AUTH_C", async () => {
+      const client = session(config.c);
+      const verified = await client.auth.getUser(config.c.jwt);
+      if (verified.error) throw verified.error;
+      check(verified.data?.user?.id === config.c.id, "TEST_USER_IDENTITY_MISMATCH");
+      return client;
+    });
+    const d = await step("AUTH_D", async () => {
+      const client = session(config.d);
+      const verified = await client.auth.getUser(config.d.jwt);
+      if (verified.error) throw verified.error;
+      check(verified.data?.user?.id === config.d.id, "TEST_USER_IDENTITY_MISMATCH");
+      return client;
+    });
+    const admin = await step("ADMIN_CONNECTION", () => connect(config.admin, createPg, connections));
+    const first = await step("WRITER_CONNECTION_1", () => connect(config.writer, createPg, connections));
+    const second = await step("WRITER_CONNECTION_2", () => connect(config.writer, createPg, connections));
+    await step("READ_ONLY_TRANSACTION", () => admin.query("begin isolation level repeatable read read only"));
+    for (const [client, expected, stage] of [[admin, "postgres", "ADMIN_ROLE_CHECK"],
+      [first, "knowledge_writer_login", "WRITER_ROLE_CHECK_1"],
+      [second, "knowledge_writer_login", "WRITER_ROLE_CHECK_2"]]) {
+      await step(stage, async () => {
+        const identity = (await client.query("select current_user as role_name, current_database() as db_name")).rows[0];
+        check(identity?.role_name === expected && identity?.db_name === "postgres", "DATABASE_IDENTITY_MISMATCH");
+      });
     }
-    const admin = await connect(config.admin, createPg, connections);
-    const first = await connect(config.writer, createPg, connections);
-    const second = await connect(config.writer, createPg, connections);
-    await admin.query("begin read only");
-    for (const [client, expected] of [[admin, "postgres"], [first, "knowledge_writer_login"],
-      [second, "knowledge_writer_login"]]) {
-      const identity = (await client.query("select current_user as role_name, current_database() as db_name")).rows[0];
-      check(identity?.role_name === expected && identity?.db_name === "postgres", "DATABASE_IDENTITY_MISMATCH");
-    }
-    const permissions = (await first.query(
+    await step("WRITER_PERMISSION_CHECK", async () => {
+      const permissions = (await first.query(
       "select has_function_privilege(current_user, 'knowledge_private.claim_knowledge_document(uuid,uuid)', 'EXECUTE') as claim_allowed, has_function_privilege(current_user, 'knowledge_private.complete_knowledge_document(uuid,uuid,integer,jsonb)', 'EXECUTE') as complete_allowed, has_function_privilege(current_user, 'knowledge_private.fail_knowledge_document(uuid,uuid,integer,text)', 'EXECUTE') as fail_allowed, has_function_privilege(current_user, 'knowledge_private.mark_knowledge_deleting(uuid,uuid)', 'EXECUTE') as mark_allowed, has_function_privilege(current_user, 'knowledge_private.finish_knowledge_deletion(uuid,uuid)', 'EXECUTE') as finish_allowed",
-    )).rows[0];
-    check(permissions && Object.values(permissions).every((value) => value === true), "WRITER_PERMISSION_MISMATCH");
-    for (const identity of [config.c, config.d]) {
-      const state = await counts(admin, identity.id);
-      check(state && Object.values(state).every((value) => value === 0), "TEST_USER_NOT_EMPTY");
+      )).rows[0];
+      check(permissions && Object.values(permissions).every((value) => value === true), "WRITER_PERMISSION_MISMATCH");
+    });
+    for (const [label, identity] of [["C", config.c], ["D", config.d]]) {
+      await step(`EMPTY_DOCUMENT_CHECK_${label}`, async () => {
+        const { rows } = await admin.query(
+          "select (select count(*)::integer from public.knowledge_documents where user_id=$1) as documents, (select count(*)::integer from public.knowledge_chunks where user_id=$1) as chunks",
+          [identity.id],
+        );
+        assertEmptyCounts(rows[0], ["documents", "chunks"]);
+      });
+      await step(`EMPTY_STORAGE_CHECK_${label}`, async () => {
+        const { rows } = await admin.query(
+          "select count(*)::integer as objects from storage.objects where bucket_id='knowledge-files' and left(name,length($1::text)+1)=$1::text||'/'",
+          [identity.id],
+        );
+        assertEmptyCounts(rows[0], ["objects"]);
+      });
+      await step(`EMPTY_EVENT_CHECK_${label}`, async () => {
+        const { rows } = await admin.query(
+          "select (select count(*)::integer from knowledge_private.knowledge_upload_events where user_id=$1) as uploads, (select count(*)::integer from knowledge_private.knowledge_process_events where user_id=$1) as processes",
+          [identity.id],
+        );
+        assertEmptyCounts(rows[0], ["uploads", "processes"]);
+      });
     }
-    await admin.query("rollback");
+    await step("READ_ONLY_ROLLBACK", () => admin.query("rollback"));
+    onStage({ stage: "PREFLIGHT_COMPLETE", lastPassed: "PREFLIGHT_COMPLETE", passed: true });
     return { c, d, admin, first, second, connections, projectRef: PROJECT_REF,
       ids: { C: config.c.id, D: config.d.id } };
   } catch (error) {
