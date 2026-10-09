@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { EventEmitter } from "node:events";
 import {
   PROJECT_NAME, PROJECT_REF, PROJECT_URL, TEST_WEB_DIRECTORY,
-  assertTestWorktree, runInteractiveStorage, validatePublishableKey, validateWriterConnection,
+  assertTestWorktree, createTerminalPrompt, runInteractiveStorage, validatePublishableKey, validateWriterConnection,
 } from "./knowledge-storage-interactive.mjs";
 
 const userA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -31,6 +32,9 @@ function harness(options = {}) {
         events.push(`login:${actor}`);
         expect(email).toMatch(/@test\.invalid$/u);
         expect(password).toMatch(/^fake-/u);
+        if (actor === userA && options.authError) return { error: options.authError };
+        if (actor === userA && options.authThrow) throw options.authThrow;
+        if (actor === userB && options.authErrorB) return { error: options.authErrorB };
         return { error: null };
       },
       getUser: async () => ({ data: { user: { id: actor } }, error: null }),
@@ -124,6 +128,77 @@ function harness(options = {}) {
 }
 
 describe("interactive Storage acceptance safeguards", () => {
+  it("preserves fragmented UTF-8 and bracketed Windows paste without echoing a hidden password", async () => {
+    const input = new EventEmitter();
+    input.isTTY = true;
+    input.isRaw = false;
+    input.setRawMode = (raw) => { input.isRaw = raw; };
+    input.resume = () => {};
+    input.pause = () => {};
+    const writes = [];
+    const output = { isTTY: true, write: (value) => writes.push(value) };
+    const result = createTerminalPrompt(input, output).ask("密码：", true);
+    const bytes = Buffer.from("\u001b[200~fake-中文🔒 pass\u001b[201~\r\n");
+    for (const byte of bytes) input.emit("data", Buffer.from([byte]));
+    expect(await result).toBe("fake-中文🔒 pass");
+    expect(input.isRaw).toBe(false);
+    expect(writes.join("")).toBe("密码：\n");
+  });
+
+  it("ignores Windows special keys and edits a hidden input without leaking it", async () => {
+    const input = new EventEmitter();
+    input.isTTY = true;
+    input.isRaw = false;
+    input.setRawMode = (raw) => { input.isRaw = raw; };
+    input.resume = () => {};
+    input.pause = () => {};
+    const writes = [];
+    const result = createTerminalPrompt(input, { isTTY: true, write: (value) => writes.push(value) })
+      .ask("密码：", true);
+    input.emit("data", Buffer.from("fake-abc\u001b[D\u0000K\bX\r"));
+    expect(await result).toBe("fake-abX");
+    expect(writes.join("")).toBe("密码：\n");
+  });
+
+  it("reports terminal read failure separately without exposing partial input", async () => {
+    const input = new EventEmitter();
+    input.isTTY = true;
+    input.isRaw = false;
+    input.setRawMode = (raw) => { input.isRaw = raw; };
+    input.resume = () => {};
+    input.pause = () => {};
+    const writes = [];
+    const result = createTerminalPrompt(input, { isTTY: true, write: (value) => writes.push(value) })
+      .ask("密码：", true);
+    input.emit("data", Buffer.from("fake-partial-secret"));
+    input.emit("error", new Error("fake-partial-secret"));
+    await expect(result).rejects.toThrow("终端读取失败");
+    expect(input.isRaw).toBe(false);
+    expect(writes.join("")).not.toContain("fake-partial-secret");
+  });
+
+  it.each([
+    [{ status: 400, code: "invalid_credentials", message: "fake-secret" }, "账号或密码错误", "HTTP: 400; Auth code: invalid_credentials"],
+    [{ status: 401, code: "invalid_api_key", message: "fake-secret" }, "API Key 错误", "HTTP: 401; Auth code: invalid_api_key"],
+    [{ name: "AuthRetryableFetchError", cause: { code: "ENOTFOUND" }, message: "fake-secret" }, "网络失败", "Network code: ENOTFOUND"],
+  ])("reports only safe login diagnostics for A", async (authError, kind, field) => {
+    const h = harness({ authError });
+    expect(await h.run()).toBe(false);
+    expect(h.reports).toContain("A 账号登录: FAIL");
+    expect(h.reports.join(" ")).toContain(`分类: ${kind}`);
+    expect(h.reports.join(" ")).toContain(field);
+    expect(h.reports.join(" ")).not.toContain("fake-secret");
+    expect(h.events).not.toContain(`login:${userB}`);
+  });
+
+  it("identifies B when the second login fails", async () => {
+    const h = harness({ authErrorB: { status: 400, code: "invalid_credentials", message: "fake-secret" } });
+    expect(await h.run()).toBe(false);
+    expect(h.reports).toContain("B 账号登录: FAIL");
+    expect(h.reports.join(" ")).toContain("账号: B; 阶段: signInWithPassword");
+    expect(h.reports.join(" ")).not.toContain("fake-secret");
+  });
+
   it("pins the test Worktree and rejects service-role or wrong-project credentials", () => {
     expect(() => assertTestWorktree("D:\\龙虾\\Codex\\PersonalAgent\\web", (value) => value)).toThrow();
     expect(() => validatePublishableKey("sb_secret_fake")).toThrow();

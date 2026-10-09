@@ -17,6 +17,29 @@ const PREFIX = "kb-isolation-test-";
 const CONFIRM_FILES = "CONFIRM TEST FILES";
 
 class CheckFailure extends Error {}
+class TerminalInputFailure extends CheckFailure {}
+const authCodes = new Set(["invalid_credentials", "invalid_api_key", "invalid_jwt", "bad_jwt",
+  "email_not_confirmed", "user_banned", "over_request_rate_limit", "unexpected_failure"]);
+const networkCodes = new Set(["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "ENOTFOUND", "EAI_AGAIN",
+  "UND_ERR_CONNECT_TIMEOUT", "CERT_HAS_EXPIRED", "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  "ERR_TLS_CERT_ALTNAME_INVALID"]);
+class AuthFailure extends CheckFailure {
+  constructor(account, phase, error) {
+    super("测试账号认证失败");
+    this.account = account;
+    this.phase = phase;
+    this.status = Number.isInteger(error?.status) && error.status >= 100 && error.status <= 599
+      ? error.status : null;
+    this.authCode = authCodes.has(error?.code) ? error.code : null;
+    this.networkCode = networkCodes.has(error?.cause?.code) ? error.cause.code :
+      networkCodes.has(error?.code) ? error.code : null;
+    this.kind = this.authCode === "invalid_credentials" ? "账号或密码错误" :
+      ["invalid_api_key", "invalid_jwt", "bad_jwt"].includes(this.authCode) ||
+      (this.status === 401 && error?.message === "Invalid API key") ? "API Key 错误" :
+      this.networkCode || error?.name === "AuthRetryableFetchError" ? "网络失败" :
+      "认证失败，原因待核实";
+  }
+}
 const requireTrue = (condition, message) => { if (!condition) throw new CheckFailure(message); };
 
 export function assertTestWorktree(cwd, resolve = realpathSync.native) {
@@ -123,12 +146,21 @@ export async function runInteractiveStorage({
       auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
     });
     const login = async (client, label) => {
-      const email = await prompt.ask(`${label} 测试账号邮箱：`, true);
+      stage = `${label} 账号终端输入`;
+      const email = (await prompt.ask(`${label} 测试账号邮箱：`, true)).trim();
       const password = await prompt.ask(`${label} 测试账号密码：`, true);
-      const signed = await client.auth.signInWithPassword({ email, password });
-      requireTrue(!signed.error, "测试账号登录失败");
-      const verified = await client.auth.getUser();
-      requireTrue(!verified.error && verified.data?.user?.id, "测试账号身份验证失败");
+      requireTrue(email.length > 0 && password.length > 0, "账号或密码输入为空");
+      stage = `${label} 账号登录`;
+      let signed;
+      try { signed = await client.auth.signInWithPassword({ email, password }); }
+      catch (error) { throw new AuthFailure(label, "signInWithPassword", error); }
+      if (signed.error) throw new AuthFailure(label, "signInWithPassword", signed.error);
+      stage = `${label} 账号身份验证`;
+      let verified;
+      try { verified = await client.auth.getUser(); }
+      catch (error) { throw new AuthFailure(label, "getUser", error); }
+      if (verified.error) throw new AuthFailure(label, "getUser", verified.error);
+      requireTrue(verified.data?.user?.id, "测试账号身份验证未返回用户 ID");
       return verified.data.user.id;
     };
     const userAId = await login(clientA, "A");
@@ -216,7 +248,13 @@ export async function runInteractiveStorage({
     passed = true;
   } catch (error) {
     report(`${stage}: FAIL`);
-    report(error instanceof CheckFailure ? error.message : "请求失败；未输出原始错误或凭据");
+    if (error instanceof AuthFailure) {
+      report(`账号: ${error.account}; 阶段: ${error.phase}; 分类: ${error.kind}; HTTP: ${error.status ?? "无"}; Auth code: ${error.authCode ?? "无"}; Network code: ${error.networkCode ?? "无"}`);
+    } else if (error instanceof TerminalInputFailure) {
+      report("分类: 终端读取失败；请在交互终端重试");
+    } else {
+      report(error instanceof CheckFailure ? error.message : "请求失败；未输出原始错误或凭据");
+    }
   } finally {
     if (temporary) {
       try {
@@ -263,39 +301,72 @@ export async function runInteractiveStorage({
 
 // Raw TTY input avoids shell history, argv, environment variables and echoing
 // passwords/keys. Only prompts and non-secret answers are written to stdout.
-function terminalPrompt() {
-  requireTrue(process.stdin.isTTY && process.stdout.isTTY && process.stdin.setRawMode,
-    "必须在本地交互终端运行");
+export function createTerminalPrompt(input = process.stdin, output = process.stdout) {
+  if (!input.isTTY || !output.isTTY || typeof input.setRawMode !== "function") {
+    throw new TerminalInputFailure("必须在本地交互终端运行");
+  }
   return {
     ask(label, hidden = false) {
       return new Promise((resolve, reject) => {
         let value = "";
-        const decoder = new TextDecoder();
-        const input = process.stdin;
+        let escape = "";
+        let skipWindowsKey = false;
+        let finished = false;
+        const decoder = new TextDecoder("utf-8", { fatal: true });
         const previousRaw = input.isRaw;
-        process.stdout.write(label);
-        input.setRawMode(true);
-        input.resume();
         const finish = (error) => {
+          if (finished) return;
+          finished = true;
           input.off("data", onData);
-          input.setRawMode(Boolean(previousRaw));
+          input.off("error", onError);
+          input.off("end", onEnd);
+          try { input.setRawMode(Boolean(previousRaw)); }
+          catch { error = new TerminalInputFailure("终端模式恢复失败"); }
           input.pause();
-          process.stdout.write("\n");
+          output.write("\n");
           if (error) reject(error); else resolve(value);
         };
+        const onError = () => finish(new TerminalInputFailure("终端读取失败"));
+        const onEnd = () => finish(new TerminalInputFailure("终端已关闭"));
         const onData = (buffer) => {
-          for (const char of decoder.decode(buffer, { stream: true })) {
-            if (char === "\r" || char === "\n") { finish(); return; }
-            if (char === "\u0003") { finish(new CheckFailure("人工中断")); return; }
-            if (char === "\b" || char === "\u007f") {
-              if (value.length) { value = value.slice(0, -1); if (!hidden) process.stdout.write("\b \b"); }
-            } else if (char >= " ") {
-              value += char;
-              if (!hidden) process.stdout.write(char);
+          try {
+            for (const char of decoder.decode(buffer, { stream: true })) {
+              if (skipWindowsKey) { skipWindowsKey = false; continue; }
+              if (char === "\u0000") { skipWindowsKey = true; continue; }
+              if (escape) {
+                escape += char;
+                if (escape === "\u001b[") continue;
+                if (/^\u001b\[[0-9;]*$/u.test(escape)) continue;
+                if (escape.length <= 32 && /^\u001b\[[0-9;]*[A-Za-z~]$/u.test(escape)) {
+                  escape = "";
+                  continue;
+                }
+                escape = "";
+                continue;
+              }
+              if (char === "\u001b") { escape = char; continue; }
+              if (char === "\r" || char === "\n") { finish(); return; }
+              if (char === "\u0003") { finish(new TerminalInputFailure("人工中断")); return; }
+              if (char === "\b" || char === "\u007f") {
+                if (value.length) {
+                  value = Array.from(value).slice(0, -1).join("");
+                  if (!hidden) output.write("\b \b");
+                }
+              } else if (char >= " ") {
+                value += char;
+                if (!hidden) output.write(char);
+              }
             }
-          }
+          } catch { finish(new TerminalInputFailure("终端输入解码失败")); }
         };
-        input.on("data", onData);
+        try {
+          output.write(label);
+          input.setRawMode(true);
+          input.on("data", onData);
+          input.on("error", onError);
+          input.on("end", onEnd);
+          input.resume();
+        } catch { finish(new TerminalInputFailure("终端读取启动失败")); }
       });
     },
   };
@@ -303,7 +374,7 @@ function terminalPrompt() {
 
 export async function runFromTerminal() {
   let success = false;
-  try { success = await runInteractiveStorage({ prompt: terminalPrompt() }); }
-  catch { console.error("交互验收启动失败：请核对测试 Worktree 与终端。成功前不会访问 Supabase。"); }
+  try { success = await runInteractiveStorage({ prompt: createTerminalPrompt() }); }
+  catch { console.error("交互验收启动失败：请核对测试 Worktree 与终端。未输出凭据。"); }
   if (!success) process.exitCode = 1;
 }
