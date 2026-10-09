@@ -58,7 +58,7 @@ Browser
 | API | 请求校验、认证、服务端配置边界 | Next.js AI Gateway 已实现；独立 FastAPI 服务 Planned |
 | Personal Agent | 组织任务、协调模型和工具 | Planned |
 | Models / Model Router | 调用云模型或本地模型 | OpenRouter、OpenAI、DeepSeek、Gemini、Ollama 显式选择与规则 Auto Router 已实现；OpenRouter 上游真实调用已阶段性验收，智能模型评估/质量路由 Planned |
-| Memory / RAG | 个人记忆与知识检索 | Manual Memory CRUD/RLS、确定性服务端 Memory Retrieval 与上下文注入已实现；自动提取、Embedding、Semantic Search 与 Vector RAG Planned |
+| Memory / RAG | 个人记忆与知识检索 | Manual Memory CRUD/RLS、确定性服务端 Memory Retrieval 与上下文注入、用户确认的智能记忆候选已实现；Embedding、Semantic Search 与 Vector RAG Planned |
 | Tools | 可授权的外部与本地操作 | Planned |
 | Supabase | 数据持久化、身份与存储支持 | Auth 与 `public.memories` 的用户隔离手动 CRUD 已实现；`public.ai_daily_usage` 迁移待人工审查部署；其他业务存储 Planned |
 | Local Connector | 连接用户设备上的 Ollama、本地文件与受控命令执行 | Planned，仅目录占位；当前 Ollama 仅能由可访问其服务的 Next.js 服务端调用 |
@@ -69,7 +69,7 @@ Supabase 用于 Web 认证与 Personal Memory 存储。Memory API 使用现有 S
 
 **Implemented:** Authenticated User → Session-scoped Memory Retrieval → Safe Context → AI Gateway → Selected Provider。用户可以手动 CRUD 自己的记忆；Gateway 使用同一 authenticated SSR client 查询当前用户记录，额外按 claims 用户 ID 过滤，同时由 RLS 执行最终隔离。检索最多 8 条，优先高 importance、再优先较新记录，Context 有 4000 字符硬上限并受对话剩余输入预算约束。Memory 缺失时不注入上下文且正常聊天；数据库临时失败时 fail-soft 并返回 `memory.status = unavailable`。
 
-**Planned:** AI 自动提取 Memory、Embedding、Semantic Search、Vector Database、Vector RAG、记忆总结与衰减均未实现。当前确定性检索不是 RAG。
+**Planned:** 未经确认的自动保存、Embedding、Semantic Search、Vector Database、Vector RAG、记忆总结与衰减均未实现。智能记忆候选需要用户主动开启并确认保存；当前确定性检索不是 RAG。
 
 ## 配置边界
 
@@ -80,6 +80,8 @@ Supabase 用于 Web 认证与 Personal Memory 存储。Memory API 使用现有 S
 ## 调用保护边界
 
 - 所有 AI 调用要求 Supabase 登录，并保留请求体、消息数、单条/总输入、输出长度与超时限制。
+- Chat 与独立候选提取共用从请求入口起算的 27 秒 Deadline，两条 Route Handler 均声明 30 秒上限；各阶段共享剩余时间。显式 Provider 单次上限 25 秒，Auto 单次上限 12 秒，首候选为可用后继保留 4 秒，剩余不足 2 秒不启动云端调用。客户端取消与总 Deadline 通过 AbortSignal 传到健康检查、Memory 查询、云配额和 Provider。无法取消的底层 SDK 可能继续执行，但迟到结果不得写入响应。
+- AI 路由最多输出一条允许字段限定的阶段耗时日志；记录随机请求标识、阶段时长、Provider、尝试数、Memory 失败粗类别与安全错误码，不记录私密请求内容或身份凭据。Memory 可选查询维持 2 秒 fail-soft，Auth 失败仍单独拒绝。候选提取仅在当前 `qwen3:8b` 模型使用 `think:false`，普通聊天参数不变。
 - Auto 候选顺序固定为：可用 Ollama，然后按 OpenRouter、OpenAI、DeepSeek、Gemini；最多两次调用。仅 `PROVIDER_ERROR` 与 `TIMEOUT` 允许切换。
 - Auto 或显式云 Provider 请求会将当前登录用户的受限 Memory Context 交给最终调用的云服务；Privacy 只允许本地 Ollama。Memory 仍由当前 SSR Session 和 RLS 隔离，响应不返回完整内容，服务端不记录完整 Memory。
 - Privacy 偏好只调用已确认可用的 Ollama；没有本地模型时立即拒绝，不发送到云端。云端状态 `unknown` 仅表示没有做健康探测，不代表服务可用。
