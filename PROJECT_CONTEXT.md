@@ -62,7 +62,7 @@ Browser / Agent Workspace
 - 恢复：移除测试进程覆盖，Ollama `/api/tags` HTTP 200，`qwen3:8b` 仍存在；正常 Auto 再次选择 Ollama 并回复 `Auto Local 联调成功`。
 - 匿名 AI 接口：上一轮真实请求中 GET providers 与 POST chat 均返回 401 `AUTH_REQUIRED`。
 - 云端配额代码已添加，但 SQL 尚未执行；当前没有真实数据库并发或部署后的云调用验收，不将自动测试描述为已完成数据库原子性验收。
-- Dashboard 仍含明确的演示数据。Knowledge Base 上传、解析、列表和删除已接入代码；独立测试项目已完成人工部署及部分真实验收，生产部署状态尚未确认；知识检索未接入。Settings 部分为 UI 设置或占位。
+- Dashboard 仍含明确的演示数据。Knowledge Base 上传、解析、列表和删除已接入代码；独立测试项目已完成迁移、文件、隔离、并发和限额真实验收，生产迁移、受限连接与 Vercel 联调尚未完成；知识检索未接入。Settings 部分为 UI 设置或占位。
 
 ## 各 Provider 状态
 
@@ -161,6 +161,8 @@ Agent 输入交互任务：只修改 `web/components/agent-workspace.tsx` 的输
 
 ### 2026-10-09 Knowledge Base Task 1（`feat/knowledge-base-ingestion`）
 
+以下知识库条目按开发发生时间记录；其中“未执行”“待实测”等表述仅反映当时状态，当前结论以文末“独立测试项目最终验收”段为准。
+
 - 原 `/knowledge` 固定演示文档与禁用上传已替换为当前账号真实文件列表、浏览器直传、处理状态、删除与空/错误状态。只接受 PDF、UTF-8 TXT、Markdown，单文件最多 4 MiB；正文最多 200,000 字符、PDF 最多 50 页、片段最多 200 个。扫描/加密/无文字 PDF 不支持 OCR。
 - 迁移 `supabase/migrations/20261009120000_create_knowledge_base.sql` 定义 `public.knowledge_documents`、`public.knowledge_chunks`、两表 RLS、当前用户所有权及复合外键，以及私有 `knowledge-files` Bucket 的大小、MIME 和路径策略。后续静态安全审查发现：将 `complete_knowledge_document` 授权 authenticated 会允许绕过服务端解析。五个 SECURITY DEFINER 例程现已改置非 Data API 的 `knowledge_private` Schema，撤销 authenticated 权限，改由专用 `knowledge_writer_login` 服务端数据库角色执行；该角色需要维护者在迁移后单独创建并配置 `KNOWLEDGE_DB_URL`，不使用 service_role。迁移**未执行**；真实 Storage/RLS/角色权限和多账号隔离**未验收**。
 - Vercel Function 请求体上限当前官方文档为 4.5 MB，所以文件由浏览器凭当前 Supabase Session 直传 Storage，Next.js API 仅接收小型元数据和文档 ID。处理路由重新下载原件，校验真实字节、内容和格式，再解析 PDF 或文本并拆有序片段。原始文件不会传给 AI Gateway，也没有 Embedding/RAG。
@@ -194,7 +196,7 @@ Agent 输入交互任务：只修改 `web/components/agent-workspace.tsx` 的输
 ### 2026-10-10 Knowledge Base 交互式 Storage 安全验收准备（同分支）
 
 - 旧 `verify-knowledge-security.mjs` 无参数模式保留；新增 `--interactive-storage` 仅允许在 `PersonalAgent-KB-Test/web` 运行，固定独立测试项目 Ref `pxfaqcepztzqyqtmbdrf`，人工确认项目名称。脚本不读取原开发目录 `.env.local`，凭据在终端隐藏输入、仅存进程内；A/B 各需一份已主动确认可丢弃的 `kb-isolation-test-` ready 文件。双向 Storage 下载/删除后由所有者复查字节大小及 SHA-256；跨账号上传使用本轮一次性 B uploading 文档，受限写入角色仅执行知识库标记/完成删除例程进行清理。清理失败报告对象 ID 并以非零状态退出。
-- 上述记录是当时的脚本开发状态。后续用户已在独立测试项目 `personal-agent-quota-test` 确认 TXT、Markdown、PDF 真实上传，A/B API 与 Storage 双向越权隔离，以及 Storage 一次性夹具清理均通过；不代表生产部署或数据库并发/额度验收通过。
+- 上述记录是当时的脚本开发状态。后续用户已在独立测试项目 `personal-agent-quota-test` 确认 TXT、Markdown、PDF 真实上传，A/B API 与 Storage 双向越权隔离，以及 Storage 一次性夹具清理均通过；并发与额度验收的最终结果见下方当前里程碑。
 
 ### 2026-10-10 Knowledge Base 数据库并发验收脚本加固（同分支）
 
@@ -203,6 +205,13 @@ Agent 输入交互任务：只修改 `web/components/agent-workspace.tsx` 的输
 - 两条受限连接与仅隔离项目的 `postgres` 夹具连接均限定同一测试项目 Transaction Pooler `:6543`、独立 CA 和严格 TLS。原有双连接争领、过期代次、删除竞态、原件缺失、每小时上传/处理、100 文档及 100 MiB 声明容量断言保留。新增 13 项 fake 测试；全量 Vitest 25 文件、259/259 通过，lint、TypeScript 与 production build 通过。**真实并发验收本轮未执行，生产部署未确认**。运行和中断恢复步骤见 `docs/development.md`。
 - 后续独立 Worktree 启动 `--preflight` 时发现 ESM 链接错误：入口导入了辅助模块未再导出的 `PROJECT_NAME`、`PROJECT_REF`。现从既有测试项目常量重新导出，并新增三种入口模式的离线 Node.js ESM 链接测试；测试在开发 Worktree 保护处退出，不读取凭据或连接数据库。真实 `--preflight` 仍待人工重试。
 - 用户后续已修正旧 A/B 环境变量名称并用独立只读检查确认 C/D Auth、Writer/Admin TLS 连接成功，但完整 `--preflight` 返回 `UNKNOWN_FAILURE`。脚本原来在运行清单创建前统一显示阶段 `preflight`，多种原始 SQL/网络异常被合并为未知。现将预检拆成逐项只读阶段，失败仅报告当前阶段、最后成功阶段、安全分类和代码；文档/片段、Storage、事件分别查询。新增 13 项 fake 测试，全量 Vitest 26 文件、276/276 通过，lint、typecheck、production build 通过。真实根因仍待人工在独立测试 Worktree 重跑只读预检定位，本轮未连接数据库或执行真实预检。
+
+### 2026-10-10 Knowledge Base 独立测试项目最终验收（当前状态）
+
+- 独立测试项目 `personal-agent-quota-test`（Ref `pxfaqcepztzqyqtmbdrf`）已执行并验证知识库迁移和受限角色。TXT、Markdown、PDF 的真实上传与解析通过；A/B 双账号 API、RLS、Storage 隔离及跨账号下载、删除、上传拒绝通过。
+- C/D 专用空白账号的 PostgreSQL 只读预检全部 PASS；真实双连接争领、过期 generation、处理与删除竞态、原件缺失拒绝领取通过。每用户 100 文档、100 MiB 声明容量、每 UTC 小时 20 次上传初始化及 60 次处理领取限制通过。100 MiB 测试只验证数据库声明容量，并未实际上传 100 MiB 文件。
+- Run ID `ad0ef8cd-f98e-4a79-9f85-3b53816f9788` 的登记文档及 Storage 对象已清理并经 `--inspect-run` 只读复核；上传与处理事件行保留供审计。此前 `UNKNOWN_FAILURE` 和“并发未运行”是历史状态，不代表当前验收失败。
+- 生产 Supabase 知识库迁移、`knowledge_writer_login` 及受限连接配置、生产 Vercel 知识库联调仍未完成；部分失败恢复与异常场景尚待完整人工验收。独立测试项目通过不代表生产上线。知识库目前只实现文件接入与片段保存，未实现 Embedding、向量检索或 RAG；PR 与 Merge 亦未完成。
 
 ## 本地运行和复测
 

@@ -20,13 +20,14 @@
 - Memory Context 作为服务端 system/developer instruction 参数传给 Provider；明确将保存内容视为不可信数据，禁止其覆盖系统、安全、认证、隐私或路由规则。Memory 查询失败时不记录原始错误或内容，聊天可继续且 metadata 显示 unavailable；认证失败仍返回 AUTH_REQUIRED。
 - Agent Timeline 展示 Received、Validating、Retrieving Memory、Routing、Generating、Completed；响应仅返回 memory status/count，不返回 Memory 内容或数据库标识。
 - 缺少或无效的公开配置时不创建客户端，认证页显示提示，受保护页面跳转登录；无开发绕过入口。
-- Dashboard 仍展示演示数据；`/memory` 使用真实 Supabase 数据。`/knowledge` 的文件上传、元数据和有序正文片段已接入代码，数据库与 Storage migration 仍待人工部署和真实验收。Agent 页面是真实 Chat UI，但不执行 Agent Planning 或工具。
+- Dashboard 仍展示演示数据；`/memory` 使用真实 Supabase 数据。`/knowledge` 的文件上传、元数据和有序正文片段已接入代码，并在独立测试项目通过真实验收；生产迁移、受限连接和 Vercel 联调尚未完成。Agent 页面是真实 Chat UI，但不执行 Agent Planning 或工具。
 - Personal Context Layer 当前实现：Authenticated User → Personal Memory UI → Next.js Memory API → Supabase SSR Session → `public.memories` → RLS。API 从已验证 claims 获取用户 ID；请求不接受客户端指定 `user_id`；数据库仅授予 authenticated 必需的 SELECT、受限列 INSERT/UPDATE 与 DELETE 权限。
 - Memory API 提供 `GET/POST /api/memories` 和 `GET/PATCH/DELETE /api/memories/[id]`，强制 private/no-store 响应。SQL 约束类别、重要度和内容长度；POST 省略 `source`，由数据库 `DEFAULT 'manual'` 填充；更新时间由 trigger 维护。
 - 记忆所有权由 SELECT、INSERT、UPDATE、DELETE 四条 authenticated RLS policy 保障。按用户过滤是额外防护，不替代 RLS；跨用户单条访问以 404 安全失败。
 - 知识库路径：Browser 以当前登录态直传私有 `knowledge-files` Bucket → 认证的 `POST /api/knowledge/[id]/process` 读取并校验原件 → 私有数据库例程提交 `public.knowledge_documents` 与 `public.knowledge_chunks`。初始化和列表由 `GET/POST /api/knowledge` 提供，删除由 `DELETE /api/knowledge/[id]` 提供。服务端从 `getClaims()` 获得用户 ID，不接受客户端所有权或 Storage 路径。文件请求不经过 Vercel Function；处理函数只收文档 ID。
-- 两张知识库表均启用 RLS，普通角色只能插入自己的待上传元数据和读取自己的记录。五个 SECURITY DEFINER 状态例程位于未暴露的 `knowledge_private` Schema，authenticated 无 EXECUTE 权限；仅独立的 `knowledge_writer_login` 服务端数据库角色继承执行权限。Next.js 先验证用户 claims，再把该用户 ID 传给函数；函数按 `(user_id,document_id)` 与 processing generation 检查。此登录凭据虽无知识库表直接权限，仍需审计其他对象对 `PUBLIC` 的权限。Storage 的 INSERT/SELECT/DELETE policy 限制当前用户记录的生成路径，Bucket private，限 4 MiB 和三种 MIME。迁移与角色尚未在真实 Supabase 验收。
+- 两张知识库表均启用 RLS，普通角色只能插入自己的待上传元数据和读取自己的记录。五个 SECURITY DEFINER 状态例程位于未暴露的 `knowledge_private` Schema，authenticated 无 EXECUTE 权限；仅独立的 `knowledge_writer_login` 服务端数据库角色继承执行权限。Next.js 先验证用户 claims，再把该用户 ID 传给函数；函数按 `(user_id,document_id)` 与 processing generation 检查。此登录凭据虽无知识库表直接权限，仍需审计其他对象对 `PUBLIC` 的权限。Storage 的 INSERT/SELECT/DELETE policy 限制当前用户记录的生成路径，Bucket private，限 4 MiB 和三种 MIME。迁移、角色、RLS 和 Storage 隔离已在独立测试项目验收；生产环境尚未部署。
 - 插入 trigger 在同用户 advisory lock 下限制 100 个文档、100 MiB、每 UTC 小时 20 次初始化；领取处理时限制每小时 60 次。领取要求原始 Storage 对象存在，增加代次；完成/失败须匹配代次。删除使代次失效，Storage 成功删除后才删除元数据和片段。确定性解析失败尝试清理原件；临时失败保留原件并可重试。跨 Storage 与 PostgreSQL 没有单一原子事务，账号整体删除后的旧对象清理仍需独立运维方案。
+- 处理流程解析 PDF 文字层、UTF-8 TXT 和 Markdown 正文，再拆分有序片段；当前未实现 OCR、Embedding、向量检索或完整 RAG。独立测试项目已验证 TXT/Markdown/PDF 上传解析、A/B 双向隔离、双连接争领、过期代次、删除竞态及限额；100 MiB 只验证数据库声明容量，不代表上传了 100 MiB 文件。失败恢复的部分异常场景与生产 Vercel 联调仍待验收。
 - Migration 已由项目维护者在 Supabase 执行并确认 RLS 与四条 Policy。真实登录态使用最小列权限完成 GET 200、POST 201、PATCH 200 与 DELETE 204；响应中的 source 为 `manual`，更新时间 trigger 产生新时间。匿名五种 API 操作均返回 401 `AUTH_REQUIRED`。A/B 双账号的 AI Memory Context 隔离已有人工验收；跨账号单条 Memory API 访问的单独复测不与该结果混同。
 - 联调期间多次 PATCH 曾返回 503 `MEMORY_SERVICE_ERROR`，重试后 PATCH 返回 200；未观察到权限拒绝 403。该间歇性服务错误应在后续联调中继续留意。
 - `web/` 使用 TypeScript 与 Tailwind CSS，提供 lint、类型检查与生产构建脚本。
@@ -57,13 +58,13 @@ Browser
 
 | 组件 | 规划职责 | 当前状态 |
 | --- | --- | --- |
-| Browser / Web | 用户交互与结果展示 | Agent Chat 调用 Gateway；Personal Memory 为真实 CRUD；Dashboard 与 Knowledge UI 中部分示例仍为 Mock |
+| Browser / Web | 用户交互与结果展示 | Agent Chat 调用 Gateway；Personal Memory 为真实 CRUD；Dashboard 仍含演示数据；Knowledge 文件列表与上传为真实流程，待生产部署 |
 | API | 请求校验、认证、服务端配置边界 | Next.js AI Gateway 已实现；独立 FastAPI 服务 Planned |
 | Personal Agent | 组织任务、协调模型和工具 | Planned |
 | Models / Model Router | 调用云模型或本地模型 | OpenRouter、OpenAI、DeepSeek、Gemini、Ollama 显式选择与规则 Auto Router 已实现；OpenRouter 上游真实调用已阶段性验收，智能模型评估/质量路由 Planned |
 | Memory / RAG | 个人记忆与知识检索 | Manual Memory CRUD/RLS、确定性服务端 Memory Retrieval 与上下文注入、用户确认的智能记忆候选已实现；Embedding、Semantic Search 与 Vector RAG Planned |
 | Tools | 可授权的外部与本地操作 | Planned |
-| Supabase | 数据持久化、身份与存储支持 | Auth 与 `public.memories` 的用户隔离手动 CRUD 已实现；`public.ai_daily_usage` 迁移待人工审查部署；其他业务存储 Planned |
+| Supabase | 数据持久化、身份与存储支持 | Auth 与 `public.memories` 的用户隔离手动 CRUD 已实现；知识库表、私有 Storage 与受限角色已在独立测试项目验收，生产部署待完成；`public.ai_daily_usage` 迁移状态另行核实 |
 | Local Connector | 连接用户设备上的 Ollama、本地文件与受控命令执行 | Planned，仅目录占位；当前 Ollama 仅能由可访问其服务的 Next.js 服务端调用 |
 
 Supabase 用于 Web 认证与 Personal Memory 存储。Memory API 使用现有 SSR Server Client 和经验证的 claims，不建立第二套 Auth 或 service_role 通道。FastAPI 仍是未来高级 Agent / Python Tools / RAG 的规划，`server/` 保留占位。认证 Cookie 由官方 SDK 管理，不建立自研 Session 系统。`getSession()` 中未经验证的用户字段不用于服务端授权。
