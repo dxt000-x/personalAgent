@@ -4,6 +4,7 @@ import { createHash, randomUUID, X509Certificate } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { basename, normalize } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { TextDecoder } from "node:util";
 import pg from "pg";
 import { createClient } from "@supabase/supabase-js";
@@ -15,6 +16,9 @@ export const TEST_WEB_DIRECTORY = "D:\\龙虾\\Codex\\PersonalAgent-KB-Test\\web
 const BUCKET = "knowledge-files";
 const PREFIX = "kb-isolation-test-";
 const CONFIRM_FILES = "CONFIRM TEST FILES";
+const LOGIN_ATTEMPTS = 3;
+const LOGIN_TIMEOUT_MS = 12000;
+const LOGIN_BACKOFF_MS = [350, 900];
 
 class CheckFailure extends Error {
   constructor(message, source) {
@@ -30,11 +34,15 @@ const authCodes = new Set(["invalid_credentials", "invalid_api_key", "invalid_jw
 const networkCodes = new Set(["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "ENOTFOUND", "EAI_AGAIN",
   "UND_ERR_CONNECT_TIMEOUT", "CERT_HAS_EXPIRED", "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
   "ERR_TLS_CERT_ALTNAME_INVALID", "SELF_SIGNED_CERT_IN_CHAIN", "UNABLE_TO_GET_ISSUER_CERT_LOCALLY"]);
+const retryNetworkCodes = new Set(["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "ENOTFOUND",
+  "EAI_AGAIN", "UND_ERR_CONNECT_TIMEOUT"]);
+const tlsCertificateCodes = new Set(["CERT_HAS_EXPIRED", "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  "ERR_TLS_CERT_ALTNAME_INVALID", "SELF_SIGNED_CERT_IN_CHAIN", "UNABLE_TO_GET_ISSUER_CERT_LOCALLY"]);
 const fileCodes = new Set(["ENOENT", "EACCES", "EPERM", "EISDIR"]);
 const databaseCodes = new Set(["28P01", "28000", "42501", "08001", "08006", "3F000", "57P01"]);
 const storageCodes = new Set(["AccessDenied", "NoSuchKey", "InvalidJWT", "not_found", "PGRST116"]);
 class AuthFailure extends CheckFailure {
-  constructor(account, phase, error) {
+  constructor(account, phase, error, attempt = null) {
     super("测试账号认证失败");
     this.account = account;
     this.phase = phase;
@@ -43,14 +51,39 @@ class AuthFailure extends CheckFailure {
     this.authCode = authCodes.has(error?.code) ? error.code : null;
     this.networkCode = networkCodes.has(error?.cause?.code) ? error.cause.code :
       networkCodes.has(error?.code) ? error.code : null;
+    this.attempt = attempt;
+    this.retryable = this.status === null && !tlsCertificateCodes.has(this.networkCode) &&
+      (retryNetworkCodes.has(this.networkCode) || error?.name === "AuthRetryableFetchError" ||
+        error?.name === "AbortError" || error?.name === "TimeoutError");
     this.kind = this.authCode === "invalid_credentials" ? "账号或密码错误" :
       ["invalid_api_key", "invalid_jwt", "bad_jwt"].includes(this.authCode) ||
       (this.status === 401 && error?.message === "Invalid API key") ? "API Key 错误" :
-      this.networkCode || error?.name === "AuthRetryableFetchError" ? "网络失败" :
+      this.retryable ? "网络失败或超时" :
       "认证失败，原因待核实";
   }
 }
 const requireTrue = (condition, message, source) => { if (!condition) throw new CheckFailure(message, source); };
+
+// Both account clients use this same Node global fetch. With --use-env-proxy,
+// Node applies its startup proxy configuration; no custom dispatcher bypasses it.
+// Only password-token requests receive a deadline. Storage and database writes
+// are never retried by this wrapper.
+export function createAcceptanceFetch(fetcher = globalThis.fetch.bind(globalThis), timeoutMs = LOGIN_TIMEOUT_MS) {
+  return (input, init) => {
+    const url = new URL(input instanceof URL ? input.href : typeof input === "string" ? input : input.url);
+    requireTrue(url.origin === PROJECT_URL, "请求目标不是指定测试项目");
+    if (url.pathname === "/auth/v1/token" && url.searchParams.get("grant_type") === "password") {
+      const timeout = AbortSignal.timeout(timeoutMs);
+      const signal = init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
+      return fetcher(input, { ...init, signal });
+    }
+    return fetcher(input, init);
+  };
+}
+
+function authDiagnostic(error) {
+  return `账号: ${error.account}; 阶段: ${error.phase}; 尝试: ${error.attempt ?? "无"}/${LOGIN_ATTEMPTS}; 分类: ${error.kind}; HTTP: ${error.status ?? "无"}; Auth code: ${error.authCode ?? "无"}; Network code: ${error.networkCode ?? "无"}`;
+}
 
 export function assertTestWorktree(cwd, resolve = realpathSync.native) {
   const actual = normalize(resolve(cwd)).toLowerCase();
@@ -158,7 +191,7 @@ function fixtureDocument(data, userId) {
 export async function runInteractiveStorage({
   prompt, report = console.log, cwd = process.cwd(), resolvePath = realpathSync.native,
   createSupabase = createClient, createWriter = (config) => new pg.Client(config),
-  readCertificate = readFile,
+  readCertificate = readFile, acceptanceFetch = createAcceptanceFetch(), sleep = delay,
 }) {
   let writer;
   let ownerB;
@@ -186,9 +219,11 @@ export async function runInteractiveStorage({
     const key = validatePublishableKey(await prompt.ask("测试项目 publishable key：", true));
     const clientA = createSupabase(PROJECT_URL, key, {
       auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+      global: { fetch: acceptanceFetch },
     });
     const clientB = createSupabase(PROJECT_URL, key, {
       auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+      global: { fetch: acceptanceFetch },
     });
     const login = async (client, label) => {
       stage = `${label} 账号终端输入`;
@@ -196,10 +231,20 @@ export async function runInteractiveStorage({
       const password = await prompt.ask(`${label} 测试账号密码：`, true);
       requireTrue(email.length > 0 && password.length > 0, "账号或密码输入为空");
       stage = `${label} 账号登录`;
-      let signed;
-      try { signed = await client.auth.signInWithPassword({ email, password }); }
-      catch (error) { throw new AuthFailure(label, "signInWithPassword", error); }
-      if (signed.error) throw new AuthFailure(label, "signInWithPassword", signed.error);
+      for (let attempt = 1; attempt <= LOGIN_ATTEMPTS; attempt += 1) {
+        let failure;
+        try {
+          const signed = await client.auth.signInWithPassword({ email, password });
+          if (signed.error) failure = new AuthFailure(label, "signInWithPassword", signed.error, attempt);
+        } catch (error) { failure = new AuthFailure(label, "signInWithPassword", error, attempt); }
+        if (!failure) {
+          report(`账号: ${label}; 登录尝试: ${attempt}/${LOGIN_ATTEMPTS}; 结果: PASS`);
+          break;
+        }
+        report(authDiagnostic(failure));
+        if (!failure.retryable || attempt === LOGIN_ATTEMPTS) throw failure;
+        await sleep(LOGIN_BACKOFF_MS[attempt - 1]);
+      }
       stage = `${label} 账号身份验证`;
       let verified;
       try { verified = await client.auth.getUser(); }
@@ -314,7 +359,7 @@ export async function runInteractiveStorage({
   } catch (error) {
     report(`${stage}: FAIL`);
     if (error instanceof AuthFailure) {
-      report(`账号: ${error.account}; 阶段: ${error.phase}; 分类: ${error.kind}; HTTP: ${error.status ?? "无"}; Auth code: ${error.authCode ?? "无"}; Network code: ${error.networkCode ?? "无"}`);
+      if (error.phase !== "signInWithPassword") report(authDiagnostic(error));
     } else if (error instanceof TerminalInputFailure) {
       report("分类: 终端读取失败；请在交互终端重试");
     } else {

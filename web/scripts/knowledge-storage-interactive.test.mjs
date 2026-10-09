@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import tls from "node:tls";
 import {
   PROJECT_NAME, PROJECT_REF, PROJECT_URL, TEST_WEB_DIRECTORY,
-  assertTestWorktree, createTerminalPrompt, runInteractiveStorage, validateCaPem,
+  assertTestWorktree, createAcceptanceFetch, createTerminalPrompt, runInteractiveStorage, validateCaPem,
   validatePublishableKey, validateWriterConnection,
 } from "./knowledge-storage-interactive.mjs";
 
@@ -19,6 +19,7 @@ function harness(options = {}) {
   const objects = new Map();
   const events = [];
   const reports = [];
+  const clientFetches = [];
   const prompts = [PROJECT_NAME, "sb_publishable_fake-test-only", "a@test.invalid", "fake-a-password",
     "b@test.invalid", "fake-b-password", "CONFIRM TEST FILES", writerUrl, "D:\\codex\\temp\\test-ca.pem"];
   for (const [id, userId, label] of [[docA, userA, "A"], [docB, userB, "B"]]) {
@@ -34,6 +35,12 @@ function harness(options = {}) {
         events.push(`login:${actor}`);
         expect(email).toMatch(/@test\.invalid$/u);
         expect(password).toMatch(/^fake-/u);
+        const sequence = actor === userA ? options.authSequenceA : options.authSequenceB;
+        if (sequence?.length) {
+          const outcome = sequence.shift();
+          if (outcome instanceof Error) throw outcome;
+          return { error: outcome };
+        }
         if (actor === userA && options.authError) return { error: options.authError };
         if (actor === userA && options.authThrow) throw options.authThrow;
         if (actor === userB && options.authErrorB) return { error: options.authErrorB };
@@ -64,6 +71,7 @@ function harness(options = {}) {
           events.push(`download:${actor}:${path}`);
           const owner = documents.get(path.split("/")[1])?.user_id;
           const bytes = objects.get(path);
+          if (actor !== owner && options.failCrossDownload) return { error: { status: 500 } };
           if (!bytes || (actor !== owner && !options.allowCrossDownload)) return { error: { status: 404 } };
           return { data: new Blob([bytes]), error: null };
         },
@@ -95,6 +103,8 @@ function harness(options = {}) {
     expect(key).toBe("sb_publishable_fake-test-only");
     expect(config.auth.persistSession).toBe(false);
     expect(config.auth.autoRefreshToken).toBe(false);
+    expect(config.global.fetch).toBeTypeOf("function");
+    clientFetches.push(config.global.fetch);
     return clients[nextClient++];
   };
   const createWriter = (config) => {
@@ -126,15 +136,17 @@ function harness(options = {}) {
       end: async () => { events.push("writer-end"); },
     };
   };
-  const prompt = { ask: async (_label, hidden) => {
+  const prompt = { ask: async (label, hidden) => {
     events.push(hidden ? "hidden-prompt" : "visible-prompt");
+    events.push(`prompt:${label}`);
     return prompts.shift();
   } };
   return {
-    documents, objects, events, reports, prompts,
+    documents, objects, events, reports, prompts, clientFetches,
     run: () => runInteractiveStorage({ prompt, report: (message) => reports.push(message),
       cwd: TEST_WEB_DIRECTORY, resolvePath: (value) => value,
-      createSupabase, createWriter, readCertificate: async () => {
+      createSupabase, createWriter, sleep: async (ms) => { events.push(`backoff:${ms}`); },
+      readCertificate: async () => {
         if (options.failCaRead) throw options.failCaRead;
         return options.invalidCa ? "not a PEM certificate" : ca;
       } }),
@@ -142,6 +154,89 @@ function harness(options = {}) {
 }
 
 describe("interactive Storage acceptance safeguards", () => {
+  it("puts a deadline only on password-token fetch and keeps the supplied fetch transport", async () => {
+    const calls = [];
+    const fetcher = async (input, init) => {
+      calls.push({ input, init });
+      return { ok: true };
+    };
+    const wrapped = createAcceptanceFetch(fetcher, 1000);
+    await wrapped(`${PROJECT_URL}/auth/v1/token?grant_type=password`, { method: "POST" });
+    await wrapped(`${PROJECT_URL}/storage/v1/object/knowledge-files/example`, { method: "DELETE" });
+    expect(calls[0].init.signal).toBeInstanceOf(AbortSignal);
+    expect(calls[0].init.dispatcher).toBeUndefined();
+    expect(calls[1].init.signal).toBeUndefined();
+    expect(calls[1].init.dispatcher).toBeUndefined();
+    expect(() => wrapped("https://other.supabase.co/auth/v1/token?grant_type=password", {})).toThrow();
+  });
+
+  it("aborts a stalled password-token fetch at its deadline", async () => {
+    const fetcher = (_input, init) => new Promise((_resolve, reject) => {
+      init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+    });
+    await expect(createAcceptanceFetch(fetcher, 10)(
+      `${PROJECT_URL}/auth/v1/token?grant_type=password`, { method: "POST" },
+    )).rejects.toMatchObject({ name: "TimeoutError" });
+  });
+
+  it("retries a transient B login once, reuses its input, and keeps A/B on one fetch transport", async () => {
+    const h = harness({ authSequenceB: [{ name: "AuthRetryableFetchError", status: 0 }, null] });
+    expect(await h.run()).toBe(true);
+    expect(h.events.filter((event) => event === `login:${userA}`)).toHaveLength(1);
+    expect(h.events.filter((event) => event === `login:${userB}`)).toHaveLength(2);
+    expect(h.events.filter((event) => event === "prompt:B 测试账号密码：")).toHaveLength(1);
+    expect(h.events).toContain("backoff:350");
+    expect(h.clientFetches[0]).toBe(h.clientFetches[1]);
+    expect(h.reports.join(" ")).toContain("账号: B; 登录尝试: 2/3; 结果: PASS");
+  });
+
+  it("recovers from an A connection reset before logging into B", async () => {
+    const reset = Object.assign(new Error("fake-secret"), { code: "ECONNRESET" });
+    const h = harness({ authSequenceA: [reset, null] });
+    expect(await h.run()).toBe(true);
+    expect(h.events.filter((event) => event === `login:${userA}`)).toHaveLength(2);
+    expect(h.events.filter((event) => event === `login:${userB}`)).toHaveLength(1);
+    expect(h.reports.join(" ")).toContain("Network code: ECONNRESET");
+    expect(h.reports.join(" ")).not.toContain("fake-secret");
+  });
+
+  it("stops after three network failures without Storage writes or temporary objects", async () => {
+    const network = { name: "AuthRetryableFetchError", status: 0, message: "fake-secret" };
+    const h = harness({ authSequenceB: [network, network, network] });
+    expect(await h.run()).toBe(false);
+    expect(h.events.filter((event) => event === `login:${userB}`)).toHaveLength(3);
+    expect(h.events.filter((event) => event.startsWith("backoff:"))).toEqual(["backoff:350", "backoff:900"]);
+    expect(h.events.filter((event) => event === "prompt:B 测试账号密码：")).toHaveLength(1);
+    expect(h.events.some((event) => event.startsWith("remove:") || event.startsWith("upload:"))).toBe(false);
+    expect(h.reports).toContain("本轮未创建一次性测试对象，无需清理");
+    expect(h.reports.join(" ")).toContain("尝试: 3/3; 分类: 网络失败或超时");
+    expect(h.reports.join(" ")).not.toContain("fake-secret");
+  });
+
+  it("never applies the login retry policy to a failing Storage request", async () => {
+    const h = harness({ failCrossDownload: true });
+    expect(await h.run()).toBe(false);
+    expect(h.events.filter((event) => event === `login:${userA}` || event === `login:${userB}`)).toHaveLength(2);
+    expect(h.events.filter((event) => event === `download:${userA}:${userB}/${docB}/source.txt`)).toHaveLength(1);
+    expect(h.events.some((event) => event.startsWith("backoff:"))).toBe(false);
+    expect(h.events.some((event) => event.startsWith("remove:") || event.startsWith("upload:"))).toBe(false);
+  });
+
+  it.each([
+    { status: 400, code: "invalid_credentials" },
+    { status: 401, code: "invalid_api_key" },
+    { status: 403, code: "unexpected_failure" },
+    { status: 429, code: "over_request_rate_limit" },
+    { status: 500, name: "AuthRetryableFetchError" },
+    { code: "CERT_HAS_EXPIRED", name: "Error" },
+  ])("does not retry HTTP auth responses or certificate failures", async (authError) => {
+    const h = harness({ authErrorB: { ...authError, message: "fake-secret" } });
+    expect(await h.run()).toBe(false);
+    expect(h.events.filter((event) => event === `login:${userB}`)).toHaveLength(1);
+    expect(h.events.some((event) => event.startsWith("backoff:"))).toBe(false);
+    expect(h.events.some((event) => event.startsWith("remove:") || event.startsWith("upload:"))).toBe(false);
+  });
+
   it("preserves fragmented UTF-8 and bracketed Windows paste without echoing a hidden password", async () => {
     const input = new EventEmitter();
     input.isTTY = true;
