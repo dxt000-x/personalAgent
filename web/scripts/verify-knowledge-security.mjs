@@ -1,78 +1,171 @@
-// Run only against an isolated Supabase test project after its migration.
-// Two short-lived authenticated JWTs and existing A/B document fixtures are
-// required. This script does not log tokens or connection details.
+// Mutating checks for an isolated Supabase project only. Never log tokens,
+// connection details, or file bytes.
 import assert from "node:assert/strict";
+import pg from "pg";
 import { createClient } from "@supabase/supabase-js";
 
-assert.equal(process.env.KB_TEST_PROJECT_KIND, "isolated-test-project", "Isolated test project flag required");
-const required = ["KB_TEST_URL", "KB_TEST_PUBLISHABLE_KEY", "KB_TEST_JWT_A", "KB_TEST_JWT_B",
-  "KB_TEST_DOC_A", "KB_TEST_DOC_B", "KB_TEST_PENDING_DOC_A", "KB_TEST_USER_A_ID",
-  "KB_TEST_USER_B_ID", "KB_TEST_STORAGE_PATH_A", "KB_TEST_STORAGE_PATH_B"];
-for (const key of required) assert.ok(process.env[key], `Missing ${key}`);
+const e = process.env;
+assert.equal(e.KB_TEST_PROJECT_KIND, "isolated-test-project");
+for (const name of ["KB_TEST_PROJECT_REF", "KB_TEST_URL", "KB_TEST_PUBLISHABLE_KEY",
+  "KB_TEST_JWT_A", "KB_TEST_JWT_B", "KB_TEST_DOC_A", "KB_TEST_DOC_B",
+  "KB_TEST_PENDING_DOC_A", "KB_TEST_PENDING_DOC_B", "KB_TEST_USER_A_ID",
+  "KB_TEST_USER_B_ID", "KB_TEST_STORAGE_PATH_A", "KB_TEST_STORAGE_PATH_B",
+  "KB_TEST_CLEANUP_WRITER_URL", "KB_TEST_CA_CERT_BASE64"]) {
+  assert.ok(e[name], `Missing ${name}`);
+}
+assert.match(e.KB_TEST_PROJECT_REF, /^[a-z0-9]+$/u);
+function parseUrl(raw) {
+  try { return new URL(raw); }
+  catch { throw new Error("Invalid isolated test URL"); }
+}
+assert.equal(parseUrl(e.KB_TEST_URL).hostname, `${e.KB_TEST_PROJECT_REF}.supabase.co`);
+assert.notEqual(e.KB_TEST_USER_A_ID, e.KB_TEST_USER_B_ID);
+const ca = Buffer.from(e.KB_TEST_CA_CERT_BASE64, "base64").toString("utf8");
+assert.ok(ca.includes("-----BEGIN CERTIFICATE-----") && ca.includes("-----END CERTIFICATE-----"));
+const writerUrl = parseUrl(e.KB_TEST_CLEANUP_WRITER_URL);
+assert.equal(writerUrl.protocol, "postgresql:");
+assert.equal(writerUrl.port, "6543");
+assert.equal(writerUrl.pathname, "/postgres");
+assert.equal(writerUrl.search, "");
+assert.equal(writerUrl.hash, "");
+assert.match(writerUrl.hostname, /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.pooler\.supabase\.com$/u);
+assert.equal(decodeURIComponent(writerUrl.username), `knowledge_writer_login.${e.KB_TEST_PROJECT_REF}`);
+assert.ok(writerUrl.password);
 
-const url = process.env.KB_TEST_URL;
-const key = process.env.KB_TEST_PUBLISHABLE_KEY;
-const client = (jwt) => createClient(url, key, {
+const session = (jwt) => createClient(e.KB_TEST_URL, e.KB_TEST_PUBLISHABLE_KEY, {
   auth: { persistSession: false, autoRefreshToken: false },
   global: { headers: { Authorization: `Bearer ${jwt}` } },
 });
-const a = client(process.env.KB_TEST_JWT_A);
-const b = client(process.env.KB_TEST_JWT_B);
+const a = session(e.KB_TEST_JWT_A);
+const b = session(e.KB_TEST_JWT_B);
+const bucket = (client) => client.storage.from("knowledge-files");
+const pendingPath = `${e.KB_TEST_USER_B_ID}/${e.KB_TEST_PENDING_DOC_B}/source.txt`;
+let temporaryObjectExists = false;
 
-const operations = [
-  ["claim_knowledge_document", { p_document_id: process.env.KB_TEST_PENDING_DOC_A }],
-  ["complete_knowledge_document", { p_document_id: process.env.KB_TEST_PENDING_DOC_A,
-    p_generation: 1, p_chunks: ["unparsed client text"] }],
-  ["fail_knowledge_document", { p_document_id: process.env.KB_TEST_PENDING_DOC_A,
-    p_generation: 1, p_failure_kind: "temporary" }],
-  ["mark_knowledge_deleting", { p_document_id: process.env.KB_TEST_PENDING_DOC_A }],
-  ["finish_knowledge_deletion", { p_document_id: process.env.KB_TEST_PENDING_DOC_A }],
-];
+async function ownOriginal(client, path) {
+  const result = await bucket(client).download(path);
+  assert.ifError(result.error);
+  assert.ok(result.data && result.data.size > 0, "own original fixture is absent or empty");
+}
 
-for (const [name, args] of operations) {
-  for (const current of [a, b]) {
-    const publicResult = await current.rpc(name, args);
-    assert.ok(publicResult.error, `authenticated user unexpectedly executed public ${name}`);
-    const privateResult = await current.schema("knowledge_private").rpc(name, {
-      p_user_id: process.env.KB_TEST_USER_A_ID, ...args,
-    });
-    assert.ok(privateResult.error, `authenticated user unexpectedly executed private ${name}`);
+async function cleanupUnexpectedUpload() {
+  if (!temporaryObjectExists) return;
+  // A cannot remove B's object. A restricted writer changes only this pending
+  // fixture to deleting; B then removes its own object under Storage RLS.
+  const writer = new pg.Client({
+    host: writerUrl.hostname, port: 6543, database: "postgres",
+    user: decodeURIComponent(writerUrl.username), password: decodeURIComponent(writerUrl.password),
+    connectionTimeoutMillis: 5000, query_timeout: 15000,
+    ssl: { ca, servername: writerUrl.hostname, rejectUnauthorized: true },
+  });
+  try {
+    await writer.connect();
+    const marked = await writer.query(
+      "select knowledge_private.mark_knowledge_deleting($1::uuid,$2::uuid) as value",
+      [e.KB_TEST_USER_B_ID, e.KB_TEST_PENDING_DOC_B],
+    );
+    assert.equal(marked.rows[0]?.value, true);
+    assert.ifError((await bucket(b).remove([pendingPath])).error);
+    const finished = await writer.query(
+      "select knowledge_private.finish_knowledge_deletion($1::uuid,$2::uuid) as value",
+      [e.KB_TEST_USER_B_ID, e.KB_TEST_PENDING_DOC_B],
+    );
+    assert.equal(finished.rows[0]?.value, true);
+    assert.ok((await bucket(b).download(pendingPath)).error);
+    temporaryObjectExists = false;
+  } finally {
+    await writer.end().catch(() => undefined);
   }
 }
 
-for (const [current, ownId, otherId] of [
-  [a, process.env.KB_TEST_DOC_A, process.env.KB_TEST_DOC_B],
-  [b, process.env.KB_TEST_DOC_B, process.env.KB_TEST_DOC_A],
-]) {
-  const own = await current.from("knowledge_documents").select("id").eq("id", ownId);
-  assert.ifError(own.error);
-  assert.equal(own.data.length, 1, "own fixture not visible");
-  const other = await current.from("knowledge_documents").select("id").eq("id", otherId);
-  assert.ifError(other.error);
-  assert.equal(other.data.length, 0, "cross-user document visible");
-  const otherChunks = await current.from("knowledge_chunks").select("document_id")
-    .eq("document_id", otherId);
-  assert.ifError(otherChunks.error);
-  assert.equal(otherChunks.data.length, 0, "cross-user chunks visible");
+async function main() {
+  for (const [client, jwt, userId] of [
+    [a, e.KB_TEST_JWT_A, e.KB_TEST_USER_A_ID], [b, e.KB_TEST_JWT_B, e.KB_TEST_USER_B_ID],
+  ]) {
+    const identity = await client.auth.getUser(jwt);
+    assert.ifError(identity.error);
+    assert.equal(identity.data.user?.id, userId, "JWT identity does not match fixture");
+  }
+
+  // A negative cross-user check is meaningful only after the owner can read
+  // the exact document and nonempty Storage object named by the fixture.
+  for (const [client, ownId, otherId, ownPath] of [
+    [a, e.KB_TEST_DOC_A, e.KB_TEST_DOC_B, e.KB_TEST_STORAGE_PATH_A],
+    [b, e.KB_TEST_DOC_B, e.KB_TEST_DOC_A, e.KB_TEST_STORAGE_PATH_B],
+  ]) {
+    const own = await client.from("knowledge_documents").select("id,storage_path")
+      .eq("id", ownId).single();
+    assert.ifError(own.error);
+    assert.equal(own.data?.storage_path, ownPath, "original path differs from fixture");
+    await ownOriginal(client, ownPath);
+    const other = await client.from("knowledge_documents").select("id").eq("id", otherId);
+    assert.ifError(other.error);
+    assert.equal(other.data.length, 0, "cross-user document visible");
+    const chunks = await client.from("knowledge_chunks").select("document_id").eq("document_id", otherId);
+    assert.ifError(chunks.error);
+    assert.equal(chunks.data.length, 0, "cross-user chunks visible");
+  }
+  const pending = await b.from("knowledge_documents").select("id,storage_path,status")
+    .eq("id", e.KB_TEST_PENDING_DOC_B).single();
+  assert.ifError(pending.error);
+  assert.equal(pending.data?.status, "uploading");
+  assert.equal(pending.data?.storage_path, pendingPath);
+  assert.ok((await bucket(b).download(pendingPath)).error, "pending object already exists");
+  const pendingA = await a.from("knowledge_documents").select("id,status")
+    .eq("id", e.KB_TEST_PENDING_DOC_A).single();
+  assert.ifError(pendingA.error);
+  assert.equal(pendingA.data?.status, "uploading");
+
+  const operations = [
+    ["claim_knowledge_document", { p_document_id: e.KB_TEST_PENDING_DOC_A }],
+    ["complete_knowledge_document", { p_document_id: e.KB_TEST_PENDING_DOC_A,
+      p_generation: 1, p_chunks: ["unparsed client text"] }],
+    ["fail_knowledge_document", { p_document_id: e.KB_TEST_PENDING_DOC_A,
+      p_generation: 1, p_failure_kind: "temporary" }],
+    ["mark_knowledge_deleting", { p_document_id: e.KB_TEST_PENDING_DOC_A }],
+    ["finish_knowledge_deletion", { p_document_id: e.KB_TEST_PENDING_DOC_A }],
+  ];
+  for (const [name, args] of operations) {
+    for (const client of [a, b]) {
+      assert.ok((await client.rpc(name, args)).error, `public ${name} was callable`);
+      assert.ok((await client.schema("knowledge_private").rpc(name, {
+        p_user_id: e.KB_TEST_USER_A_ID, ...args,
+      })).error, `private ${name} was callable`);
+    }
+  }
+  for (const [client, path] of [[a, e.KB_TEST_STORAGE_PATH_B], [b, e.KB_TEST_STORAGE_PATH_A]]) {
+    assert.ok((await bucket(client).download(path)).error, "cross-user download succeeded");
+    const listed = await bucket(client).list(path.split("/")[0]);
+    assert.ok(listed.error || !listed.data?.some((item) => item.name === path.split("/")[1]),
+      "cross-user listing succeeded");
+  }
+
+  // Storage may report an empty successful remove for an invisible object.
+  // The owner's follow-up download proves the original survived.
+  await bucket(a).remove([e.KB_TEST_STORAGE_PATH_B]);
+  await ownOriginal(b, e.KB_TEST_STORAGE_PATH_B);
+
+  const upload = await bucket(a).upload(pendingPath, new TextEncoder().encode("isolated test"),
+    { contentType: "text/plain", upsert: false });
+  const observed = await bucket(b).download(pendingPath);
+  temporaryObjectExists = !upload.error || !observed.error;
+  assert.ok(upload.error && observed.error, "cross-user upload succeeded");
 }
 
-for (const [current, forbiddenPath] of [
-  [a, process.env.KB_TEST_STORAGE_PATH_B],
-  [b, process.env.KB_TEST_STORAGE_PATH_A],
-]) {
-  const download = await current.storage.from("knowledge-files").download(forbiddenPath);
-  assert.ok(download.error, "cross-user Storage download unexpectedly succeeded");
-  const list = await current.storage.from("knowledge-files").list(forbiddenPath.split("/")[0]);
-  assert.ok(list.error || !list.data?.some((item) => item.name === forbiddenPath.split("/")[1]),
-    "cross-user Storage listing unexpectedly succeeded");
+let passed = false;
+try {
+  await main();
+  passed = true;
+} catch {
+  console.error("Knowledge security check failed; inspect isolated fixture policies.");
+  process.exitCode = 1;
+} finally {
+  try { await cleanupUnexpectedUpload(); }
+  catch {
+    console.error("Temporary object cleanup failed; inspect isolated project before reuse.");
+    process.exitCode = 1;
+  }
 }
-
-const forbiddenUploadPath = `${process.env.KB_TEST_USER_B_ID}/00000000-0000-4000-8000-000000000000/source.txt`;
-const forbiddenUpload = await a.storage.from("knowledge-files").upload(forbiddenUploadPath,
-  new TextEncoder().encode("isolated test"), { contentType: "text/plain", upsert: false });
-if (!forbiddenUpload.error) {
-  await a.storage.from("knowledge-files").remove([forbiddenUploadPath]);
-  assert.fail("cross-user Storage upload unexpectedly succeeded; inspect residual test object");
+if (passed && !process.exitCode) {
+  console.log("Knowledge direct-RPC and A/B Storage isolation checks passed in isolated test project.");
 }
-
-console.log("Knowledge direct-RPC denial and A/B RLS checks passed in isolated test project.");

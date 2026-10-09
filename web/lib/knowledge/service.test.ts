@@ -127,6 +127,40 @@ describe("knowledge ingestion and cleanup", () => {
     expect(repo.documents.get(id)?.status).toBe("failed");
     expect(repo.objects.size).toBe(0);
   });
+  it("classifies an all-whitespace original as an invalid file and removes it", async () => {
+    const repo = new FakeRepository();
+    const doc = repo.documents.get(id)!;
+    const whitespace = new TextEncoder().encode("  \n \t ");
+    doc.byte_size = whitespace.length;
+    repo.objects.set(doc.storage_path, whitespace);
+    await expect(processKnowledgeDocument(repo, userA, id)).rejects.toMatchObject({ code: "EMPTY_FILE" });
+    expect(doc.status).toBe("failed");
+    expect(doc.failure_kind).toBe("invalid_file");
+    expect(repo.objects.has(doc.storage_path)).toBe(false);
+    await expect(processKnowledgeDocument(repo, userA, id)).rejects.toMatchObject({ code: "DOCUMENT_BUSY" });
+  });
+  it("classifies an oversized original as an invalid file and removes it", async () => {
+    const repo = new FakeRepository();
+    const doc = repo.documents.get(id)!;
+    const oversized = new Uint8Array(4 * 1024 * 1024 + 1);
+    doc.byte_size = oversized.length;
+    repo.objects.set(doc.storage_path, oversized);
+    await expect(processKnowledgeDocument(repo, userA, id)).rejects.toMatchObject({ code: "FILE_TOO_LARGE" });
+    expect(doc.status).toBe("failed");
+    expect(doc.failure_kind).toBe("invalid_file");
+    expect(repo.objects.has(doc.storage_path)).toBe(false);
+  });
+  it("classifies invalid UTF-8 as an invalid file and removes it", async () => {
+    const repo = new FakeRepository();
+    const doc = repo.documents.get(id)!;
+    const invalid = new Uint8Array([0xc3, 0x28]);
+    doc.byte_size = invalid.length;
+    repo.objects.set(doc.storage_path, invalid);
+    await expect(processKnowledgeDocument(repo, userA, id)).rejects.toMatchObject({ code: "INVALID_FILE_CONTENT" });
+    expect(doc.status).toBe("failed");
+    expect(doc.failure_kind).toBe("invalid_file");
+    expect(repo.objects.has(doc.storage_path)).toBe(false);
+  });
   it("marks a malformed PDF failed and cleans the original object", async () => {
     const repo = new FakeRepository();
     const doc = repo.documents.get(id)!;
@@ -136,6 +170,7 @@ describe("knowledge ingestion and cleanup", () => {
     repo.objects.set(doc.storage_path, badPdf);
     await expect(processKnowledgeDocument(repo, userA, id)).rejects.toMatchObject({ code: "PDF_PARSE_FAILED" });
     expect(doc.status).toBe("failed");
+    expect(doc.failure_kind).toBe("invalid_file");
     expect(repo.objects.has(doc.storage_path)).toBe(false);
   });
   it("preserves failed metadata for retryable deletion if cleanup Storage fails", async () => {

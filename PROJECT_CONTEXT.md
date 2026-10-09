@@ -179,6 +179,12 @@ Agent 输入交互任务：只修改 `web/components/agent-workspace.tsx` 的输
 - Next.js 受限连接限定 Supabase Shared Transaction Pooler `:6543`、自定义角色项目后缀、独立 CA 与 TLS 证书/主机名校验；模块级连接池仍最多 2 个/温实例，连接超时 5 秒、查询超时 10 秒。生产环境变量未查看或修改，Vercel Fluid Compute、真实连接数和证书联调待核实。
 - 新增隔离项目数据库并发脚本：两条独立受限 PostgreSQL 连接加隔离项目夹具连接，计划验证领取竞争、过期代次、删除并发、Storage 缺失、100 文档/100 MiB、UTC 小时上传与处理限额。测试脚本会写入隔离项目并尝试清理，**未运行**；须人工批准后执行。用户 ID 仍仅来自服务端 `getClaims().claims.sub`，所有私有例程调用均传该值；上传初始化中的 `user_id` 额外字段被拒绝，处理/删除请求中的同名字段不会覆盖授权身份。自动测试新增身份传递断言。本轮本地 Vitest 为 20 文件、199/199 通过；lint、typecheck、production build 通过。
 
+### 2026-10-09 Knowledge Base 验收脚本可靠性补强（同分支）
+
+- 隔离项目安全脚本改为先通过 Auth 确认 A/B 身份，并验证各自元数据与原始文件确实可下载，再对真实原件验证跨账号下载/删除边界；A 上传拒绝使用 B 的真实待上传 TXT 文档路径。异常放行的临时对象由受限写入角色切换状态、B 本人删除，失败时只输出固定提示。脚本所需变量与清理方式见 `docs/development.md`。
+- 隔离项目并发脚本在写入前校验 A/B JWT 身份，异常允许的限额插入也追踪为清理夹具；数据库错误和清理异常不输出原始连接错误或敏感内容。`parse.ts` 的四类明确错误码均已在 `service.ts` 列为不可重试；补充空正文、超限、非法 UTF-8 的服务层状态与清理测试。真实 Supabase 脚本仍**未运行、待人工批准后验收**。
+- 本轮本地自动化测试 20 文件、202/202 通过；lint、`npx tsc --noEmit` 与 production build 通过。未执行 Supabase SQL 或隔离项目验收脚本。
+
 ## 本地运行和复测
 
 在仓库根目录使用 Windows setup/start 脚本，或在 `web/` 执行：

@@ -17,13 +17,17 @@ for (const name of names) assert.ok(process.env[name], `Missing ${name}`);
 const e = process.env;
 const projectRef = e.KB_DB_TEST_PROJECT_REF;
 assert.match(projectRef, /^[a-z0-9]+$/u);
-assert.equal(new URL(e.KB_DB_TEST_URL).hostname, `${projectRef}.supabase.co`);
+function parseUrl(raw) {
+  try { return new URL(raw); }
+  catch { throw new Error("Invalid isolated test URL"); }
+}
+assert.equal(parseUrl(e.KB_DB_TEST_URL).hostname, `${projectRef}.supabase.co`);
 assert.notEqual(e.KB_DB_TEST_USER_A_ID, e.KB_DB_TEST_USER_B_ID);
 const ca = Buffer.from(e.KB_DB_TEST_CA_CERT_BASE64, "base64").toString("utf8");
 assert.ok(ca.includes("-----BEGIN CERTIFICATE-----") && ca.includes("-----END CERTIFICATE-----"));
 
 function databaseConfig(raw, role) {
-  const url = new URL(raw);
+  const url = parseUrl(raw);
   assert.equal(url.protocol, "postgresql:");
   assert.equal(url.port, "6543", "Use the shared Transaction Pooler");
   assert.equal(url.pathname, "/postgres");
@@ -54,7 +58,11 @@ const source = Buffer.from("isolated database concurrency fixture");
 
 async function connect(config) {
   const client = new Client(config);
-  await client.connect();
+  try { await client.connect(); }
+  catch {
+    await client.end().catch(() => undefined);
+    throw new Error("Isolated database connection failed");
+  }
   clients.push(client);
   return client;
 }
@@ -79,10 +87,14 @@ async function createDocument(client, userId, byteSize = 1, upload = false) {
   return item;
 }
 async function expectInsertError(client, userId, byteSize, expected) {
-  const { error } = await client.from("knowledge_documents").insert({
-    id: randomUUID(), user_id: userId, file_name: "limit.txt",
+  const id = randomUUID();
+  const { data, error } = await client.from("knowledge_documents").insert({
+    id, user_id: userId, file_name: "limit.txt",
     file_type: "txt", byte_size: byteSize,
-  });
+  }).select("id,storage_path").maybeSingle();
+  // If a limit unexpectedly allows the write, the new row still belongs to
+  // this run and must be included in fixture cleanup.
+  if (data) fixtures.push({ id, userId, path: data.storage_path, upload: false });
   assert.equal(error?.code, "P0001");
   assert.equal(error?.message, expected);
 }
@@ -129,10 +141,21 @@ async function documentCount(client) {
 }
 
 let admin, first, second;
+let passed = false;
+let cleanupFailed = false;
 try {
-  [admin, first, second] = await Promise.all([
-    connect(adminConfig), connect(writerConfig), connect(writerConfig),
-  ]);
+  // Verify both JWTs against this project's Auth server before any mutation.
+  for (const [sessionClient, jwt, expectedId] of [
+    [userA, e.KB_DB_TEST_JWT_A, e.KB_DB_TEST_USER_A_ID],
+    [userB, e.KB_DB_TEST_JWT_B, e.KB_DB_TEST_USER_B_ID],
+  ]) {
+    const verified = await sessionClient.auth.getUser(jwt);
+    assert.ifError(verified.error);
+    assert.equal(verified.data.user?.id, expectedId, "JWT identity does not match test fixture");
+  }
+  admin = await connect(adminConfig);
+  first = await connect(writerConfig);
+  second = await connect(writerConfig);
   assert.equal(await totalEventCount(admin, "knowledge_upload_events", e.KB_DB_TEST_USER_A_ID), 0,
     "Use a fresh test user A");
   assert.equal(await totalEventCount(admin, "knowledge_upload_events", e.KB_DB_TEST_USER_B_ID), 0,
@@ -168,10 +191,11 @@ try {
 
   const oldGeneration = await claim(first, e.KB_DB_TEST_USER_A_ID, stale.id);
   assert.equal(oldGeneration, 1);
-  await admin.query(
+  const expiry = await admin.query(
     "update public.knowledge_documents set updated_at=now()-interval '11 minutes' where id=$1 and user_id=$2 and status='processing'",
     [stale.id, e.KB_DB_TEST_USER_A_ID],
   );
+  assert.equal(expiry.rowCount, 1);
   const newGeneration = await claim(second, e.KB_DB_TEST_USER_A_ID, stale.id);
   assert.equal(newGeneration, 2);
   assert.equal(await complete(first, e.KB_DB_TEST_USER_A_ID, stale.id, oldGeneration), false);
@@ -227,7 +251,12 @@ try {
   }
   assert.equal(await claim(second, e.KB_DB_TEST_USER_A_ID, race.id), -2,
     "61st processing claim in a UTC hour must be rejected");
-  console.log("Isolated PostgreSQL claim, generation, delete, document, byte, and hourly limits passed.");
+  passed = true;
+} catch {
+  // Raw PostgreSQL/Supabase errors may contain connection details. Do not log
+  // the error object, URL, JWT, stack, or fixture document contents.
+  console.error("Isolated database concurrency check failed; inspect fixture state.");
+  process.exitCode = 1;
 } finally {
   // Best-effort cleanup; test-only admin SQL deletes only IDs created here.
   for (const item of fixtures.filter((entry) => entry.upload)) {
@@ -236,7 +265,9 @@ try {
       const owner = item.userId === e.KB_DB_TEST_USER_A_ID ? userA : userB;
       const result = await owner.storage.from("knowledge-files").remove([item.path]);
       if (result.error) throw result.error;
-    } catch { cleanupBlockedIds.add(item.id); }
+      const remaining = await owner.storage.from("knowledge-files").download(item.path);
+      if (!remaining.error) throw new Error("fixture object remains");
+    } catch { cleanupBlockedIds.add(item.id); cleanupFailed = true; }
   }
   if (admin && fixtures.length > 0) {
     try {
@@ -247,11 +278,17 @@ try {
       await admin.query("delete from knowledge_private.knowledge_process_events where user_id=any($1::uuid[])",
         [[e.KB_DB_TEST_USER_A_ID, e.KB_DB_TEST_USER_B_ID]]);
     } catch {
+      cleanupFailed = true;
       console.error("Fixture cleanup needs manual review in the isolated project.");
     }
   }
   if (cleanupBlockedIds.size > 0) {
     console.error("Some Storage fixture cleanup failed; inspect the isolated project before reuse.");
   }
-  await Promise.allSettled(clients.map((client) => client.end()));
+  const closed = await Promise.allSettled(clients.map((client) => client.end()));
+  if (closed.some((result) => result.status === "rejected")) cleanupFailed = true;
+}
+if (cleanupFailed) process.exitCode = 1;
+if (passed && !process.exitCode) {
+  console.log("Isolated PostgreSQL claim, generation, delete, document, byte, and hourly limits passed.");
 }
