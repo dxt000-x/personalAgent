@@ -201,6 +201,7 @@ Agent 输入交互任务：只修改 `web/components/agent-workspace.tsx` 的输
 - 数据库并发脚本改为固定项目 Ref `pxfaqcepztzqyqtmbdrf` 和独立测试 Worktree，显式 `--preflight`（只读）、`--execute`（需交互确认完整项目名）、`--inspect-run <Run-ID>`（只读恢复检查）。只允许全新 C/D 测试账号，两人知识库文档、片段、Storage 原件及上传/处理事件必须全部为空；不复用已验收的 A/B。
 - `--execute` 在每项写入前将精确文档 ID、路径、归属、阶段写入 Git 忽略的 `.kb-acceptance-runs` 清单；网络结果不确定时停止，保留清单供只读检查。清理只对本轮登记的精确对象执行，并复核用户、数据库角色与归属；不再按用户 ID 自动清空事件。上传/处理事件保留供审计。
 - 两条受限连接与仅隔离项目的 `postgres` 夹具连接均限定同一测试项目 Transaction Pooler `:6543`、独立 CA 和严格 TLS。原有双连接争领、过期代次、删除竞态、原件缺失、每小时上传/处理、100 文档及 100 MiB 声明容量断言保留。新增 13 项 fake 测试；全量 Vitest 25 文件、259/259 通过，lint、TypeScript 与 production build 通过。**真实并发验收本轮未执行，生产部署未确认**。运行和中断恢复步骤见 `docs/development.md`。
+- 后续独立 Worktree 启动 `--preflight` 时发现 ESM 链接错误：入口导入了辅助模块未再导出的 `PROJECT_NAME`、`PROJECT_REF`。现从既有测试项目常量重新导出，并新增三种入口模式的离线 Node.js ESM 链接测试；测试在开发 Worktree 保护处退出，不读取凭据或连接数据库。真实 `--preflight` 仍待人工重试。
 
 ## 本地运行和复测
 

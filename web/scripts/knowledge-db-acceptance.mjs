@@ -11,6 +11,7 @@ import {
   validateCaPem, validatePublishableKey,
 } from "./knowledge-storage-interactive.mjs";
 
+export { PROJECT_NAME, PROJECT_REF };
 export const RUN_DIRECTORY = ".kb-acceptance-runs";
 export const ESTIMATED_DOCUMENTS = 126;
 export const ESTIMATED_STORAGE_OBJECTS = 3;
