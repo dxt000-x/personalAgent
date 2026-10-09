@@ -8,10 +8,12 @@ import { memoryCategories } from "./types";
 type SupabaseClient = NonNullable<Awaited<ReturnType<typeof createClient>>>;
 
 const memoryQueryTimeoutMs = 2_000;
+type MemoryFailureKind = "timeout" | "database" | "network";
 
 export type RetrievedMemoryContext = {
   systemInstruction?: string;
   metadata: MemoryUsage;
+  diagnostic?: MemoryFailureKind;
 };
 
 /** Uses the authenticated user's SSR client so RLS remains the final ownership boundary. */
@@ -19,6 +21,7 @@ export async function retrievePersonalMemoryContext(
   supabase: SupabaseClient,
   userId: string,
   messages: ChatMessage[],
+  signal?: AbortSignal,
 ): Promise<RetrievedMemoryContext> {
   const conversationCharacters = messages.reduce((total, message) => total + message.content.length, 0);
   const availableCharacters = Math.min(
@@ -31,18 +34,33 @@ export async function retrievePersonalMemoryContext(
     return { metadata: { status: "omitted", used: false, count: 0 } };
   }
 
+  let querySignal: AbortSignal | undefined;
   try {
-    const { data, error } = await supabase
+    const activeSignal = signal
+      ? AbortSignal.any([signal, AbortSignal.timeout(memoryQueryTimeoutMs)])
+      : AbortSignal.timeout(memoryQueryTimeoutMs);
+    querySignal = activeSignal;
+    const query = supabase
       .from("memories")
       .select("content,category,importance")
       .eq("user_id", userId)
       .order("importance", { ascending: false })
       .order("created_at", { ascending: false })
       .limit(MAX_MEMORY_CONTEXT_ITEMS)
-      .abortSignal(AbortSignal.timeout(memoryQueryTimeoutMs));
+      .abortSignal(activeSignal);
+    // Bound this optional read even if a transport fails to settle after abort.
+    const { data, error } = await new Promise<Awaited<typeof query>>((resolve, reject) => {
+      const onAbort = () => reject(new Error("memory query timeout"));
+      activeSignal.addEventListener("abort", onAbort, { once: true });
+      query.then(
+        (result) => { activeSignal.removeEventListener("abort", onAbort); resolve(result); },
+        (failure) => { activeSignal.removeEventListener("abort", onAbort); reject(failure); },
+      );
+      if (activeSignal.aborted) onAbort();
+    });
 
     if (error || !Array.isArray(data)) {
-      return { metadata: { status: "unavailable", used: false, count: 0 } };
+      return { metadata: { status: "unavailable", used: false, count: 0 }, diagnostic: querySignal.aborted ? "timeout" : "database" };
     }
     if (data.length === 0) {
       return { metadata: { status: "none", used: false, count: 0 } };
@@ -79,6 +97,6 @@ export async function retrievePersonalMemoryContext(
     };
   } catch {
     // Memory is optional context; avoid logging row contents or raw Supabase errors.
-    return { metadata: { status: "unavailable", used: false, count: 0 } };
+    return { metadata: { status: "unavailable", used: false, count: 0 }, diagnostic: querySignal?.aborted ? "timeout" : "network" };
   }
 }

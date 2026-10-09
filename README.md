@@ -83,6 +83,14 @@ npm run start
 
 自动回归测试补充独立的真实 Provider 人工集成验收，不替代上游联调。Ollama、OpenRouter、Privacy、Auto 云切换与双用户 Memory 隔离已有阶段性人工验收；OpenAI、DeepSeek 和 Gemini 不因此视为已通过真实调用。
 
+### AI Gateway 超时与安全诊断
+
+`POST /api/ai/chat` 和 `POST /api/ai/memory-candidates` 都声明 `maxDuration = 30` 秒，并从请求开始实行 **27 秒整次请求 Deadline**，为响应收尾保留约 3 秒。显式 Provider 原有上限 25 秒、Auto 每候选原有上限 12 秒；每次尝试还受整次剩余时间限制。Auto 在有第二候选时尽量为其留出 4 秒，剩余少于 2 秒不启动新的云端调用。Ollama 健康检查仍限 1.5 秒，Personal Memory 查询仍限 2 秒。到期返回安全的 `TIMEOUT`；此时间预算并不保证上游本身会在限定时间内完成。
+
+服务端每个 AI 请求最多记录一条 `ai_gateway_request` 结构化日志：随机 requestId、接口、路由模式、实际尝试的 Provider、阶段耗时、尝试次数、Memory 失败类别与最终错误码。日志不记录消息、模型回复、Memory 内容、身份标识、Cookie、Token、Key 或完整 URL。用 `memoryFailureKind=timeout|database|network` 辅助排查 `memory.status=unavailable`；认证失败仍返回 401。底层 SDK 操作若无法取消，服务端会停止等待并拒绝迟到结果，但不能保证底层工作立即停止。
+
+`qwen3:8b` 的**记忆候选提取**请求使用经本地 `/api/show` 元数据确认支持的 Ollama `think: false`；普通聊天维持原有思考行为，其他模型不假定支持该参数。`openrouter/free` 会在可用免费模型中选路，具体模型与延迟可能变化；偶发 TIMEOUT 的上游根因仍需真实环境分阶段日志和故障注入验证。当前没有更换生产模型或调整线上环境变量。
+
 ### Windows 一键运行
 
 环境要求：Windows 10/11、Node.js LTS（至少满足 `web/package.json` 中的版本要求）、npm 和 Ollama。运行 `qwen3:8b` 建议准备 16 GB 内存，并为模型和依赖预留至少 10 GB 磁盘空间；实际速度取决于电脑配置。Ollama 在用户自己的电脑运行，本地模型推理不会产生云 API Token 费用。
@@ -146,7 +154,7 @@ OLLAMA_MODEL=qwen3:8b
 
 使用 Supabase 项目的 Project URL 和 publishable key。配置优先读取 `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`；未填写或仅含空白时兼容旧的 `NEXT_PUBLIC_SUPABASE_ANON_KEY`。两者同时存在时使用 publishable key。严禁把 service_role、secret key 或数据库密码填入这些公开变量。至少为希望使用的云 Provider 配置对应 Key；模型变量可覆盖集中默认值。OpenRouter 使用服务端 `OPENROUTER_API_KEY`，默认模型为 `openrouter/free`，不向浏览器返回 Key。Ollama 使用服务端变量 `OLLAMA_BASE_URL` 与 `OLLAMA_MODEL`，默认地址为 `http://127.0.0.1:11434`，默认模型为 `qwen3:8b`。本地推理不产生云 API Token 费用，但会占用本机计算资源。修改后重启开发服务；生产环境修改后需重新构建。根目录示例不会自动被 Web 加载。
 
-登录后可从同源页面调用 `GET /api/ai/providers` 查看配置与可用性，再向 `POST /api/ai/chat` 发送 `{"provider":"auto","routingPreference":"auto","messages":[{"role":"user","content":"你好"}]}`。也可明确设置 `provider` 为 `openrouter`、`openai`、`deepseek`、`gemini` 或 `ollama`。Auto 最多尝试两个 Provider，且只有上游错误或超时才会切换；鉴权、请求校验、限流错误不会切换。Privacy 偏好只允许已确认可用的 Ollama，无法使用时直接失败。显式选择 OpenRouter 或 Auto 路由到它时，当前用户的受限 Personal Memory Context 会随请求发送到云端；需要仅本地处理时选择 Privacy。请求最多 20 条消息、单条 4000 字符、总计 16000 字符、请求体 64 KiB。服务端对显式调用设置 25 秒超时、Auto 每个候选设置 12 秒超时，输出最多 1024 token。API 不接受系统角色消息，也不返回 Key。
+登录后可从同源页面调用 `GET /api/ai/providers` 查看配置与可用性，再向 `POST /api/ai/chat` 发送 `{"provider":"auto","routingPreference":"auto","messages":[{"role":"user","content":"你好"}]}`。也可明确设置 `provider` 为 `openrouter`、`openai`、`deepseek`、`gemini` 或 `ollama`。Auto 最多尝试两个 Provider，且只有上游错误或超时才会切换；鉴权、请求校验、限流错误不会切换。Privacy 偏好只允许已确认可用的 Ollama，无法使用时直接失败。显式选择 OpenRouter 或 Auto 路由到它时，当前用户的受限 Personal Memory Context 会随请求发送到云端；需要仅本地处理时选择 Privacy。请求最多 20 条消息、单条 4000 字符、总计 16000 字符、请求体 64 KiB。服务端对显式调用设置 25 秒超时、Auto 每个候选设置 12 秒超时，且两者均受整次 27 秒 Deadline 约束；输出最多 1024 token。API 不接受系统角色消息，也不返回 Key。
 
 使用 Ollama 时，需要让运行 Next.js 的服务器能访问 `OLLAMA_BASE_URL`。本地开发可在机器上运行 Ollama；部署到 Vercel 等云端时，`127.0.0.1` 指云端服务器自身，无法直接访问开发者电脑上的 Ollama。当前没有 Local Connector。
 

@@ -5,6 +5,7 @@ import type { ProviderId, ProviderStatus, RoutingPreference, RoutingReason } fro
 
 export type RouterInput = {
   preference: RoutingPreference;
+  signal?: AbortSignal;
 };
 
 export type ProviderCandidate = Pick<ProviderStatus, "id" | "type" | "configured" | "availability" | "model">;
@@ -23,7 +24,7 @@ function getStatus(statuses: ProviderStatus[], id: ProviderId) {
 }
 
 export async function getAutoRoute(input: RouterInput): Promise<RouterDecision[]> {
-  const statuses = await getProviderStatuses();
+  const statuses = await getProviderStatuses(input.signal);
   const preference = input.preference;
   const local = getStatus(statuses, "ollama");
 

@@ -12,7 +12,7 @@ type OllamaChatResponse = {
 
 export function createOllamaProvider(baseUrl: string, model: string): AIProvider {
   return {
-    async generate(messages, signal, systemInstruction) {
+    async generate(messages, signal, systemInstruction, options) {
       let response: Response;
       try {
         response = await fetch(`${baseUrl}/api/chat`, {
@@ -25,6 +25,7 @@ export function createOllamaProvider(baseUrl: string, model: string): AIProvider
               ...messages,
             ],
             stream: false,
+            ...(options?.disableThinking && model === "qwen3:8b" ? { think: false } : {}),
             options: { num_predict: MAX_OUTPUT_TOKENS },
           }),
           signal,
@@ -44,8 +45,11 @@ export function createOllamaProvider(baseUrl: string, model: string): AIProvider
       try {
         result = await response.json() as OllamaChatResponse;
       } catch {
+        if (signal.aborted) throw new AIGatewayError("TIMEOUT");
         throw new AIGatewayError("PROVIDER_ERROR");
       }
+
+      if (signal.aborted) throw new AIGatewayError("TIMEOUT");
 
       const text = typeof result.message?.content === "string" ? result.message.content.trim() : "";
       if (!text) throw new AIGatewayError("PROVIDER_ERROR");

@@ -86,7 +86,7 @@ Browser / Agent Workspace
 - Privacy 仅允许本地 Ollama；本地 unavailable 时返回 `PRIVACY_PROVIDER_UNAVAILABLE`，不调用云 Provider。显式云 Provider 与 privacy 组合被输入校验拒绝。
 - 请求体最多 64 KiB，最多 20 条 user/assistant 消息，单条 4000 字符，总计 16000 字符；最后一条必须是 user。
 - 输出最多 1024 token，并将返回文本截断到 12000 字符。
-- 显式调用超时 25 秒；Auto 每候选 12 秒；Ollama 健康检查 1.5 秒。使用 OpenAI SDK 的 Provider 将 `maxRetries` 设为 0；请求 AbortSignal 传入 Provider。
+- 两条 AI POST 路由各声明 30 秒执行上限，从请求入口实行 27 秒共享 Deadline；显式 Provider 单次上限 25 秒，Auto 每候选单次上限 12 秒且受总剩余时间约束。首个 Auto 候选尽量为第二候选留 4 秒，剩余不足 2 秒不新启云端调用；Ollama 健康检查 1.5 秒。使用 OpenAI SDK 的 Provider 将 `maxRetries` 设为 0；客户端/总截止 AbortSignal 传入可取消 I/O。
 - 错误码：AUTH_REQUIRED 401、INVALID_REQUEST 400（请求体超限可为 413）、PROVIDER_NOT_CONFIGURED 503、PRIVACY_PROVIDER_UNAVAILABLE 503、PROVIDER_ERROR 502、RATE_LIMITED 429、CLOUD_QUOTA_EXCEEDED 429、QUOTA_UNAVAILABLE 503、TIMEOUT 504。
 - 上游 429 映射 RATE_LIMITED；超时/中止映射 TIMEOUT；其余上游错误用固定 PROVIDER_ERROR。客户端不会收到 SDK stack 或原始错误。
 - 本次对错误映射和超时进行代码审查；未重新执行真实 429、强制超时或 SDK 故障注入，不能描述成这些故障场景均已实测。
@@ -128,7 +128,7 @@ Agent 输入交互任务：只修改 `web/components/agent-workspace.tsx` 的输
 必须由用户决定下一任务范围，以下仅为交接待办，不自动开始：
 
 1. 审查并部署云配额 SQL，在隔离测试 Supabase 项目完成真实并发、权限及 A/B 验收，再决定目标环境部署；不要把 fake RPC 测试视为数据库证明。配额仍不是 token/费用预算，更细的滥用保护待规划。
-2. 评估整个请求的时间预算：30 秒 Route 声明同时包含认证、Memory、健康检查和最多两次模型调用；当前只对各阶段设部分超时，没有完整端到端 deadline。现有回归测试覆盖单候选 TIMEOUT 与 fallback，但不模拟完整端到端 deadline。
+2. 整次请求 27 秒 Deadline 已在 `fix/ai-gateway-timeout` 实现并用 fake Provider 回归测试；目标 Vercel 实际函数限制、真实阶段耗时和间歇 TIMEOUT 的根因仍待人工验收。
 3. 跟踪 Gemini 项目权限；需要时配置并分别验收 OpenAI/DeepSeek，勿伪造成功结果。
 4. Memory 联调曾出现间歇 503；后续真实验收已继续通过，但没有持久性根因结论，出现时保留安全错误类别与阶段。
 5. README、architecture、development 的旧 OpenRouter 与双账号状态已按现有验收记录校准；在线 Vercel 当前部署是否包含本地 main 未在本次核对。
@@ -150,6 +150,14 @@ Agent 输入交互任务：只修改 `web/components/agent-workspace.tsx` 的输
 - 候选接口与 Chat API 都拒绝 `routingPreference=privacy` 搭配显式云 Provider；共享 Gateway 也加入同样的防御性检查。显式 Ollama 加 Privacy 仍为本地调用。页面从 Auto Privacy 切到显式 Provider 时提示偏好不生效，候选请求与聊天一样不发送 Auto 偏好。
 - 新聊天一开始就使上一轮候选提取失效；迟到的旧响应不能覆盖新候选。关闭建议、清空对话或组件会话切换同样使旧结果失效。已经点击确认的保存可在新一轮聊天开始后继续；账号组件切换前尚未发出的 Memory POST 会停止。
 - 明显的密码、Token、Key、邮箱和手机号增加有限规则过滤及测试。该规则不是完整敏感信息识别保证。新增 24 个回归用例后共 9 个测试文件、127 项测试；实际结果以本分支最终验证为准。
+
+### 2026-10-09 AI Gateway 超时治理（`fix/ai-gateway-timeout`）
+
+- 只读审计显示：原先单独的 25 秒显式/12 秒 Auto 尝试、1.5 秒健康检查及 2 秒 Memory 检索可与认证和配额等待叠加，虽声明 `maxDuration=30` 却没有整次预算。此设计有平台截止前来不及安全收尾、第二候选剩余时间不足的风险。没有真实请求逐阶段证据证明间歇 Ollama/OpenRouter TIMEOUT 或 Memory unavailable 的具体根因。
+- Chat 与候选接口现在各从入口创建 27 秒共享 Deadline；Auth、校验、Memory、健康探测、云配额、模型与候选去重共用预算。可取消调用接收 AbortSignal；新云端尝试至少要剩 2 秒且必须先取得配额，Auto 仍最多两候选，云 fallback 不重复计数。单个模型超时与总 Deadline 分开；无法取消的认证 SDK/底层传输在截止后可能继续，但迟到结果不会作为响应接受。已提交的配额预占仍按无退款策略计数。
+- 每条 AI 请求最多一条 `ai_gateway_request` 安全结构化日志，含随机 requestId、阶段耗时、实际尝试的 Provider、尝试数、Memory 失败粗分类与最终安全错误码，不含用户内容、身份或密钥。Memory 查询仍限 2 秒，底层请求不结束时可按原规则 fail-soft；Auth 失败仍是 401。粗分类无法单独证明数据库/代理根因。
+- 本地只读 `/api/show` 元数据确认 `qwen3:8b` 支持 `think:false`，故仅候选提取请求启用；普通聊天与其他模型保持原参数。`openrouter/free` 的实际模型选择与延迟可能变化；本分支没有更换生产模型或环境配置，也没有执行真实模型推理验收。
+- Vitest 从原有 127 项增至 13 个文件 145 项，覆盖共享 Deadline、显式/Auto/Privacy 超时、晚到候选、Memory 慢查询 fail-soft、Ollama 提取参数与安全错误映射。测试只用 fake Provider/fetch/Supabase；真实 Vercel 函数限制、上游 429/5xx/超时、Ollama 排队与 Memory 间歇 unavailable 仍待独立人工验证。
 
 ## 本地运行和复测
 

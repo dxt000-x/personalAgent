@@ -54,6 +54,17 @@ npm run typecheck
 
 `npm test` 使用 Vitest 单次运行并退出；`npm run test:watch` 是可选的开发模式。测试位于 `web/lib/ai/`、`web/app/api/ai/` 与 `web/components/`，使用 deterministic fake Provider、fake 配置与受控认证/Memory 替身。它们不访问真实云 Provider、Ollama 或 Supabase，不消耗 API 额度，也不依赖 `web/.env.local`。覆盖 Router 顺序与候选上限、Privacy 只在本地执行、显式 Provider 无 fallback、Auto 错误分类、输入边界、公开错误脱敏、Gateway Memory Context 与智能记忆候选/确认交互。
 
+超时回归还覆盖整次 Deadline、客户端取消、Ollama/OpenRouter 超时、Auto 剩余预算、Privacy 无云调用、配额只预占一次、Memory 读取超时 fail-soft、迟到候选丢弃及结构化日志脱敏。自动测试只用 fake Provider/fetch/数据库替身；它不能证明真实 Ollama 推理、OpenRouter 免费模型调度、Supabase 网络或 Vercel 函数上限。
+
+### AI 请求超时排查
+
+- 两条 AI POST 路由声明 `maxDuration=30` 秒，从入口起计 27 秒总 Deadline。显式模型单次上限 25 秒，Auto 单次上限 12 秒；实际允许时间取各自上限与剩余总预算较小者。首个 Auto 候选在有后继时预留 4 秒；新的云调用至少要剩 2 秒，且先取得云配额。健康检查 1.5 秒，Memory 查询 2 秒。配额 RPC 与可取消的 HTTP 调用接收同一总取消信号。认证 SDK 不暴露可取消接口；Deadline 可以停止等待，但无法保证该底层操作停止。云配额若在取消前已由数据库提交，按原有无退款策略计数。
+- 查找服务端 `event=ai_gateway_request` 日志中的随机 `requestId`、`endpoint`、`routingMode`、`provider`、`attemptNumber`、`authDurationMs`、`memoryDurationMs`、`routeDurationMs`、`quotaDurationMs`、`providerDurationMs`、`totalDurationMs`、`memoryFailureKind` 与 `finalErrorCode`。只输出实际经过的阶段；不含消息、回复、Memory、用户 ID、认证 Header、Secret 或完整 URL。请求被平台强制终止时可能没有最终日志。
+- `memoryFailureKind=timeout` 表示查询取消信号到期，`database` 表示返回错误或无效数据，`network` 表示抛出异常的非超时路径；这是安全的粗分类，不能单凭它确定 Supabase、代理或数据库的具体根因。认证失败仍是 `AUTH_REQUIRED`，Memory 失败按原逻辑 `unavailable` 继续聊天。Memory 查询超时不会自动放宽，底层传输若忽略取消可能仍继续处理只读查询。
+- `RATE_LIMITED` 对应已知上游 429；连接/响应取消对应 `TIMEOUT`；其他上游故障仍是安全的 `PROVIDER_ERROR`。使用 fake Provider 验证错误映射不等于真实上游故障注入。记录出现时间与阶段耗时后，在隔离环境逐一测试显式 Ollama、显式 OpenRouter、Auto 与 Memory，勿把间歇超时直接归咎于 GPU、免费模型或数据库。
+- OpenRouter `openrouter/free` 由可用免费模型动态选路，延迟可能随实际模型变化。若计划固定一个免费模型，先比较相同 Prompt 的多次响应时间、可用率、模型能力与配额，再审查配置变更；本任务没有改生产 `OPENROUTER_MODEL`。本地 `/api/show` 元数据确认当前 `qwen3:8b` 支持 `think:false`，因此仅短的候选提取使用该参数；普通聊天不改。不同模型 tag 不自动启用。
+- 人工验收仍需核对目标 Vercel 部署的函数限制与日志、Ollama 的排队和推理、OpenRouter 上游 429/5xx/超时、Memory 间歇 unavailable，以及 Privacy/配额边界。仓库声明的 30 秒不证明线上当前计划或部署设置；真实故障根因仍未定位。
+
 真实 Provider 与双用户 Memory 隔离仍保留独立人工集成验收记录。自动测试不会将 OpenAI、DeepSeek 或 Gemini 记作真实调用成功。
 
 ## 云端 AI 配额部署与验收

@@ -238,8 +238,8 @@ describe("opt-in memory candidate workflow", () => {
     expect(memoryWrites()).toHaveLength(0);
   });
 
-  it("does not block a successful reply when extraction fails or rerenders", async () => {
-    candidateResponse = Promise.resolve({ ok: false, json: async () => ({ error: { code: "PROVIDER_ERROR" } }) } as Response);
+  it("does not block a successful reply when extraction times out or rerenders", async () => {
+    candidateResponse = Promise.resolve({ ok: false, json: async () => ({ error: { code: "TIMEOUT" } }) } as Response);
     const input = await enableSuggestions();
     await sendMessage(input);
     expect(await screen.findByText("fake reply")).toBeTruthy();

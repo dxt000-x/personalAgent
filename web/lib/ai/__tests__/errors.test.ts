@@ -47,6 +47,7 @@ describe("public AI errors", () => {
   it("classifies upstream 429 and aborts without exposing raw errors", () => {
     const signal = new AbortController().signal;
     expect(providerFailure({ status: 429, message: "fake private header" }, signal).code).toBe("RATE_LIMITED");
+    expect(providerFailure({ status: 429, message: "fake private header" }, AbortSignal.abort()).code).toBe("RATE_LIMITED");
     expect(providerFailure({ name: "AbortError", message: "fake secret" }, signal).code).toBe("TIMEOUT");
     expect(providerFailure(new Error("fake secret"), signal).code).toBe("PROVIDER_ERROR");
     expect(providerFailure(new Error("fake secret"), AbortSignal.abort()).code).toBe("TIMEOUT");

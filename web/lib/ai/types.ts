@@ -50,5 +50,5 @@ export type ProviderStatus = {
 };
 
 export interface AIProvider {
-  generate(messages: ChatMessage[], signal: AbortSignal, systemInstruction?: string): Promise<AIChatResult>;
+  generate(messages: ChatMessage[], signal: AbortSignal, systemInstruction?: string, options?: { disableThinking?: boolean }): Promise<AIChatResult>;
 }

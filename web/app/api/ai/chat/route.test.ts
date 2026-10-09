@@ -71,6 +71,17 @@ describe("POST /api/ai/chat with fake providers", () => {
     for (const id of ids) expect(calls[id]).not.toHaveBeenCalled();
   });
 
+  it("does not treat failed claims verification as a Memory outage", async () => {
+    const client = await createClient();
+    if (!client) throw new Error("fake client missing");
+    vi.mocked(client.auth.getClaims).mockResolvedValue({ data: { claims: null }, error: new Error("fake auth failure") } as never);
+    const { response, body } = await responseFor();
+    expect(response.status).toBe(401);
+    expect(body.error.code).toBe("AUTH_REQUIRED");
+    expect(retrievePersonalMemoryContext).not.toHaveBeenCalled();
+    expect(getProvider).not.toHaveBeenCalled();
+  });
+
   it("rejects invalid input without calling a provider", async () => {
     const response = await POST(request("auto", "auto", []));
     expect(response.status).toBe(400);

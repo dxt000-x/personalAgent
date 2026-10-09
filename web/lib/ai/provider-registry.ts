@@ -48,13 +48,15 @@ function getProviderConfig(id: ProviderId) {
   };
 }
 
-async function isOllamaAvailable(baseUrl: string | undefined, model: string): Promise<boolean> {
+async function isOllamaAvailable(baseUrl: string | undefined, model: string, signal?: AbortSignal): Promise<boolean> {
   if (!baseUrl) return false;
   try {
     const response = await fetch(`${baseUrl}/api/tags`, {
       method: "GET",
       cache: "no-store",
-      signal: AbortSignal.timeout(OLLAMA_HEALTH_TIMEOUT_MS),
+      signal: signal
+        ? AbortSignal.any([signal, AbortSignal.timeout(OLLAMA_HEALTH_TIMEOUT_MS)])
+        : AbortSignal.timeout(OLLAMA_HEALTH_TIMEOUT_MS),
     });
     if (!response.ok) return false;
     const payload: unknown = await response.json();
@@ -69,7 +71,7 @@ async function isOllamaAvailable(baseUrl: string | undefined, model: string): Pr
   }
 }
 
-export async function getProviderStatuses(): Promise<ProviderStatus[]> {
+export async function getProviderStatuses(signal?: AbortSignal): Promise<ProviderStatus[]> {
   const ollamaBaseUrl = getOllamaBaseUrl();
   const statuses: ProviderStatus[] = providerIds.map((id) => {
     const { key, model } = getProviderConfig(id);
@@ -83,7 +85,7 @@ export async function getProviderStatuses(): Promise<ProviderStatus[]> {
     };
   });
   const ollamaModel = statuses.find(({ id }) => id === "ollama")?.model;
-  const ollamaAvailable = ollamaModel ? await isOllamaAvailable(ollamaBaseUrl, ollamaModel) : false;
+  const ollamaAvailable = ollamaModel ? await isOllamaAvailable(ollamaBaseUrl, ollamaModel, signal) : false;
   return statuses.map((status) => status.id === "ollama"
     ? { ...status, availability: ollamaAvailable ? "available" : "unavailable" }
     : status);
