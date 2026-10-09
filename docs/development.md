@@ -108,11 +108,30 @@ Dashboard 中的用户、任务与项目进度仍为演示示例。Knowledge Bas
 
 ## Knowledge Base 文件接入与验收
 
-迁移文件：[`supabase/migrations/20261009120000_create_knowledge_base.sql`](../supabase/migrations/20261009120000_create_knowledge_base.sql)。先在隔离 Supabase 项目人工审查并执行，再检查 `knowledge_documents` / `knowledge_chunks` 的 RLS、所有权策略、五个 RPC 仅 authenticated 可执行、`knowledge-files` Bucket 的 `public=false`、4 MiB 限制、MIME 限制及 Storage 三条所有权策略。确认后才考虑目标项目部署。本分支没有执行任何生产 SQL 或 Storage 设置；migration 同时创建 Bucket，无须另在控制台建立同名 Bucket。若已有同名 Bucket 但安全配置不符，migration 会回滚，需人工排查而非静默沿用。
+迁移文件：[`supabase/migrations/20261009120000_create_knowledge_base.sql`](../supabase/migrations/20261009120000_create_knowledge_base.sql)。先在隔离 Supabase 项目人工审查并执行，再核对 `knowledge_documents` / `knowledge_chunks` 的 RLS、Storage 所有权策略、私有 Bucket 限制、五个 `knowledge_private` 例程的 EXECUTE 权限与真实跨用户隔离。当前迁移**尚未执行**。它同时创建 Bucket；若已有同名 Bucket 但配置不符会回滚。迁移文件仍沿用首轮尚未部署的文件名；若某环境已执行旧版本，必须另写增量迁移，不能重复执行或假设当前版本已生效。
+
+**可信解析结果的权限边界：** Browser 与 SSR Supabase client 共用 authenticated JWT，所以任何授给 authenticated 的完成 RPC 都可被用户直接调用。现在五个 SECURITY DEFINER 例程均在非 Data API Schema `knowledge_private`，并撤销 PUBLIC、anon、authenticated 的 EXECUTE。迁移只创建 `knowledge_writer` NOLOGIN 权限组；维护者审查后在隔离项目手动创建独立 `knowledge_writer_login` 登录角色、设置独立强密码，并授予该组：
+
+```sql
+create role knowledge_writer_login with login password '<独立生成的强密码>';
+grant knowledge_writer to knowledge_writer_login;
+grant connect on database postgres to knowledge_writer_login;
+-- 在隔离项目核对：
+select has_function_privilege('authenticated', 'knowledge_private.complete_knowledge_document(uuid,uuid,integer,jsonb)', 'EXECUTE'); -- false
+select has_function_privilege('knowledge_writer_login', 'knowledge_private.complete_knowledge_document(uuid,uuid,integer,jsonb)', 'EXECUTE'); -- true
+```
+
+从 Supabase Connect 面板复制该自定义角色的 TLS 连接主机/端口，以角色 `knowledge_writer_login` 建立仅供 Next.js 服务端使用的 `KNOWLEDGE_DB_URL`。共享池用户名形式为 `knowledge_writer_login.<project-ref>`；凭据只进环境配置，不放进 Git，不打印 URL。应用显式拒绝 `postgres` 等其他用户名，并验证 TLS 证书。生产 Vercel 配置**本分支未修改**；没有此配置时处理/删除安全失败，不得上线宣称知识库可用。此方案不使用 `service_role`，但数据库自定义角色仍可能继承其他对象对 `PUBLIC` 的默认权限，部署前需单独审计数据库有效权限及凭据轮换流程；不能宣称它在整个数据库只有这五项权限。密钥泄露时攻击者可能调用私有例程并伪造用户参数，因此仅部署在可信服务端。
+
+状态机：`uploading` 只在 Storage 原件存在时可领取；`failed/temporary` 可由页面“重试处理”重新领取；确定性非法文件为 `failed/invalid_file`，只可删除并重新上传。领取在数据库行锁下返回递增 generation，10 分钟过期后可重领；旧 generation 的完成/失败均被拒绝。`deleting` 使代次失效，先删除 Storage，再确认对象不存在并级联删除文档/片段；删除失败保留记录供重试。非法文件清理失败保留 `failed` 元数据及原件供删除；临时失败保留原件。Storage/数据库间没有全局事务，孤儿对象巡检仍是运维事项。
+
+资源约束由数据库 trigger 执行，即使 authenticated 直接插入元数据也生效：每用户最多 100 个文档、累计声明大小 100 MiB、每 UTC 小时 20 次初始化（即使随后删除也计数）。领取处理另限每用户每 UTC 小时 60 次，单文件仍为 4 MiB。计数是请求防滥用边界，不是物理存储或成本结算保证；真实 Storage 字节仍由服务端处理时核对。
 
 [Vercel Function 请求体上限为 4.5 MB](https://vercel.com/docs/functions/limitations)，因此 `POST /api/knowledge` 只接收最多 4 KiB 的初始化 JSON，文件由浏览器的 Supabase 客户端直传私有 Bucket；4 MiB 也低于 [Supabase 标准上传建议的 6 MB 阈值](https://supabase.com/docs/guides/storage/uploads/standard-uploads)。Bucket MIME/大小、用户路径 RLS 是入口防线。服务端下载原件后再次核对大小、扩展名对应格式、PDF 头与解析结果、UTF-8 和明显二进制特征，拒绝空正文、超长正文、超过 50 页的 PDF 或超过 200 段的文档。PDF 使用 `pdfjs-dist` 提取文字；无 OCR。Markdown 作为原文保存，不执行 HTML。
 
-自动化测试使用内存中的假数据库、Storage 和客户端，不访问真实 Supabase。至少验收：登录 A 上传三种文件，列表/片段顺序、刷新、删除并确认 Storage 无对象；登录 B 不可列出、处理或删除 A 的文档，也不可通过 Supabase Storage SDK 下载 A 文件；匿名 API 返回 401；错误扩展名、超限、空文件、损坏/扫描 PDF、上传中断和重复删除均有安全结果。进一步通过只读 SQL 核验 chunk 数与 `storage.objects` 私有路径，并手动检查原件没有进入公开 URL。受控测试项目中模拟 Storage 删除失败后应留下 `deleting` 可重试记录；`processing` 被中断超过 10 分钟后可继续处理。真实 RLS、Storage 权限、函数时限与跨服务一致性尚待实测，不能由 fake 测试替代。
+自动化测试使用内存中的假数据库、Storage 和客户端；SQL 静态测试只约束迁移文本。它们不访问真实 Supabase，也不证明实际 GRANT、RLS、触发器并发或 Storage 事务。在**隔离测试项目**应用迁移并准备 A/B 两个测试账号、各自文档与 A 的未上传原件记录后，按 [`web/scripts/verify-knowledge-security.mjs`](../web/scripts/verify-knowledge-security.mjs) 注释设置 `KB_TEST_*` 进程变量，执行 `node scripts/verify-knowledge-security.mjs`。脚本拒绝非 `isolated-test-project` 标志，检查两账号直接调用五个公开/私有 RPC 均被拒绝，以及文档/片段跨用户不可见。所有测试凭据应是短期测试值，不得写入文档或提交。
+
+还需在同一隔离项目人工实测：A 仅初始化未上传原件，处理返回 `FILE_NOT_UPLOADED` 且不进入 `processing`；A/B 不能调用对方处理/删除 API 或下载原件；100 个文档、累计字节、UTC 小时边界和第 21 次初始化/第 61 次处理的拒绝；同时领取同一文档仅一项成功；将第一代次标记超时后第二次领取，第一代次完成被拒绝；处理时删除后旧代次不能提交；Storage 删除失败后重试；损坏文件残留清理。用 [`supabase/knowledge_base_readonly_review.sql`](../supabase/knowledge_base_readonly_review.sql) 核对函数 schema、`prosecdef`、EXECUTE、表 RLS、Bucket private 和 Storage policy。达到 100 文档或小时边界的测试可能需要隔离项目预置测试数据或跨多个小时执行；不可通过修改生产数据验证。未执行这些真实测试前一律标为**待实测**，不得把 mock 通过写成 Supabase 安全验收通过。
 
 ## Personal Memory 数据安全
 

@@ -15,12 +15,15 @@ class FakeRepository implements KnowledgeRepository {
   failRead = false;
   failRemove = false;
   failComplete = false;
+  staleProcessing = false;
+  rateLimited = false;
   removed = 0;
 
   constructor() {
     const doc: KnowledgeDocument = {
       id, user_id: userA, file_name: "notes.txt", file_type: "txt", byte_size: text.length,
-      storage_path: `${userA}/${id}/source.txt`, status: "uploading", chunk_count: 0,
+      storage_path: `${userA}/${id}/source.txt`, status: "uploading", failure_kind: null,
+      processing_generation: 0, chunk_count: 0,
       created_at: "2026-10-09T00:00:00Z", updated_at: "2026-10-09T00:00:00Z",
     };
     this.documents.set(id, doc);
@@ -38,34 +41,43 @@ class FakeRepository implements KnowledgeRepository {
     const doc = this.documents.get(documentId);
     return doc?.user_id === userId ? doc : null;
   }
-  async claim(documentId: string) {
+  async claim(userId: string, documentId: string) {
     const doc = this.documents.get(documentId);
-    if (!doc || doc.status !== "uploading") return false;
+    if (!doc || doc.user_id !== userId ||
+        (doc.status !== "uploading" && !(doc.status === "failed" && doc.failure_kind === "temporary") &&
+        !(doc.status === "processing" && this.staleProcessing))) return 0;
+    if (!this.objects.has(doc.storage_path)) return -1;
+    if (this.rateLimited) return -2;
     doc.status = "processing";
-    return true;
+    doc.failure_kind = null;
+    doc.processing_generation += 1;
+    return doc.processing_generation;
   }
   async read(path: string) {
     if (this.failRead || !this.objects.has(path)) throw new KnowledgeError("STORAGE_UNAVAILABLE");
     return this.objects.get(path)!;
   }
-  async complete(documentId: string, chunks: string[]) {
+  async complete(userId: string, documentId: string, generation: number, chunks: string[]) {
     const doc = this.documents.get(documentId);
-    if (this.failComplete || !doc || doc.status !== "processing") return false;
+    if (this.failComplete || !doc || doc.user_id !== userId || doc.status !== "processing" ||
+        doc.processing_generation !== generation) return false;
     this.chunks.set(documentId, chunks);
     doc.status = "ready";
     doc.chunk_count = chunks.length;
     return true;
   }
-  async fail(documentId: string) {
+  async fail(userId: string, documentId: string, generation: number, kind: "invalid_file" | "temporary") {
     const doc = this.documents.get(documentId);
-    if (!doc || doc.status !== "processing") return false;
+    if (!doc || doc.user_id !== userId || doc.status !== "processing" || doc.processing_generation !== generation) return false;
     doc.status = "failed";
+    doc.failure_kind = kind;
     return true;
   }
-  async markDeleting(documentId: string) {
+  async markDeleting(userId: string, documentId: string) {
     const doc = this.documents.get(documentId);
-    if (!doc) return false;
+    if (!doc || doc.user_id !== userId) return false;
     doc.status = "deleting";
+    doc.processing_generation += 1;
     return true;
   }
   async remove(path: string) {
@@ -73,9 +85,9 @@ class FakeRepository implements KnowledgeRepository {
     this.objects.delete(path);
     this.removed += 1;
   }
-  async finishDeleting(documentId: string) {
+  async finishDeleting(userId: string, documentId: string) {
     const doc = this.documents.get(documentId);
-    if (!doc || doc.status !== "deleting" || this.objects.has(doc.storage_path)) return false;
+    if (!doc || doc.user_id !== userId || doc.status !== "deleting" || this.objects.has(doc.storage_path)) return false;
     this.documents.delete(documentId);
     this.chunks.delete(documentId);
     return true;
@@ -98,12 +110,15 @@ describe("knowledge ingestion and cleanup", () => {
     expect(repo.documents.has(id)).toBe(true);
     expect(repo.removed).toBe(0);
   });
-  it("retains the original file after a transient Storage download failure", async () => {
+  it("retains the original file and permits retry after a transient Storage failure", async () => {
     const repo = new FakeRepository();
     repo.failRead = true;
     await expect(processKnowledgeDocument(repo, userA, id)).rejects.toMatchObject({ code: "STORAGE_UNAVAILABLE" });
-    expect(repo.documents.get(id)?.status).toBe("processing");
+    expect(repo.documents.get(id)?.status).toBe("failed");
+    expect(repo.documents.get(id)?.failure_kind).toBe("temporary");
     expect(repo.objects.size).toBe(1);
+    repo.failRead = false;
+    expect((await processKnowledgeDocument(repo, userA, id)).status).toBe("ready");
   });
   it("rejects a content mismatch and removes the intermediate file", async () => {
     const repo = new FakeRepository();
@@ -156,6 +171,59 @@ describe("knowledge ingestion and cleanup", () => {
     repo.failComplete = true;
     await expect(processKnowledgeDocument(repo, userA, id)).rejects.toMatchObject({ code: "DOCUMENT_BUSY" });
     expect(repo.chunks.size).toBe(0);
+    expect(repo.documents.get(id)?.status).toBe("failed");
+    expect(repo.documents.get(id)?.failure_kind).toBe("temporary");
+  });
+  it("does not claim processing when the original Storage object is missing", async () => {
+    const repo = new FakeRepository();
+    repo.objects.clear();
+    await expect(processKnowledgeDocument(repo, userA, id)).rejects.toMatchObject({ code: "FILE_NOT_UPLOADED" });
+    expect(repo.documents.get(id)?.status).toBe("uploading");
+    expect(repo.documents.get(id)?.processing_generation).toBe(0);
+  });
+  it("does not process when the hourly processing limit is reached", async () => {
+    const repo = new FakeRepository();
+    repo.rateLimited = true;
+    await expect(processKnowledgeDocument(repo, userA, id)).rejects.toMatchObject({ code: "PROCESS_RATE_LIMITED" });
+    expect(repo.documents.get(id)?.status).toBe("uploading");
+    expect(repo.chunks.size).toBe(0);
+  });
+  it("checks ownership again inside every fake transition", async () => {
+    const repo = new FakeRepository();
+    expect(await repo.claim(userB, id)).toBe(0);
+    expect(await repo.markDeleting(userB, id)).toBe(false);
+    const generation = await repo.claim(userA, id);
+    expect(await repo.complete(userB, id, generation, ["injected"])).toBe(false);
+    expect(await repo.fail(userB, id, generation, "temporary")).toBe(false);
     expect(repo.documents.get(id)?.status).toBe("processing");
+  });
+  it("allows only one simultaneous processing claim", async () => {
+    const repo = new FakeRepository();
+    const first = await repo.claim(userA, id);
+    const second = await repo.claim(userA, id);
+    expect(first).toBe(1);
+    expect(second).toBe(0);
+    expect(await repo.complete(userA, id, first, ["verified chunk"])).toBe(true);
+  });
+  it("rejects an old result after a stale claim is taken over", async () => {
+    const repo = new FakeRepository();
+    const oldGeneration = await repo.claim(userA, id);
+    repo.staleProcessing = true;
+    const newGeneration = await repo.claim(userA, id);
+    expect(newGeneration).toBe(oldGeneration + 1);
+    expect(await repo.complete(userA, id, oldGeneration, ["stale"])).toBe(false);
+    expect(await repo.fail(userA, id, oldGeneration, "invalid_file")).toBe(false);
+    expect(await repo.complete(userA, id, newGeneration, ["fresh"])).toBe(true);
+    expect(repo.chunks.get(id)).toEqual(["fresh"]);
+  });
+  it("deletion invalidates an active processor before it can publish", async () => {
+    const repo = new FakeRepository();
+    const generation = await repo.claim(userA, id);
+    expect(await repo.markDeleting(userA, id)).toBe(true);
+    expect(await repo.complete(userA, id, generation, ["late"])).toBe(false);
+    expect(await repo.fail(userA, id, generation, "temporary")).toBe(false);
+    await repo.remove(repo.documents.get(id)!.storage_path);
+    expect(await repo.finishDeleting(userA, id)).toBe(true);
+    expect(repo.chunks.size).toBe(0);
   });
 });

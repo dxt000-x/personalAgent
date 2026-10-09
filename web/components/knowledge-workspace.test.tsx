@@ -12,7 +12,7 @@ const document: KnowledgeDocument = {
   user_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
   file_name: "notes.txt", file_type: "txt", byte_size: 10,
   storage_path: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/11111111-1111-4111-8111-111111111111/source.txt",
-  status: "uploading", chunk_count: 0,
+  status: "uploading", failure_kind: null, processing_generation: 0, chunk_count: 0,
   created_at: "2026-10-09T00:00:00Z", updated_at: "2026-10-09T00:00:00Z",
 };
 
@@ -97,5 +97,13 @@ describe("KnowledgeWorkspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "删除" }));
     await waitFor(() => expect(screen.getByText("文档已删除。")).toBeTruthy());
     expect(fetchMock).toHaveBeenCalledWith(`/api/knowledge/${document.id}`, { method: "DELETE" });
+  });
+  it("offers a real retry action for a temporarily failed document", async () => {
+    stored = [{ ...document, status: "failed", failure_kind: "temporary" }];
+    render(<KnowledgeWorkspace />);
+    await screen.findByText("notes.txt");
+    fireEvent.click(screen.getByRole("button", { name: "重试处理" }));
+    await waitFor(() => expect(screen.getByText("文档处理完成。")).toBeTruthy());
+    expect(fetchMock).toHaveBeenCalledWith(`/api/knowledge/${document.id}/process`, { method: "POST" });
   });
 });

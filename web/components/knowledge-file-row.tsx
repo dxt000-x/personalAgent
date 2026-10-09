@@ -26,9 +26,11 @@ export function KnowledgeFileRow({ document, busy, onProcess, onDelete }: {
       </td>
       <td className="px-5 py-5 text-slate-500">{new Date(document.created_at).toLocaleDateString("zh-CN")}</td>
       <td className="px-5 py-5 text-right whitespace-nowrap">
-        {(document.status === "uploading" || document.status === "processing") && (
+        {(document.status === "uploading" || document.status === "processing" ||
+          (document.status === "failed" && document.failure_kind === "temporary")) && (
           <button type="button" disabled={busy} onClick={() => onProcess(document)}
-            className="mr-3 text-sm font-medium text-teal-700 disabled:opacity-50">继续处理</button>
+            className="mr-3 text-sm font-medium text-teal-700 disabled:opacity-50">
+            {document.status === "failed" ? "重试处理" : "继续处理"}</button>
         )}
         <button type="button" disabled={busy} onClick={() => onDelete(document)}
           className="text-sm font-medium text-rose-700 disabled:opacity-50">

@@ -1,11 +1,12 @@
 import "server-only";
 import { createClient } from "@/lib/supabase/server";
 import { KnowledgeError } from "./errors";
+import { assertKnowledgeWriterReady, callKnowledgeTransition } from "./private-db";
 import { DOCUMENT_PAGE_SIZE, MAX_FILE_BYTES, KNOWLEDGE_BUCKET, type KnowledgeDocument, type UploadInput } from "./types";
 import type { KnowledgeRepository } from "./service";
 
 type Client = NonNullable<Awaited<ReturnType<typeof createClient>>>;
-const documentColumns = "id,user_id,file_name,file_type,byte_size,storage_path,status,chunk_count,created_at,updated_at";
+const documentColumns = "id,user_id,file_name,file_type,byte_size,storage_path,status,failure_kind,processing_generation,chunk_count,created_at,updated_at";
 
 export async function requireKnowledgeContext(): Promise<{ userId: string; repository: KnowledgeRepository }> {
   const supabase = await createClient();
@@ -32,7 +33,7 @@ export function privateKnowledgeJson(data: unknown, status = 200): Response {
   });
 }
 
-class SupabaseKnowledgeRepository implements KnowledgeRepository {
+export class SupabaseKnowledgeRepository implements KnowledgeRepository {
   constructor(private readonly client: Client) {}
 
   async list(userId: string, offset: number): Promise<KnowledgeDocument[]> {
@@ -45,10 +46,19 @@ class SupabaseKnowledgeRepository implements KnowledgeRepository {
   }
 
   async create(userId: string, input: UploadInput): Promise<KnowledgeDocument> {
+    // Avoid creating an upload row that cannot be processed or deleted because
+    // the dedicated server role is missing or not yet granted EXECUTE.
+    await assertKnowledgeWriterReady();
     const { data, error } = await this.client.from("knowledge_documents")
       .insert({ id: crypto.randomUUID(), user_id: userId, file_name: input.fileName,
         file_type: input.fileType, byte_size: input.byteSize })
       .select(documentColumns).single();
+    if (error?.code === "P0001" && error.message === "KNOWLEDGE_LIMIT_REACHED") {
+      throw new KnowledgeError("KNOWLEDGE_LIMIT_REACHED");
+    }
+    if (error?.code === "P0001" && error.message === "UPLOAD_RATE_LIMITED") {
+      throw new KnowledgeError("UPLOAD_RATE_LIMITED");
+    }
     if (error || !data) throw new KnowledgeError("KNOWLEDGE_UNAVAILABLE");
     return data as KnowledgeDocument;
   }
@@ -60,23 +70,20 @@ class SupabaseKnowledgeRepository implements KnowledgeRepository {
     return data as KnowledgeDocument | null;
   }
 
-  private async transition(name: string, documentId: string): Promise<boolean> {
-    const { data, error } = await this.client.rpc(name, { p_document_id: documentId });
-    if (error || typeof data !== "boolean") throw new KnowledgeError("KNOWLEDGE_UNAVAILABLE");
-    return data;
+  claim(userId: string, documentId: string) {
+    return callKnowledgeTransition<number>("claim", [userId, documentId]);
   }
-
-  claim(documentId: string) { return this.transition("claim_knowledge_document", documentId); }
-  fail(documentId: string) { return this.transition("fail_knowledge_document", documentId); }
-  markDeleting(documentId: string) { return this.transition("mark_knowledge_deleting", documentId); }
-  finishDeleting(documentId: string) { return this.transition("finish_knowledge_deletion", documentId); }
-
-  async complete(documentId: string, chunks: string[]): Promise<boolean> {
-    const { data, error } = await this.client.rpc("complete_knowledge_document", {
-      p_document_id: documentId, p_chunks: chunks,
-    });
-    if (error || typeof data !== "boolean") throw new KnowledgeError("KNOWLEDGE_UNAVAILABLE");
-    return data;
+  fail(userId: string, documentId: string, generation: number, kind: "invalid_file" | "temporary") {
+    return callKnowledgeTransition<boolean>("fail", [userId, documentId, generation, kind]);
+  }
+  markDeleting(userId: string, documentId: string) {
+    return callKnowledgeTransition<boolean>("markDeleting", [userId, documentId]);
+  }
+  finishDeleting(userId: string, documentId: string) {
+    return callKnowledgeTransition<boolean>("finishDeleting", [userId, documentId]);
+  }
+  complete(userId: string, documentId: string, generation: number, chunks: string[]) {
+    return callKnowledgeTransition<boolean>("complete", [userId, documentId, generation, JSON.stringify(chunks)]);
   }
 
   async read(path: string): Promise<Uint8Array> {

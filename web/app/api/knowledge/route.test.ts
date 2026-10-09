@@ -18,7 +18,7 @@ const content = new TextEncoder().encode("实际上传的正文。");
 const document: KnowledgeDocument = {
   id: documentId, user_id: userA, file_name: "notes.txt", file_type: "txt",
   byte_size: content.length, storage_path: `${userA}/${documentId}/source.txt`,
-  status: "uploading", chunk_count: 0,
+  status: "uploading", failure_kind: null, processing_generation: 0, chunk_count: 0,
   created_at: "2026-10-09T00:00:00Z", updated_at: "2026-10-09T00:00:00Z",
 };
 
@@ -30,9 +30,9 @@ function fakeRepository() {
       ({ ...row, user_id: userId, file_name: input.fileName, byte_size: input.byteSize,
         storage_path: `${userId}/${documentId}/source.txt` })),
     find: vi.fn(async (userId: string, id: string) => userId === userA && id === documentId ? row : null),
-    claim: vi.fn(async () => { row.status = "processing" as const; return true; }),
+    claim: vi.fn(async () => { row.status = "processing" as const; row.processing_generation += 1; return row.processing_generation; }),
     read: vi.fn(async () => content),
-    complete: vi.fn(async (_id: string, chunks: string[]) => {
+    complete: vi.fn(async (_userId: string, _id: string, _generation: number, chunks: string[]) => {
       row.status = "ready";
       row.chunk_count = chunks.length;
       return true;
@@ -116,7 +116,7 @@ describe("knowledge API security and upload lifecycle", () => {
     expect(response.status, JSON.stringify(await response.clone().json())).toBe(200);
     expect((await response.json()).document.status).toBe("ready");
     expect(repository.read).toHaveBeenCalledWith(document.storage_path);
-    expect(repository.complete).toHaveBeenCalledWith(documentId, ["实际上传的正文。"]);
+    expect(repository.complete).toHaveBeenCalledWith(userA, documentId, 1, ["实际上传的正文。"]);
   });
 
   it("rejects another user's processing and delete requests", async () => {

@@ -162,10 +162,16 @@ Agent 输入交互任务：只修改 `web/components/agent-workspace.tsx` 的输
 ### 2026-10-09 Knowledge Base Task 1（`feat/knowledge-base-ingestion`）
 
 - 原 `/knowledge` 固定演示文档与禁用上传已替换为当前账号真实文件列表、浏览器直传、处理状态、删除与空/错误状态。只接受 PDF、UTF-8 TXT、Markdown，单文件最多 4 MiB；正文最多 200,000 字符、PDF 最多 50 页、片段最多 200 个。扫描/加密/无文字 PDF 不支持 OCR。
-- 迁移 `supabase/migrations/20261009120000_create_knowledge_base.sql` 定义 `public.knowledge_documents`、`public.knowledge_chunks`、两表 RLS、当前用户所有权及复合外键、五个基于 `auth.uid()` 的受限状态/片段 RPC，以及私有 `knowledge-files` Bucket 的大小、MIME 和路径策略。没有使用 service_role。迁移**未执行**；真实 Storage/RLS 权限和多账号隔离**未验收**。
+- 迁移 `supabase/migrations/20261009120000_create_knowledge_base.sql` 定义 `public.knowledge_documents`、`public.knowledge_chunks`、两表 RLS、当前用户所有权及复合外键，以及私有 `knowledge-files` Bucket 的大小、MIME 和路径策略。后续静态安全审查发现：将 `complete_knowledge_document` 授权 authenticated 会允许绕过服务端解析。五个 SECURITY DEFINER 例程现已改置非 Data API 的 `knowledge_private` Schema，撤销 authenticated 权限，改由专用 `knowledge_writer_login` 服务端数据库角色执行；该角色需要维护者在迁移后单独创建并配置 `KNOWLEDGE_DB_URL`，不使用 service_role。迁移**未执行**；真实 Storage/RLS/角色权限和多账号隔离**未验收**。
 - Vercel Function 请求体上限当前官方文档为 4.5 MB，所以文件由浏览器凭当前 Supabase Session 直传 Storage，Next.js API 仅接收小型元数据和文档 ID。处理路由重新下载原件，校验真实字节、内容和格式，再解析 PDF 或文本并拆有序片段。原始文件不会传给 AI Gateway，也没有 Embedding/RAG。
-- 确定性的格式/解析失败将记录标记 `failed` 并尝试清理文件；临时 Storage/数据库错误保留原件与 `processing`。删除先标记 `deleting`，Storage 删除成功后 RPC 核对对象不存在，再删文档并级联删除片段。中途失败保留可重试状态；停在 `processing` 超过 10 分钟可重新认领。跨 Storage 与数据库没有全局事务，整账号注销删除后的 Storage 孤儿清理仍是运维待办。
+- 确定性的格式/解析失败标记 `failed/invalid_file` 并尝试清理文件；临时错误标记 `failed/temporary`，保留原件及页面重试操作。领取前查 Storage 对象，增加 `processing_generation`；超时重新领取后旧结果不能提交。删除先标记 `deleting` 并使代次失效，Storage 删除成功后核对对象不存在，再删文档并级联片段。数据库 trigger 限每用户 100 文档、100 MiB、每 UTC 小时 20 次初始化，领取每小时限 60 次。跨 Storage 与数据库没有全局事务，整账号注销删除后的 Storage 孤儿清理仍是运维待办。
 - 自动测试使用 fake 数据库/Storage/Session，另用 `pdfjs-dist` 真正解析测试用 PDF 字节；不连接真实 Supabase、云模型或 Ollama。新增 4 个测试文件、32 个用例；全量 17 个文件、177 项测试通过。lint、`npx tsc --noEmit` 与生产构建通过，最终状态以本分支提交报告为准。人工验收先审查并在隔离项目部署迁移，验证 Bucket private、策略、A/B 数据隔离、三种文件、错误与删除恢复，再决定目标环境部署。
+
+### 2026-10-09 Knowledge Base SQL 安全审查修正（同分支）
+
+- 发现旧迁移中 public `complete_knowledge_document` 授权 authenticated 可让用户绕过 Next.js 解析，直接写任意自己的片段。已改用非 Data API 的 `knowledge_private` SECURITY DEFINER 例程，并撤销普通 JWT 执行权限。独立 NOLOGIN 权限组仅授五个例程；维护者还需单独建立 `knowledge_writer_login`，配置仅服务端使用的 `KNOWLEDGE_DB_URL`。应用拒绝 `postgres` 用户名并使用 TLS；未配置或无完成权限时初始化上传 fail-closed。Supabase `service_role` 未使用。该数据库角色仍可能继承目标库对 PUBLIC 的默认权限，必须在隔离项目做有效权限审计。
+- 领取前查 Storage 原件，处理代次防止过期提交；删除使代次失效。临时错误标记 `failed/temporary` 可重试，确定性无效文件仅可删除后重传，清理失败保留元数据及原件。DB 状态失败可在 10 分钟后重领。Trigger 限每用户 100 文档、100 MiB、UTC 小时 20 次初始化，领取每小时 60 次。
+- 本地 Vitest 共 20 文件、195/195 通过（相较前次 177 项新增 18 项）；lint、`npx tsc --noEmit`、Next production build 通过。Mock 与 SQL 静态断言不等于 PostgreSQL 安全/并发验收。新增隔离项目直接 RPC/RLS 脚本和只读权限审查 SQL；迁移、专用登录角色、真实 A/B、Storage、边界和并发均**未执行、待实测**。没有改生产 Vercel 配置。
 
 ## 本地运行和复测
 
