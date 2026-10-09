@@ -191,6 +191,11 @@ Agent 输入交互任务：只修改 `web/components/agent-workspace.tsx` 的输
 - 解析器将无文字层 PDF 明确报告为暂不支持 OCR；已知损坏/加密 PDF 继续拒绝，未知运行时故障按临时错误处理并保留原件。4 MiB、50 页、200,000 字符、200 片段限制不变。真实 Supabase/Vercel 重新上传验收仍待人工执行；旧 `failed/invalid_file` 记录可能已清理原件，需要新建上传。
 - `next.config.ts` 也明确将 `pdf.worker.mjs` 纳入知识库处理路由的文件追踪；最终 `.nft.json` 已确认包含 worker。全量 Vitest 23 文件、212/212 项通过，lint、`npx tsc --noEmit`、production build 通过。新增测试夹具仅为自制 Word 导出 PDF，用户桌面原件未复制到仓库。
 
+### 2026-10-10 Knowledge Base 交互式 Storage 安全验收准备（同分支）
+
+- 旧 `verify-knowledge-security.mjs` 无参数模式保留；新增 `--interactive-storage` 仅允许在 `PersonalAgent-KB-Test/web` 运行，固定独立测试项目 Ref `pxfaqcepztzqyqtmbdrf`，人工确认项目名称。脚本不读取原开发目录 `.env.local`，凭据在终端隐藏输入、仅存进程内；A/B 各需一份已主动确认可丢弃的 `kb-isolation-test-` ready 文件。双向 Storage 下载/删除后由所有者复查字节大小及 SHA-256；跨账号上传使用本轮一次性 B uploading 文档，受限写入角色仅执行知识库标记/完成删除例程进行清理。清理失败报告对象 ID 并以非零状态退出。
+- 本轮只开发脚本与假客户端测试，**没有登录或操作真实 Supabase/Storage**；先同步提交到独立测试 Worktree，再由人工在该目录执行。真实 A/B API 安全验收仍待确认。
+
 ## 本地运行和复测
 
 在仓库根目录使用 Windows setup/start 脚本，或在 `web/` 执行：

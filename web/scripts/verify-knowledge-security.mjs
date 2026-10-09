@@ -4,6 +4,11 @@ import assert from "node:assert/strict";
 import pg from "pg";
 import { createClient } from "@supabase/supabase-js";
 
+if (process.argv.length === 3 && process.argv[2] === "--interactive-storage") {
+  const { runFromTerminal } = await import("./knowledge-storage-interactive.mjs");
+  await runFromTerminal();
+} else {
+assert.equal(process.argv.length, 2, "Unsupported arguments");
 const e = process.env;
 assert.equal(e.KB_TEST_PROJECT_KIND, "isolated-test-project");
 for (const name of ["KB_TEST_PROJECT_REF", "KB_TEST_URL", "KB_TEST_PUBLISHABLE_KEY",
@@ -168,4 +173,5 @@ try {
 }
 if (passed && !process.exitCode) {
   console.log("Knowledge direct-RPC and A/B Storage isolation checks passed in isolated test project.");
+}
 }
