@@ -1,6 +1,6 @@
 // Isolated-project Storage acceptance only. This module never reads .env.local
 // and never accepts credentials through argv or process.env.
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomUUID, X509Certificate } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { basename, normalize } from "node:path";
@@ -16,13 +16,23 @@ const BUCKET = "knowledge-files";
 const PREFIX = "kb-isolation-test-";
 const CONFIRM_FILES = "CONFIRM TEST FILES";
 
-class CheckFailure extends Error {}
+class CheckFailure extends Error {
+  constructor(message, source) {
+    super(message);
+    // Keep only public protocol fields, never the raw server error or message.
+    this.status = Number.isInteger(source?.status) ? source.status : undefined;
+    this.code = source?.code;
+  }
+}
 class TerminalInputFailure extends CheckFailure {}
 const authCodes = new Set(["invalid_credentials", "invalid_api_key", "invalid_jwt", "bad_jwt",
   "email_not_confirmed", "user_banned", "over_request_rate_limit", "unexpected_failure"]);
 const networkCodes = new Set(["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "ENOTFOUND", "EAI_AGAIN",
   "UND_ERR_CONNECT_TIMEOUT", "CERT_HAS_EXPIRED", "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
-  "ERR_TLS_CERT_ALTNAME_INVALID"]);
+  "ERR_TLS_CERT_ALTNAME_INVALID", "SELF_SIGNED_CERT_IN_CHAIN", "UNABLE_TO_GET_ISSUER_CERT_LOCALLY"]);
+const fileCodes = new Set(["ENOENT", "EACCES", "EPERM", "EISDIR"]);
+const databaseCodes = new Set(["28P01", "28000", "42501", "08001", "08006", "3F000", "57P01"]);
+const storageCodes = new Set(["AccessDenied", "NoSuchKey", "InvalidJWT", "not_found", "PGRST116"]);
 class AuthFailure extends CheckFailure {
   constructor(account, phase, error) {
     super("测试账号认证失败");
@@ -40,7 +50,7 @@ class AuthFailure extends CheckFailure {
       "认证失败，原因待核实";
   }
 }
-const requireTrue = (condition, message) => { if (!condition) throw new CheckFailure(message); };
+const requireTrue = (condition, message, source) => { if (!condition) throw new CheckFailure(message, source); };
 
 export function assertTestWorktree(cwd, resolve = realpathSync.native) {
   const actual = normalize(resolve(cwd)).toLowerCase();
@@ -72,14 +82,47 @@ export function validateWriterConnection(raw, ca) {
     "数据库主机必须是 Supabase Transaction Pooler");
   requireTrue(decodeURIComponent(url.username) === `knowledge_writer_login.${PROJECT_REF}`,
     "受限连接角色或 Project Ref 不匹配");
-  requireTrue(ca.includes("-----BEGIN CERTIFICATE-----") && ca.includes("-----END CERTIFICATE-----"),
-    "TLS CA 证书格式无效");
+  validateCaPem(ca);
   return {
     host: url.hostname, port: 6543, database: "postgres",
     user: decodeURIComponent(url.username), password: decodeURIComponent(url.password),
     connectionTimeoutMillis: 5000, query_timeout: 15000,
     ssl: { ca, servername: url.hostname, rejectUnauthorized: true },
   };
+}
+
+export function validateCaPem(ca) {
+  requireTrue(typeof ca === "string" && ca.length <= 65536, "TLS CA PEM 内容无效");
+  const normalized = ca.trim().replaceAll("\r\n", "\n");
+  const blocks = normalized.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/gu);
+  requireTrue(blocks?.length > 0 && normalized.replaceAll(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/gu, "").trim() === "",
+    "TLS CA PEM 内容无效");
+  try { for (const block of blocks) new X509Certificate(block); }
+  catch { throw new CheckFailure("TLS CA PEM 内容无效"); }
+  return normalized;
+}
+
+function failureCategory(stage, error) {
+  if (error instanceof TerminalInputFailure) return "终端读取失败";
+  if (stage.includes("CA 文件") || stage.includes("CA PEM")) return "CA 文件或证书错误";
+  if (stage.includes("数据库连接")) return "数据库连接或 TLS 错误";
+  if (stage.includes("数据库权限")) return "数据库权限错误";
+  if (stage.includes("夹具") || stage.includes("一次性")) return "测试夹具错误";
+  if (stage.includes("Storage") || stage.includes("下载") || stage.includes("删除") || stage.includes("上传"))
+    return "Storage 请求或校验失败";
+  if (error instanceof CheckFailure) return "前置校验失败";
+  return "请求失败";
+}
+
+function safeErrorCode(error) {
+  const candidates = [error?.code, error?.cause?.code];
+  return candidates.find((code) => fileCodes.has(code) || networkCodes.has(code) ||
+    databaseCodes.has(code) || storageCodes.has(code)) ?? "无";
+}
+
+function safeHttpStatus(error) {
+  return Number.isInteger(error?.status) && error.status >= 100 && error.status <= 599
+    ? error.status : "无";
 }
 
 function bucket(client) { return client.storage.from(BUCKET); }
@@ -89,7 +132,7 @@ function denied(error) {
 }
 async function snapshot(client, document) {
   const response = await bucket(client).download(document.storage_path);
-  requireTrue(!response.error && response.data, "本人无法下载测试原件");
+  requireTrue(!response.error && response.data, "本人无法下载测试原件", response.error);
   const bytes = Buffer.from(await response.data.arrayBuffer());
   requireTrue(bytes.length === document.byte_size && bytes.length > 0, "测试原件大小不符");
   return { length: bytes.length, hash: createHash("sha256").update(bytes).digest("hex") };
@@ -132,12 +175,14 @@ export async function runInteractiveStorage({
     return result;
   };
   try {
+    stage = "项目身份与运行目录";
     assertTestWorktree(cwd, resolvePath);
     report(`目标项目：${PROJECT_NAME} (${PROJECT_URL})`);
     requireTrue(await prompt.ask("请在 Supabase 控制台核对项目名称后输入完整名称：") === PROJECT_NAME,
       "项目名称未获人工确认");
     report("项目身份与运行目录: PASS");
 
+    stage = "测试项目 Publishable Key 输入与校验";
     const key = validatePublishableKey(await prompt.ask("测试项目 publishable key：", true));
     const clientA = createSupabase(PROJECT_URL, key, {
       auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
@@ -172,56 +217,73 @@ export async function runInteractiveStorage({
     const columns = "id,user_id,file_name,file_type,byte_size,storage_path,status";
     const ownDocs = async (client, userId) => {
       const result = await client.from("knowledge_documents").select(columns);
-      requireTrue(!result.error, "无法读取当前账号文档");
+      requireTrue(!result.error, "无法读取当前账号文档", result.error);
       return fixtureDocument(result.data, userId);
     };
-    const aDoc = await ownDocs(clientA, userAId);
-    const bDoc = await ownDocs(clientB, userBId);
+    const aDoc = await step("A 测试夹具初始化", () => ownDocs(clientA, userAId));
+    const bDoc = await step("B 测试夹具初始化", () => ownDocs(clientB, userBId));
     report(`A 可丢弃文件：${JSON.stringify(aDoc.file_name)}`);
     report(`B 可丢弃文件：${JSON.stringify(bDoc.file_name)}`);
+    stage = "测试夹具人工确认";
     requireTrue(await prompt.ask(`确认这两份文件可丢弃，输入 ${CONFIRM_FILES}：`) === CONFIRM_FILES,
       "未确认可丢弃文件");
     const aBefore = await step("A 本人下载与大小校验", () => snapshot(clientA, aDoc));
     const bBefore = await step("B 本人下载与大小校验", () => snapshot(clientB, bDoc));
 
+    stage = "Pooler URL 终端输入";
     const writerUrl = await prompt.ask("测试项目 knowledge_writer_login Pooler URL：", true);
+    stage = "TLS CA 文件路径输入";
     const caPath = await prompt.ask("测试项目 TLS CA PEM 文件路径：");
-    requireTrue(basename(caPath).toLowerCase() !== ".env.local" && /\.(pem|crt)$/iu.test(caPath),
-      "TLS CA 必须来自独立 PEM/CRT 文件，不能读取 .env.local");
-    const canonicalCa = normalize(resolvePath(caPath)).toLowerCase();
-    requireTrue((canonicalCa.startsWith(normalize("D:\\codex\\").toLowerCase()) ||
-      canonicalCa.startsWith(normalize(`${TEST_WEB_DIRECTORY}\\`).toLowerCase())) &&
-      basename(canonicalCa) !== ".env.local",
-    "TLS CA 文件必须位于 D:\\codex 或独立测试 Worktree，不能读取开发目录配置");
-    const ca = await readCertificate(caPath, "utf8");
-    requireTrue(ca.length <= 65536, "TLS CA 文件过大");
-    const writerConfig = validateWriterConnection(writerUrl, ca);
-    writer = createWriter(writerConfig);
-    await writer.connect();
-    report("受限清理连接与 TLS: PASS");
+    const caFile = await step("TLS CA 文件路径校验", async () => {
+      requireTrue(basename(caPath).toLowerCase() !== ".env.local" && /\.(pem|crt)$/iu.test(caPath),
+        "TLS CA 必须来自独立 PEM/CRT 文件，不能读取 .env.local");
+      const resolvedCa = normalize(resolvePath(caPath));
+      const canonicalCa = resolvedCa.toLowerCase();
+      requireTrue((canonicalCa.startsWith(normalize("D:\\codex\\").toLowerCase()) ||
+        canonicalCa.startsWith(normalize(`${TEST_WEB_DIRECTORY}\\`).toLowerCase())) &&
+        basename(canonicalCa) !== ".env.local",
+      "TLS CA 文件必须位于 D:\\codex 或独立测试 Worktree，不能读取开发目录配置");
+      return resolvedCa;
+    });
+    const caText = await step("TLS CA 文件加载", () => readCertificate(caFile, "utf8"));
+    const ca = await step("TLS CA PEM 解析", async () => validateCaPem(caText));
+    const writerConfig = await step("受限数据库连接配置校验", async () => validateWriterConnection(writerUrl, ca));
+    await step("受限数据库连接与 TLS", async () => {
+      writer = createWriter(writerConfig);
+      await writer.connect();
+    });
+    await step("受限数据库权限验证", async () => {
+      const result = await writer.query(
+        "select has_function_privilege(current_user, 'knowledge_private.mark_knowledge_deleting(uuid,uuid)', 'EXECUTE') as mark_allowed, has_function_privilege(current_user, 'knowledge_private.finish_knowledge_deletion(uuid,uuid)', 'EXECUTE') as finish_allowed",
+      );
+      requireTrue(result.rows[0]?.mark_allowed === true && result.rows[0]?.finish_allowed === true,
+        "受限数据库角色缺少清理例程权限");
+    });
 
     await step("A 无法下载 B", async () => {
-      requireTrue(denied((await bucket(clientA).download(bDoc.storage_path)).error), "A 下载 B 未被明确拒绝");
+      const attempted = await bucket(clientA).download(bDoc.storage_path);
+      requireTrue(denied(attempted.error), "A 下载 B 未被明确拒绝", attempted.error);
       await checkUnchanged(clientB, bDoc, bBefore);
     });
     await step("A 无法删除 B", async () => {
       const attempted = await bucket(clientA).remove([bDoc.storage_path]);
-      requireTrue(!attempted.error || denied(attempted.error), "A 删除 B 的请求结果不确定");
+      requireTrue(!attempted.error || denied(attempted.error), "A 删除 B 的请求结果不确定", attempted.error);
       await checkUnchanged(clientB, bDoc, bBefore);
     });
     await step("B 无法下载 A", async () => {
-      requireTrue(denied((await bucket(clientB).download(aDoc.storage_path)).error), "B 下载 A 未被明确拒绝");
+      const attempted = await bucket(clientB).download(aDoc.storage_path);
+      requireTrue(denied(attempted.error), "B 下载 A 未被明确拒绝", attempted.error);
       await checkUnchanged(clientA, aDoc, aBefore);
     });
     await step("B 无法删除 A", async () => {
       const attempted = await bucket(clientB).remove([aDoc.storage_path]);
-      requireTrue(!attempted.error || denied(attempted.error), "B 删除 A 的请求结果不确定");
+      requireTrue(!attempted.error || denied(attempted.error), "B 删除 A 的请求结果不确定", attempted.error);
       await checkUnchanged(clientA, aDoc, aBefore);
     });
 
     // Generate one dedicated B-owned uploading row. A's upload uses its exact
     // generated path, so denial cannot be explained by a nonexistent document.
-    stage = "一次性文档创建";
+    stage = "一次性测试夹具初始化";
     const id = randomUUID();
     const payload = new TextEncoder().encode(`isolated Storage check ${id}`);
     temporary = { id, userId: userBId, path: `${userBId}/${id}/source.txt` };
@@ -232,16 +294,19 @@ export async function runInteractiveStorage({
     }).select("id,storage_path,status").single();
     requireTrue(!inserted.error && inserted.data?.id === id &&
       inserted.data.storage_path === temporary.path && inserted.data.status === "uploading",
-    "一次性上传文档未正确创建");
+    "一次性上传文档未正确创建", inserted.error);
     insertedConfirmed = true;
-    requireTrue((await bucket(clientB).download(temporary.path)).error, "一次性路径已存在对象");
-    report("一次性文档创建: PASS");
+    stage = "一次性 Storage 路径检查";
+    const absent = await bucket(clientB).download(temporary.path);
+    requireTrue(Boolean(absent.error), "一次性路径已存在对象", absent.error);
+    report("一次性测试夹具初始化: PASS");
     stage = "A 无法上传到 B 的一次性路径";
     const uploaded = await bucket(clientA).upload(temporary.path, payload,
       { contentType: "text/plain", upsert: false });
     const observed = await bucket(clientB).download(temporary.path);
     requireTrue(denied(uploaded.error) && Boolean(observed.error),
-      "A 上传到 B 的一次性路径未被明确拒绝");
+      "A 上传到 B 的一次性路径未被明确拒绝", uploaded.error);
+    stage = "越权上传后双方原件下载复核";
     await checkUnchanged(clientA, aDoc, aBefore);
     await checkUnchanged(clientB, bDoc, bBefore);
     report("A 无法上传到 B 的一次性路径，双方原件未变: PASS");
@@ -253,16 +318,19 @@ export async function runInteractiveStorage({
     } else if (error instanceof TerminalInputFailure) {
       report("分类: 终端读取失败；请在交互终端重试");
     } else {
-      report(error instanceof CheckFailure ? error.message : "请求失败；未输出原始错误或凭据");
+      report(`分类: ${failureCategory(stage, error)}; HTTP: ${safeHttpStatus(error)}; code: ${safeErrorCode(error)}`);
+      if (error instanceof CheckFailure) report(error.message);
     }
   } finally {
     if (temporary) {
+      let cleanupStage = "一次性夹具清理检查";
       try {
         requireTrue(writer && ownerB, "清理连接不可用");
         const row = await ownerB.from("knowledge_documents").select("id").eq("id", temporary.id);
         requireTrue(!row.error, "无法检查一次性文档");
         requireTrue(!insertedConfirmed || row.data?.length === 1, "已创建的一次性文档不可见");
         if (row.data?.length) {
+          cleanupStage = "一次性夹具清理状态转换";
           const marked = await writer.query(
             "select knowledge_private.mark_knowledge_deleting($1::uuid,$2::uuid) as value",
             [temporary.userId, temporary.id],
@@ -270,28 +338,35 @@ export async function runInteractiveStorage({
           requireTrue(marked.rows[0]?.value === true, "无法标记一次性文档删除");
           // Storage may report a missing object because the forbidden upload
           // correctly failed. The owner recheck and finish RPC are decisive.
+          cleanupStage = "一次性夹具清理 Storage 删除";
           await bucket(ownerB).remove([temporary.path]);
           requireTrue(Boolean((await bucket(ownerB).download(temporary.path)).error), "一次性对象仍存在");
+          cleanupStage = "一次性夹具清理数据库完成";
           const finished = await writer.query(
             "select knowledge_private.finish_knowledge_deletion($1::uuid,$2::uuid) as value",
             [temporary.userId, temporary.id],
           );
           requireTrue(finished.rows[0]?.value === true, "无法完成一次性文档删除");
+          cleanupStage = "一次性夹具清理结果验证";
           const after = await ownerB.from("knowledge_documents").select("id").eq("id", temporary.id);
           requireTrue(!after.error && after.data?.length === 0, "一次性文档仍存在");
         }
         report("一次性夹具清理: PASS");
-      } catch {
+      } catch (error) {
         cleanupFailed = true;
-        report("一次性夹具清理: FAIL");
+        report(`${cleanupStage}: FAIL`);
+        report(`分类: 测试夹具清理失败; HTTP: ${safeHttpStatus(error)}; code: ${safeErrorCode(error)}`);
         report(`须人工检查测试对象 ID：${temporary.id}`);
       }
+    } else {
+      report("本轮未创建一次性测试对象，无需清理");
     }
     if (writer) {
       try { await writer.end(); }
-      catch {
+      catch (error) {
         cleanupFailed = true;
         report("受限数据库连接关闭: FAIL");
+        report(`分类: 数据库连接关闭失败; HTTP: ${safeHttpStatus(error)}; code: ${safeErrorCode(error)}`);
         if (temporary) report(`须人工检查测试对象 ID：${temporary.id}`);
       }
     }

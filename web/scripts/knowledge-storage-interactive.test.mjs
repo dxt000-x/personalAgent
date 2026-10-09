@@ -1,15 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { EventEmitter } from "node:events";
+import tls from "node:tls";
 import {
   PROJECT_NAME, PROJECT_REF, PROJECT_URL, TEST_WEB_DIRECTORY,
-  assertTestWorktree, createTerminalPrompt, runInteractiveStorage, validatePublishableKey, validateWriterConnection,
+  assertTestWorktree, createTerminalPrompt, runInteractiveStorage, validateCaPem,
+  validatePublishableKey, validateWriterConnection,
 } from "./knowledge-storage-interactive.mjs";
 
 const userA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const userB = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const docA = "11111111-1111-4111-8111-111111111111";
 const docB = "22222222-2222-4222-8222-222222222222";
-const ca = "-----BEGIN CERTIFICATE-----\nFAKE-TEST-CA\n-----END CERTIFICATE-----";
+const ca = tls.rootCertificates[0];
 const writerUrl = `postgresql://knowledge_writer_login.${PROJECT_REF}:fake-test-password@aws-0-us-east-1.pooler.supabase.com:6543/postgres`;
 
 function harness(options = {}) {
@@ -99,8 +101,17 @@ function harness(options = {}) {
     expect(config.user).toBe(`knowledge_writer_login.${PROJECT_REF}`);
     expect(config.ssl.rejectUnauthorized).toBe(true);
     return {
-      connect: async () => { events.push("writer-connect"); },
-      query: async (sql, [userId, id]) => {
+      connect: async () => {
+        events.push("writer-connect");
+        if (options.failWriterConnect) throw options.failWriterConnect;
+      },
+      query: async (sql, parameters = []) => {
+        if (sql.includes("has_function_privilege")) {
+          events.push("writer-permissions");
+          return { rows: [{ mark_allowed: !options.denyWriterPermission,
+            finish_allowed: !options.denyWriterPermission }] };
+        }
+        const [userId, id] = parameters;
         expect(userId).toBe(userB);
         events.push(sql.includes("mark_knowledge_deleting") ? "mark" : "finish");
         if (sql.includes("mark_knowledge_deleting")) {
@@ -123,7 +134,10 @@ function harness(options = {}) {
     documents, objects, events, reports, prompts,
     run: () => runInteractiveStorage({ prompt, report: (message) => reports.push(message),
       cwd: TEST_WEB_DIRECTORY, resolvePath: (value) => value,
-      createSupabase, createWriter, readCertificate: async () => ca }),
+      createSupabase, createWriter, readCertificate: async () => {
+        if (options.failCaRead) throw options.failCaRead;
+        return options.invalidCa ? "not a PEM certificate" : ca;
+      } }),
   };
 }
 
@@ -204,6 +218,7 @@ describe("interactive Storage acceptance safeguards", () => {
     expect(() => validatePublishableKey("sb_secret_fake")).toThrow();
     expect(() => validateWriterConnection(writerUrl.replace(PROJECT_REF, "otherproject"), ca)).toThrow();
     expect(() => validateWriterConnection(writerUrl, "not a certificate")).toThrow();
+    expect(validateCaPem(ca)).toContain("-----BEGIN CERTIFICATE-----");
     expect(validateWriterConnection(writerUrl, ca).ssl.rejectUnauthorized).toBe(true);
   });
 
@@ -214,8 +229,39 @@ describe("interactive Storage acceptance safeguards", () => {
     expect(h.objects.size).toBe(2);
     expect(h.events.filter((item) => item.startsWith("upload:")).length).toBe(1);
     expect(h.events.filter((item) => item === "mark" || item === "finish")).toEqual(["mark", "finish"]);
+    expect(h.events).toContain("writer-permissions");
     expect(h.reports.filter((item) => item.endsWith(": PASS")).length).toBeGreaterThanOrEqual(8);
     expect(h.reports.join(" ")).not.toMatch(/fake-(?:a-password|b-password|test-password|secret)/u);
+  });
+
+  it.each([
+    [{ failCaRead: Object.assign(new Error("fake-secret"), { code: "ENOENT" }) },
+      "TLS CA 文件加载: FAIL", "code: ENOENT"],
+    [{ invalidCa: true }, "TLS CA PEM 解析: FAIL", "分类: CA 文件或证书错误"],
+    [{ failWriterConnect: Object.assign(new Error("fake-secret"), { code: "UNABLE_TO_VERIFY_LEAF_SIGNATURE" }) },
+      "受限数据库连接与 TLS: FAIL", "code: UNABLE_TO_VERIFY_LEAF_SIGNATURE"],
+    [{ denyWriterPermission: true }, "受限数据库权限验证: FAIL", "分类: 数据库权限错误"],
+    [{ failWriterConnect: Object.assign(new Error("fake-secret"), { code: "fake-secret-code" }) },
+      "受限数据库连接与 TLS: FAIL", "code: 无"],
+  ])("labels a failure after both owner downloads accurately", async (options, failure, detail) => {
+    const h = harness(options);
+    expect(await h.run()).toBe(false);
+    expect(h.reports).toContain("B 本人下载与大小校验: PASS");
+    expect(h.reports).toContain(failure);
+    expect(h.reports.join(" ")).toContain(detail);
+    expect(h.reports).toContain("本轮未创建一次性测试对象，无需清理");
+    expect(h.events.some((item) => item.startsWith("remove:") || item.startsWith("upload:"))).toBe(false);
+    expect(h.reports.join(" ")).not.toContain("fake-secret");
+  });
+
+  it("attributes an invalid Pooler URL to configuration after both download checks", async () => {
+    const h = harness();
+    h.prompts[7] = "not-a-database-url";
+    expect(await h.run()).toBe(false);
+    expect(h.reports).toContain("B 本人下载与大小校验: PASS");
+    expect(h.reports).toContain("受限数据库连接配置校验: FAIL");
+    expect(h.reports).toContain("本轮未创建一次性测试对象，无需清理");
+    expect(h.reports.join(" ")).not.toContain("not-a-database-url");
   });
 
   it("fails and stops before uploading if a cross-account delete actually removes B's fixture", async () => {
@@ -256,6 +302,7 @@ describe("interactive Storage acceptance safeguards", () => {
   it("returns failure and reports only the object ID when cleanup fails", async () => {
     const h = harness({ failCleanup: true });
     expect(await h.run()).toBe(false);
+    expect(h.reports).toContain("一次性夹具清理状态转换: FAIL");
     expect(h.reports.some((item) => /^须人工检查测试对象 ID：[0-9a-f-]+$/u.test(item))).toBe(true);
     expect(h.reports.join(" ")).not.toContain("fake-secret");
   });
