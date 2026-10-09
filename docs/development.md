@@ -137,7 +137,20 @@ PDF.js 4.10.38 在 Node.js 中从自身包目录加载 `pdf.worker.mjs`。Next.j
 
 新增的 `--interactive-storage` 模式专供 `personal-agent-quota-test`（Project Ref 固定为 `pxfaqcepztzqyqtmbdrf`），只允许从 `D:\龙虾\Codex\PersonalAgent-KB-Test\web` 的交互终端运行。先在该测试 Worktree 同步本分支提交，用 A/B 各自账号通过页面准备**恰好一份**文件名以 `kb-isolation-test-` 开头、状态 `ready` 的可丢弃文件；确认原文件确实可丢弃。将测试项目的 TLS CA PEM/CRT 放在 `D:\codex` 或测试 Worktree 下。随后在测试 Worktree 的 `web` 目录执行 `node .\scripts\verify-knowledge-security.mjs --interactive-storage`。脚本固定测试项目 URL，不读取任何 `.env.local`；交互隐藏输入 publishable key、A/B 邮箱密码和受限 `knowledge_writer_login` Pooler URL，要求人工输入项目名称及确认两份文件名。它验证本人下载、双向越权下载/删除后的大小和 SHA-256，最后用本轮唯一 B `uploading` 文档测试 A 上传拒绝。受限角色只调用标记/完成删除例程，B 账号通过 Storage API 清理一次性对象；清理失败会列出文档 ID 并返回非零状态。旧无参数模式保留。**本分支仅通过本地模拟测试，尚未运行真实 Storage 验收。**
 
-数据库并发验收使用新增 [`web/scripts/verify-knowledge-db-concurrency.mjs`](../web/scripts/verify-knowledge-db-concurrency.mjs)。仅在**全新隔离项目和两个全新测试用户**中，在人工批准并应用迁移、创建受限登录角色后运行；需明确设置脚本列出的 `KB_DB_TEST_*` 变量、`KB_DB_TEST_PROJECT_KIND=isolated-test-project`、`KB_DB_TEST_ACK=I_ACCEPT_MUTATING_ISOLATED_PROJECT`。`KB_DB_TEST_WRITER_URL` 是受限角色连接；`KB_DB_TEST_FIXTURE_ADMIN_URL` 是**仅隔离项目**的管理员连接，用于将测试事件移到前一 UTC 小时、把测试处理时间调成过期及清理测试行，绝不可填生产凭据。脚本在写入前校验 Project Ref、两个 Pooler 用户名、端口、CA 和 A/B JWT 所属身份，使用两条独立受限 PostgreSQL 连接与一条夹具管理连接，真实测试领取竞争、过期代次、删除与处理并发、Storage 缺失、A/B 隔离、文档数/容量、每 UTC 小时第 21 次上传与第 61 次处理；异常允许的插入也纳入清理，连接或清理失败只输出固定提示。该脚本**本分支没有运行**，结果须单独记录。失败后的测试对象和角色须人工复核，不能将测试项目配置复制到生产。
+数据库并发验收使用 [`web/scripts/verify-knowledge-db-concurrency.mjs`](../web/scripts/verify-knowledge-db-concurrency.mjs)，只允许在 `D:\龙虾\Codex\PersonalAgent-KB-Test\web` 运行，只接受测试项目 `personal-agent-quota-test`（固定 Ref `pxfaqcepztzqyqtmbdrf`）。**此脚本尚未真实执行。** 需另建全新的 C/D 两个测试账号，不能复用已做真实文件验收的 A/B；C/D 应无文档、片段、Storage 原件、上传事件和处理事件，且验收期间不得有其他进程使用。账号在测试项目 Auth 中创建并通过该项目登录获取短期 JWT；不要把 JWT、Key、连接 URL 或密码写入仓库、命令参数、日志或清单。测试项目的 Publishable Key、固定 URL、C/D 的 ID/JWT、受限 `knowledge_writer_login` 与仅测试用 `postgres` Transaction Pooler URL、TLS CA PEM 的 Base64 内容，经当前终端的 `KB_DB_TEST_*` 进程环境变量提供，不读取 `.env.local`。两个 URL 必须指向同一测试项目的 `:6543/postgres`；TLS 证书和主机名严格验证。先核对独立 Worktree 和项目身份，再设置变量；禁止复制原开发仓库的生产 `.env.local`。
+
+依次在独立测试 Worktree 的 `web` 目录运行以下命令，正式执行仍需另行人工批准。`--preflight` 只做项目、JWT、角色/权限及 C/D 空白状态查询；`--execute` 需要 `KB_DB_TEST_ACK=I_ACCEPT_MUTATING_ISOLATED_PROJECT`，预检通过后显示预计约 126 条文档、3 个原件、管理员写入范围与事件保留策略，并要求在交互终端输入完整项目名。`--inspect-run` 用清单中的 Run ID 在只读事务中检查精确登记的对象及事件数，不清理、不补写。三个模式都要求指定测试 Worktree；脚本无默认执行模式。
+
+```powershell
+Set-Location 'D:\龙虾\Codex\PersonalAgent-KB-Test\web'
+node --use-env-proxy .\scripts\verify-knowledge-db-concurrency.mjs --preflight
+node --use-env-proxy .\scripts\verify-knowledge-db-concurrency.mjs --execute
+node --use-env-proxy .\scripts\verify-knowledge-db-concurrency.mjs --inspect-run '<Run-ID>'
+```
+
+必需变量名为 `KB_DB_TEST_PROJECT_KIND`、`KB_DB_TEST_PROJECT_REF`、`KB_DB_TEST_URL`、`KB_DB_TEST_PUBLISHABLE_KEY`、`KB_DB_TEST_CA_CERT_BASE64`、`KB_DB_TEST_FIXTURE_ADMIN_URL`、`KB_DB_TEST_WRITER_URL`、`KB_DB_TEST_USER_C_ID`、`KB_DB_TEST_USER_D_ID`、`KB_DB_TEST_JWT_C`、`KB_DB_TEST_JWT_D`；仅 `--execute` 额外要求 `KB_DB_TEST_ACK`。`--inspect-run` 只需要项目种类、Ref、管理员 URL 和 CA。真实执行验证双连接争领、过期代次、处理/删除竞态、原件缺失、每 UTC 小时第 21 次上传初始化、第 101 个文档、声明总容量超过 100 MiB、第 61 次处理领取。100 MiB 只验证数据库**声明容量**，不真实上传 100 MiB。管理员仅在隔离测试项目调整本轮文档过期时间及 C/D 本轮当前小时事件时间；事件行保留审计，不自动删除。不能对生产项目使用管理员 URL。
+
+`--execute` 在每次写入前把本轮文档 ID、预期用户、精确 Storage 路径及阶段写入 Git 忽略的 `.kb-acceptance-runs/<Run-ID>.json`。成功时逐项核对归属并清理登记文档/原件；失败、Ctrl+C、超时或响应丢失时停止后续写入、保留清单，不推断事务已回滚或对象已删除。用 `--inspect-run` 检查，人工审查清单中仍存在的精确 ID/路径后决定恢复；**不得按用户 ID 或文件名前缀批量删除**。清理成功也保留清单和上传/处理事件以便审计。每轮使用新的 C/D 账号；若预检发现已有数据，直接退出，不自动清理。Mock 测试仅证明脚本保护边界；数据库并发和 RLS 结果仍需隔离项目真实验收，生产部署/验收未确认。
 
 还需在同一隔离项目人工实测：A/B 不能调用对方处理/删除 API；失败 Storage 删除后的重试、损坏文件残留清理，以及真实 Vercel Node Function 对 Transaction Pooler 的 TLS/超时/连接数行为。用 [`supabase/knowledge_base_readonly_review.sql`](../supabase/knowledge_base_readonly_review.sql) 核对角色 `SUPERUSER`、`BYPASSRLS`、`CREATEROLE`、`CREATEDB`、继承成员关系、数据库/Schema/表/序列/函数及 PUBLIC 有效权限、函数 schema/EXECUTE、表 RLS、Bucket private，以及 **storage.objects 上全部策略**。尤其审查适用于 authenticated 的所有 permissive 策略；它们按 OR 组合，其他名称的宽松策略可能放宽 `knowledge-files` 的访问。只读 SQL 是审查清单，不能自动证明策略互不冲突。未执行真实测试前一律标为**待实测**，不得把 mock 通过写成 Supabase 安全验收通过。
 

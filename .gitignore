@@ -25,5 +25,6 @@ venv/
 .idea/
 .vscode/
 *.log
+.kb-acceptance-runs/
 .DS_Store
 Thumbs.db

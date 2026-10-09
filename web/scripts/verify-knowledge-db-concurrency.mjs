@@ -1,294 +1,90 @@
-// Destructive acceptance test for a NEW, ISOLATED Supabase project/users.
-// This file is never run by npm test. It opens independent PostgreSQL clients,
-// writes test documents/Storage objects, and cleans up test fixtures.
-// Never use a production URL or credential. No secrets or document text log.
-import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import pg from "pg";
-import { createClient } from "@supabase/supabase-js";
+// Explicit modes only. Never run this script from the development checkout.
+// No .env.local file is read; credentials come from the invoking process only.
+import { createInterface } from "node:readline/promises";
+import {
+  AcceptanceError,
+  ESTIMATED_DOCUMENTS, ESTIMATED_STORAGE_OBJECTS,
+  PROJECT_NAME, PROJECT_REF,
+  cleanupRegistered, closeConnections, createManifestStore, createRunManifest,
+  executeScenario, inspectFromConfig, newRunId, parseMode, runPreflight,
+  validateConfiguration,
+} from "./knowledge-db-acceptance.mjs";
 
-const { Client } = pg;
-assert.equal(process.env.KB_DB_TEST_PROJECT_KIND, "isolated-test-project");
-assert.equal(process.env.KB_DB_TEST_ACK, "I_ACCEPT_MUTATING_ISOLATED_PROJECT");
-const names = ["KB_DB_TEST_PROJECT_REF", "KB_DB_TEST_URL", "KB_DB_TEST_PUBLISHABLE_KEY",
-  "KB_DB_TEST_JWT_A", "KB_DB_TEST_JWT_B", "KB_DB_TEST_USER_A_ID", "KB_DB_TEST_USER_B_ID",
-  "KB_DB_TEST_WRITER_URL", "KB_DB_TEST_FIXTURE_ADMIN_URL", "KB_DB_TEST_CA_CERT_BASE64"];
-for (const name of names) assert.ok(process.env[name], `Missing ${name}`);
-const e = process.env;
-const projectRef = e.KB_DB_TEST_PROJECT_REF;
-assert.match(projectRef, /^[a-z0-9]+$/u);
-function parseUrl(raw) {
-  try { return new URL(raw); }
-  catch { throw new Error("Invalid isolated test URL"); }
-}
-assert.equal(parseUrl(e.KB_DB_TEST_URL).hostname, `${projectRef}.supabase.co`);
-assert.notEqual(e.KB_DB_TEST_USER_A_ID, e.KB_DB_TEST_USER_B_ID);
-const ca = Buffer.from(e.KB_DB_TEST_CA_CERT_BASE64, "base64").toString("utf8");
-assert.ok(ca.includes("-----BEGIN CERTIFICATE-----") && ca.includes("-----END CERTIFICATE-----"));
+let context;
+let manifest;
+let store;
+let interrupted = false;
+let mode;
+const onInterrupt = () => {
+  interrupted = true;
+  console.error("中断已记录；当前操作将在截止时间内结束，随后停止写入并保留运行清单。");
+};
 
-function databaseConfig(raw, role) {
-  const url = parseUrl(raw);
-  assert.equal(url.protocol, "postgresql:");
-  assert.equal(url.port, "6543", "Use the shared Transaction Pooler");
-  assert.equal(url.pathname, "/postgres");
-  assert.equal(url.search, "");
-  assert.equal(url.hash, "");
-  assert.match(url.hostname, /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.pooler\.supabase\.com$/u);
-  assert.equal(decodeURIComponent(url.username), `${role}.${projectRef}`);
-  assert.ok(url.password);
-  return {
-    host: url.hostname, port: 6543, database: "postgres",
-    user: decodeURIComponent(url.username), password: decodeURIComponent(url.password),
-    connectionTimeoutMillis: 5000, query_timeout: 15000,
-    ssl: { ca, servername: url.hostname, rejectUnauthorized: true },
-  };
-}
-const writerConfig = databaseConfig(e.KB_DB_TEST_WRITER_URL, "knowledge_writer_login");
-const adminConfig = databaseConfig(e.KB_DB_TEST_FIXTURE_ADMIN_URL, "postgres");
-const session = (jwt) => createClient(e.KB_DB_TEST_URL, e.KB_DB_TEST_PUBLISHABLE_KEY, {
-  auth: { persistSession: false, autoRefreshToken: false },
-  global: { headers: { Authorization: `Bearer ${jwt}` } },
-});
-const userA = session(e.KB_DB_TEST_JWT_A);
-const userB = session(e.KB_DB_TEST_JWT_B);
-const fixtures = [];
-const clients = [];
-const cleanupBlockedIds = new Set();
-const source = Buffer.from("isolated database concurrency fixture");
-
-async function connect(config) {
-  const client = new Client(config);
-  try { await client.connect(); }
-  catch {
-    await client.end().catch(() => undefined);
-    throw new Error("Isolated database connection failed");
-  }
-  clients.push(client);
-  return client;
-}
-async function scalar(client, sql, values) {
-  const { rows } = await client.query(sql, values);
-  return rows[0]?.value;
-}
-async function createDocument(client, userId, byteSize = 1, upload = false) {
-  const id = randomUUID();
-  const { data, error } = await client.from("knowledge_documents")
-    .insert({ id, user_id: userId, file_name: `${id}.txt`, file_type: "txt", byte_size: byteSize })
-    .select("id,storage_path").single();
-  assert.ifError(error);
-  assert.ok(data);
-  const item = { id, userId, path: data.storage_path, upload };
-  fixtures.push(item);
-  if (upload) {
-    const result = await client.storage.from("knowledge-files").upload(item.path, source,
-      { contentType: "text/plain", upsert: false });
-    assert.ifError(result.error);
-  }
-  return item;
-}
-async function expectInsertError(client, userId, byteSize, expected) {
-  const id = randomUUID();
-  const { data, error } = await client.from("knowledge_documents").insert({
-    id, user_id: userId, file_name: "limit.txt",
-    file_type: "txt", byte_size: byteSize,
-  }).select("id,storage_path").maybeSingle();
-  // If a limit unexpectedly allows the write, the new row still belongs to
-  // this run and must be included in fixture cleanup.
-  if (data) fixtures.push({ id, userId, path: data.storage_path, upload: false });
-  assert.equal(error?.code, "P0001");
-  assert.equal(error?.message, expected);
-}
-const claimSql = "select knowledge_private.claim_knowledge_document($1::uuid,$2::uuid) as value";
-const failSql = "select knowledge_private.fail_knowledge_document($1::uuid,$2::uuid,$3::integer,$4::text) as value";
-const completeSql = "select knowledge_private.complete_knowledge_document($1::uuid,$2::uuid,$3::integer,$4::jsonb) as value";
-const markSql = "select knowledge_private.mark_knowledge_deleting($1::uuid,$2::uuid) as value";
-const finishSql = "select knowledge_private.finish_knowledge_deletion($1::uuid,$2::uuid) as value";
-const claim = (c, userId, id) => scalar(c, claimSql, [userId, id]);
-const fail = (c, userId, id, generation) =>
-  scalar(c, failSql, [userId, id, generation, "temporary"]);
-const complete = (c, userId, id, generation) =>
-  scalar(c, completeSql, [userId, id, generation, JSON.stringify(["verified test chunk"])]);
-const mark = (c, userId, id) => scalar(c, markSql, [userId, id]);
-const finish = (c, userId, id) => scalar(c, finishSql, [userId, id]);
-const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-async function currentHourCount(admin, table, userId) {
-  const { rows } = await admin.query(
-    `select count(*)::integer as count from knowledge_private.${table}
-      where user_id=$1 and created_at >= date_trunc('hour', now() at time zone 'UTC') at time zone 'UTC'`,
-    [userId],
-  );
-  return rows[0].count;
-}
-async function totalEventCount(admin, table, userId) {
-  const { rows } = await admin.query(
-    `select count(*)::integer as count from knowledge_private.${table} where user_id=$1`, [userId],
-  );
-  return rows[0].count;
-}
-async function shiftEvents(admin, table, userId) {
-  // Fixture-only clock acceleration; it does not alter the production schema.
-  await admin.query(
-    `update knowledge_private.${table} set created_at=now()-interval '2 hours'
-      where user_id=$1 and created_at >= date_trunc('hour', now() at time zone 'UTC') at time zone 'UTC'`,
-    [userId],
-  );
-}
-async function documentCount(client) {
-  const { count, error } = await client.from("knowledge_documents").select("id", { count: "exact", head: true });
-  assert.ifError(error);
-  return count;
-}
-
-let admin, first, second;
-let passed = false;
-let cleanupFailed = false;
 try {
-  // Verify both JWTs against this project's Auth server before any mutation.
-  for (const [sessionClient, jwt, expectedId] of [
-    [userA, e.KB_DB_TEST_JWT_A, e.KB_DB_TEST_USER_A_ID],
-    [userB, e.KB_DB_TEST_JWT_B, e.KB_DB_TEST_USER_B_ID],
-  ]) {
-    const verified = await sessionClient.auth.getUser(jwt);
-    assert.ifError(verified.error);
-    assert.equal(verified.data.user?.id, expectedId, "JWT identity does not match test fixture");
-  }
-  admin = await connect(adminConfig);
-  first = await connect(writerConfig);
-  second = await connect(writerConfig);
-  assert.equal(await totalEventCount(admin, "knowledge_upload_events", e.KB_DB_TEST_USER_A_ID), 0,
-    "Use a fresh test user A");
-  assert.equal(await totalEventCount(admin, "knowledge_upload_events", e.KB_DB_TEST_USER_B_ID), 0,
-    "Use a fresh test user B");
-  assert.equal(await totalEventCount(admin, "knowledge_process_events", e.KB_DB_TEST_USER_A_ID), 0);
-  assert.equal(await totalEventCount(admin, "knowledge_process_events", e.KB_DB_TEST_USER_B_ID), 0);
-  assert.equal(await documentCount(userA), 0, "Use an empty test user A");
-  assert.equal(await documentCount(userB), 0, "Use an empty test user B");
+  const selected = parseMode(process.argv.slice(2));
+  mode = selected.mode;
+  const config = validateConfiguration(mode, process.env, process.cwd());
+  store = createManifestStore(process.cwd());
 
-  const race = await createDocument(userA, e.KB_DB_TEST_USER_A_ID, source.length, true);
-  const stale = await createDocument(userA, e.KB_DB_TEST_USER_A_ID, source.length, true);
-  const deleting = await createDocument(userA, e.KB_DB_TEST_USER_A_ID, source.length, true);
-  const missing = await createDocument(userA, e.KB_DB_TEST_USER_A_ID, 1);
-  assert.equal(await claim(first, e.KB_DB_TEST_USER_A_ID, missing.id), -1,
-    "Missing Storage object must not be claimed");
-  assert.equal(await claim(first, e.KB_DB_TEST_USER_B_ID, race.id), 0,
-    "Another user's document must not be claimed");
-
-  // Two real connections race while the first keeps its transaction open.
-  await first.query("begin");
-  let inTransaction = true;
-  try {
-    assert.equal(await claim(first, e.KB_DB_TEST_USER_A_ID, race.id), 1);
-    const waiting = claim(second, e.KB_DB_TEST_USER_A_ID, race.id);
-    await pause(150);
-    await first.query("commit");
-    inTransaction = false;
-    assert.equal(await waiting, 0, "A second processor must not acquire the claim");
-  } finally {
-    if (inTransaction) await first.query("rollback");
-  }
-  assert.equal(await fail(first, e.KB_DB_TEST_USER_A_ID, race.id, 1), true);
-
-  const oldGeneration = await claim(first, e.KB_DB_TEST_USER_A_ID, stale.id);
-  assert.equal(oldGeneration, 1);
-  const expiry = await admin.query(
-    "update public.knowledge_documents set updated_at=now()-interval '11 minutes' where id=$1 and user_id=$2 and status='processing'",
-    [stale.id, e.KB_DB_TEST_USER_A_ID],
-  );
-  assert.equal(expiry.rowCount, 1);
-  const newGeneration = await claim(second, e.KB_DB_TEST_USER_A_ID, stale.id);
-  assert.equal(newGeneration, 2);
-  assert.equal(await complete(first, e.KB_DB_TEST_USER_A_ID, stale.id, oldGeneration), false);
-  assert.equal(await complete(second, e.KB_DB_TEST_USER_A_ID, stale.id, newGeneration), true);
-
-  const deleteGeneration = await claim(first, e.KB_DB_TEST_USER_A_ID, deleting.id);
-  await first.query("begin");
-  inTransaction = true;
-  try {
-    assert.equal(await mark(first, e.KB_DB_TEST_USER_A_ID, deleting.id), true);
-    const waiting = complete(second, e.KB_DB_TEST_USER_A_ID, deleting.id, deleteGeneration);
-    await pause(150);
-    await first.query("commit");
-    inTransaction = false;
-    assert.equal(await waiting, false, "Deletion must invalidate an older processor");
-  } finally {
-    if (inTransaction) await first.query("rollback");
-  }
-  assert.ifError((await userA.storage.from("knowledge-files").remove([deleting.path])).error);
-  deleting.upload = false;
-  assert.equal(await finish(first, e.KB_DB_TEST_USER_A_ID, deleting.id), true);
-
-  // Hourly upload limit: first 20 allowed, 21st rejected, even with deletions.
-  while (await currentHourCount(admin, "knowledge_upload_events", e.KB_DB_TEST_USER_A_ID) < 20) {
-    await createDocument(userA, e.KB_DB_TEST_USER_A_ID);
-  }
-  await expectInsertError(userA, e.KB_DB_TEST_USER_A_ID, 1, "UPLOAD_RATE_LIMITED");
-
-  // Move only this isolated user's fixture events to a previous UTC hour,
-  // then build up to the 100-document and 100 MiB limits.
-  while (await documentCount(userA) < 100) {
-    if (await currentHourCount(admin, "knowledge_upload_events", e.KB_DB_TEST_USER_A_ID) >= 20) {
-      await shiftEvents(admin, "knowledge_upload_events", e.KB_DB_TEST_USER_A_ID);
+  if (mode === "inspect") {
+    const inspection = await inspectFromConfig(config, selected.runId, { store });
+    console.log(`Run ID: ${inspection.runId}; 项目: ${PROJECT_NAME} (${PROJECT_REF})`);
+    console.log(`状态: ${inspection.status}; 阶段: ${inspection.stage}`);
+    for (const entry of inspection.entries) {
+      console.log(`文档 ID: ${entry.id}; 登记阶段: ${entry.phase}; 清理: ${entry.cleanup}; 数据库: ${entry.documentStatus}; Storage 对象: ${entry.objectExists ? "存在" : "不存在"}`);
     }
-    await createDocument(userA, e.KB_DB_TEST_USER_A_ID);
-  }
-  await shiftEvents(admin, "knowledge_upload_events", e.KB_DB_TEST_USER_A_ID);
-  await expectInsertError(userA, e.KB_DB_TEST_USER_A_ID, 1, "KNOWLEDGE_LIMIT_REACHED");
-
-  for (let index = 0; index < 25; index += 1) {
-    if (await currentHourCount(admin, "knowledge_upload_events", e.KB_DB_TEST_USER_B_ID) >= 20) {
-      await shiftEvents(admin, "knowledge_upload_events", e.KB_DB_TEST_USER_B_ID);
+    console.log(`事件保留：C 上传 ${inspection.events.C.uploads}、处理 ${inspection.events.C.processes}；D 上传 ${inspection.events.D.uploads}、处理 ${inspection.events.D.processes}`);
+  } else {
+    context = await runPreflight(config);
+    console.log(`只读预检: PASS；项目 ${PROJECT_NAME} (${PROJECT_REF})；C/D 身份不同，文档、Storage 对象和事件均为空。`);
+    if (mode === "execute") {
+      if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error("TTY_REQUIRED");
+      const runId = newRunId();
+      console.log(`本轮 Run ID: ${runId}`);
+      console.log(`预计创建约 ${ESTIMATED_DOCUMENTS} 条文档记录、${ESTIMATED_STORAGE_OBJECTS} 个 Storage 原件；100 MiB 仅验证数据库声明容量。`);
+      console.log("管理员连接仅用于本轮一条文档的过期时间和 C/D 本轮当前小时事件时间调整；清理按登记 ID 与路径逐项执行。上传/处理事件保留，不自动按用户删除。");
+      console.log("C/D 必须是全新专用账号，验收期间不得由其他进程使用；网络结果不确定时停止写入并使用 --inspect-run 复核。");
+      const reader = createInterface({ input: process.stdin, output: process.stdout });
+      let answer;
+      try { answer = await reader.question(`核对项目后输入完整名称 ${PROJECT_NAME}，再开始写入：`); }
+      finally { reader.close(); }
+      if (answer !== PROJECT_NAME) throw new Error("PROJECT_CONFIRMATION_MISSING");
+      const newManifest = createRunManifest(runId, config.c.id, config.d.id);
+      await store.create(newManifest);
+      manifest = newManifest;
+      process.on("SIGINT", onInterrupt);
+      process.on("SIGTERM", onInterrupt);
+      await executeScenario(context, manifest, store, () => interrupted);
+      if (interrupted) throw new Error("INTERRUPTED_NEEDS_INSPECTION");
+      await cleanupRegistered(manifest, store, context);
+      console.log(`并发、代次、删除竞态与资源限额验收: PASS；Run ID: ${runId}；夹具已逐项核销，事件保留供审计。`);
     }
-    await createDocument(userB, e.KB_DB_TEST_USER_B_ID, 4194304);
   }
-  await expectInsertError(userB, e.KB_DB_TEST_USER_B_ID, 1, "KNOWLEDGE_LIMIT_REACHED");
-
-  await shiftEvents(admin, "knowledge_process_events", e.KB_DB_TEST_USER_A_ID);
-  for (let index = 0; index < 60; index += 1) {
-    const generation = await claim(first, e.KB_DB_TEST_USER_A_ID, race.id);
-    assert.ok(Number.isInteger(generation) && generation > 0);
-    assert.equal(await fail(first, e.KB_DB_TEST_USER_A_ID, race.id, generation), true);
+} catch (error) {
+  // Never print raw Supabase/pg errors: they may include credentials or bodies.
+  const publicCodes = new Set(["28P01", "28000", "42501", "08001", "08006", "57P01",
+    "ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "ENOTFOUND", "EAI_AGAIN"]);
+  const safe = typeof error?.code === "string" &&
+    (publicCodes.has(error.code) || error instanceof AcceptanceError)
+    ? error.code : "UNKNOWN_FAILURE";
+  console.error(`Knowledge DB ${mode ?? "startup"}: FAIL; stage: ${manifest?.stage ?? "preflight"}; code: ${safe}`);
+  if (manifest && store) {
+    manifest.status = "needs-inspection";
+    try { await store.save(manifest); }
+    catch { console.error("运行清单更新失败；使用 Run ID 只读检查现存清单及测试项目。"); }
+    console.error(`Run ID: ${manifest.runId}; 停止后续写入。仅使用 --inspect-run 进行只读复核。`);
+  } else {
+    console.error("本轮未开始写入，也未创建一次性测试对象。");
   }
-  assert.equal(await claim(second, e.KB_DB_TEST_USER_A_ID, race.id), -2,
-    "61st processing claim in a UTC hour must be rejected");
-  passed = true;
-} catch {
-  // Raw PostgreSQL/Supabase errors may contain connection details. Do not log
-  // the error object, URL, JWT, stack, or fixture document contents.
-  console.error("Isolated database concurrency check failed; inspect fixture state.");
   process.exitCode = 1;
 } finally {
-  // Best-effort cleanup; test-only admin SQL deletes only IDs created here.
-  for (const item of fixtures.filter((entry) => entry.upload)) {
-    try {
-      if (first) await mark(first, item.userId, item.id);
-      const owner = item.userId === e.KB_DB_TEST_USER_A_ID ? userA : userB;
-      const result = await owner.storage.from("knowledge-files").remove([item.path]);
-      if (result.error) throw result.error;
-      const remaining = await owner.storage.from("knowledge-files").download(item.path);
-      if (!remaining.error) throw new Error("fixture object remains");
-    } catch { cleanupBlockedIds.add(item.id); cleanupFailed = true; }
-  }
-  if (admin && fixtures.length > 0) {
-    try {
-      await admin.query("delete from public.knowledge_documents where id=any($1::uuid[])",
-        [fixtures.filter((item) => !cleanupBlockedIds.has(item.id)).map((item) => item.id)]);
-      await admin.query("delete from knowledge_private.knowledge_upload_events where user_id=any($1::uuid[])",
-        [[e.KB_DB_TEST_USER_A_ID, e.KB_DB_TEST_USER_B_ID]]);
-      await admin.query("delete from knowledge_private.knowledge_process_events where user_id=any($1::uuid[])",
-        [[e.KB_DB_TEST_USER_A_ID, e.KB_DB_TEST_USER_B_ID]]);
-    } catch {
-      cleanupFailed = true;
-      console.error("Fixture cleanup needs manual review in the isolated project.");
+  process.off("SIGINT", onInterrupt);
+  process.off("SIGTERM", onInterrupt);
+  if (context) {
+    try { await closeConnections(context); }
+    catch {
+      console.error("数据库连接关闭状态不确定；未输出原始错误。");
+      process.exitCode = 1;
     }
   }
-  if (cleanupBlockedIds.size > 0) {
-    console.error("Some Storage fixture cleanup failed; inspect the isolated project before reuse.");
-  }
-  const closed = await Promise.allSettled(clients.map((client) => client.end()));
-  if (closed.some((result) => result.status === "rejected")) cleanupFailed = true;
-}
-if (cleanupFailed) process.exitCode = 1;
-if (passed && !process.exitCode) {
-  console.log("Isolated PostgreSQL claim, generation, delete, document, byte, and hourly limits passed.");
 }

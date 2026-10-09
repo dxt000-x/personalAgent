@@ -62,7 +62,7 @@ Browser / Agent Workspace
 - 恢复：移除测试进程覆盖，Ollama `/api/tags` HTTP 200，`qwen3:8b` 仍存在；正常 Auto 再次选择 Ollama 并回复 `Auto Local 联调成功`。
 - 匿名 AI 接口：上一轮真实请求中 GET providers 与 POST chat 均返回 401 `AUTH_REQUIRED`。
 - 云端配额代码已添加，但 SQL 尚未执行；当前没有真实数据库并发或部署后的云调用验收，不将自动测试描述为已完成数据库原子性验收。
-- Dashboard 仍含明确的演示数据。Knowledge Base 上传、解析、列表和删除已接入代码，但新 migration 与私有 Storage 尚待人工部署和真实账号验收；知识检索未接入。Settings 部分为 UI 设置或占位。
+- Dashboard 仍含明确的演示数据。Knowledge Base 上传、解析、列表和删除已接入代码；独立测试项目已完成人工部署及部分真实验收，生产部署状态尚未确认；知识检索未接入。Settings 部分为 UI 设置或占位。
 
 ## 各 Provider 状态
 
@@ -194,7 +194,13 @@ Agent 输入交互任务：只修改 `web/components/agent-workspace.tsx` 的输
 ### 2026-10-10 Knowledge Base 交互式 Storage 安全验收准备（同分支）
 
 - 旧 `verify-knowledge-security.mjs` 无参数模式保留；新增 `--interactive-storage` 仅允许在 `PersonalAgent-KB-Test/web` 运行，固定独立测试项目 Ref `pxfaqcepztzqyqtmbdrf`，人工确认项目名称。脚本不读取原开发目录 `.env.local`，凭据在终端隐藏输入、仅存进程内；A/B 各需一份已主动确认可丢弃的 `kb-isolation-test-` ready 文件。双向 Storage 下载/删除后由所有者复查字节大小及 SHA-256；跨账号上传使用本轮一次性 B uploading 文档，受限写入角色仅执行知识库标记/完成删除例程进行清理。清理失败报告对象 ID 并以非零状态退出。
-- 本轮只开发脚本与假客户端测试，**没有登录或操作真实 Supabase/Storage**；先同步提交到独立测试 Worktree，再由人工在该目录执行。真实 A/B API 安全验收仍待确认。
+- 上述记录是当时的脚本开发状态。后续用户已在独立测试项目 `personal-agent-quota-test` 确认 TXT、Markdown、PDF 真实上传，A/B API 与 Storage 双向越权隔离，以及 Storage 一次性夹具清理均通过；不代表生产部署或数据库并发/额度验收通过。
+
+### 2026-10-10 Knowledge Base 数据库并发验收脚本加固（同分支）
+
+- 数据库并发脚本改为固定项目 Ref `pxfaqcepztzqyqtmbdrf` 和独立测试 Worktree，显式 `--preflight`（只读）、`--execute`（需交互确认完整项目名）、`--inspect-run <Run-ID>`（只读恢复检查）。只允许全新 C/D 测试账号，两人知识库文档、片段、Storage 原件及上传/处理事件必须全部为空；不复用已验收的 A/B。
+- `--execute` 在每项写入前将精确文档 ID、路径、归属、阶段写入 Git 忽略的 `.kb-acceptance-runs` 清单；网络结果不确定时停止，保留清单供只读检查。清理只对本轮登记的精确对象执行，并复核用户、数据库角色与归属；不再按用户 ID 自动清空事件。上传/处理事件保留供审计。
+- 两条受限连接与仅隔离项目的 `postgres` 夹具连接均限定同一测试项目 Transaction Pooler `:6543`、独立 CA 和严格 TLS。原有双连接争领、过期代次、删除竞态、原件缺失、每小时上传/处理、100 文档及 100 MiB 声明容量断言保留。新增 13 项 fake 测试；全量 Vitest 25 文件、259/259 通过，lint、TypeScript 与 production build 通过。**真实并发验收本轮未执行，生产部署未确认**。运行和中断恢复步骤见 `docs/development.md`。
 
 ## 本地运行和复测
 
