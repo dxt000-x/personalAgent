@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { POST } from "./route";
 import { AIGatewayError } from "@/lib/ai/errors";
 import { runAiGateway } from "@/lib/ai/gateway";
+import { AIRequestDeadline } from "@/lib/ai/request-deadline";
 import { getProvider, getProviderStatuses } from "@/lib/ai/provider-registry";
 import { reserveCloudAiQuota } from "@/lib/ai/quota";
 import { createClient } from "@/lib/supabase/server";
@@ -66,6 +67,7 @@ describe("POST /api/ai/memory-candidates", () => {
     expect(calls.ollama).toHaveBeenCalledTimes(1);
     expect(calls.ollama.mock.calls[0][0]).toEqual([{ role: "user", content: "我长期使用 TypeScript" }]);
     expect(calls.ollama.mock.calls[0][2]).toContain("只分析接下来单条用户消息");
+    expect(calls.ollama.mock.calls[0][3]).toEqual({ disableThinking: true });
     expect(eq).toHaveBeenCalledWith("user_id", "user-a");
     expect(reserveCloudAiQuota).not.toHaveBeenCalled();
   });
@@ -113,9 +115,12 @@ describe("POST /api/ai/memory-candidates", () => {
   it("guards shared Gateway against Privacy/cloud conflict even without route validation", async () => {
     const client = await createClient();
     if (!client) throw new Error("fake client missing");
-    await expect(runAiGateway(client, {
-      provider: "openrouter", routingPreference: "privacy", messages: [{ role: "user", content: "hello" }],
-    })).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+    const deadline = new AIRequestDeadline(new AbortController().signal);
+    try {
+      await expect(runAiGateway(client, {
+        provider: "openrouter", routingPreference: "privacy", messages: [{ role: "user", content: "hello" }],
+      }, deadline)).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+    } finally { deadline.close(); }
     expect(getProvider).not.toHaveBeenCalled();
     expect(reserveCloudAiQuota).not.toHaveBeenCalled();
   });
@@ -160,6 +165,24 @@ describe("POST /api/ai/memory-candidates", () => {
     expect(response.status).toBe(503);
     expect(body.error.code).toBe("QUOTA_UNAVAILABLE");
     for (const id of ids.filter((id) => id !== "ollama")) expect(calls[id]).not.toHaveBeenCalled();
+  });
+
+  it("returns a safe timeout and discards a late extraction response", async () => {
+    let resolveLate!: (value: Awaited<ReturnType<AIProvider["generate"]>>) => void;
+    calls.ollama.mockImplementation(() => new Promise((resolve) => { resolveLate = resolve; }));
+    const controller = new AbortController();
+    const pending = POST(new Request("http://localhost:3000/api/ai/memory-candidates", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "我长期使用 TypeScript", provider: "ollama" }), signal: controller.signal,
+    }));
+    await vi.waitFor(() => expect(calls.ollama).toHaveBeenCalledTimes(1));
+    controller.abort();
+    const response = await pending;
+    expect(response.status).toBe(504);
+    expect((await response.json()).error.code).toBe("TIMEOUT");
+    resolveLate({ text: JSON.stringify({ candidates: [{ content: "fake late candidate", category: "preference", importance: 3, reason: "fake" }] }), provider: "ollama", model: "fake" });
+    await Promise.resolve();
+    expect(eq).not.toHaveBeenCalled();
   });
 
   it("rejects invalid input before quota or model work", async () => {

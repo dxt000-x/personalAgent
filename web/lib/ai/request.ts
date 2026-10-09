@@ -13,7 +13,7 @@ export type ChatRequest = {
   messages: ChatMessage[];
 };
 
-export async function readJsonBody(request: Request): Promise<unknown> {
+export async function readJsonBody(request: Request, signal?: AbortSignal): Promise<unknown> {
   if (request.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() !== "application/json") {
     throw new AIGatewayError("INVALID_REQUEST");
   }
@@ -25,13 +25,18 @@ export async function readJsonBody(request: Request): Promise<unknown> {
 
   if (!request.body) throw new AIGatewayError("INVALID_REQUEST");
   const reader = request.body.getReader();
+  const onAbort = () => { void reader.cancel().catch(() => {}); };
+  signal?.addEventListener("abort", onAbort, { once: true });
+  if (signal?.aborted) onAbort();
   const decoder = new TextDecoder("utf-8", { fatal: true });
   let bytes = 0;
   let body = "";
 
   try {
     while (true) {
+      if (signal?.aborted) throw new AIGatewayError("TIMEOUT");
       const { done, value } = await reader.read();
+      if (signal?.aborted) throw new AIGatewayError("TIMEOUT");
       if (done) break;
       bytes += value.byteLength;
       if (bytes > MAX_REQUEST_BYTES) {
@@ -46,6 +51,7 @@ export async function readJsonBody(request: Request): Promise<unknown> {
     if (error instanceof AIGatewayError) throw error;
     throw new AIGatewayError("INVALID_REQUEST");
   } finally {
+    signal?.removeEventListener("abort", onAbort);
     reader.releaseLock();
   }
 }

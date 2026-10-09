@@ -1,0 +1,63 @@
+import "server-only";
+import type { AIErrorCode } from "./errors";
+import type { ProviderId, ProviderSelection, RoutingPreference } from "./types";
+
+type Phase = "authDurationMs" | "validationDurationMs" | "memoryDurationMs" | "routeDurationMs"
+  | "quotaDurationMs" | "providerDurationMs" | "dedupeDurationMs";
+type FinalCode = AIErrorCode | "SUCCESS" | "CLIENT_ABORTED";
+
+/** Allowlisted operational fields only. Never add request, response, headers or Memory content here. */
+export class AIRequestDiagnostics {
+  readonly requestId = crypto.randomUUID();
+  private readonly startedAt = performance.now();
+  private readonly durations: Partial<Record<Phase, number>> = {};
+  private provider?: ProviderId;
+  private routingMode?: "auto" | "privacy" | "explicit";
+  private attempts = 0;
+  private memoryFailureKind?: "timeout" | "database" | "network";
+  private finished = false;
+
+  constructor(private readonly endpoint: "chat" | "memory-candidates") {}
+
+  setRouting(provider: ProviderSelection, preference: RoutingPreference): void {
+    this.routingMode = provider === "auto" ? preference : "explicit";
+  }
+
+  setMemoryFailure(kind: "timeout" | "database" | "network" | undefined): void {
+    this.memoryFailureKind = kind;
+  }
+
+  attempt(provider: ProviderId): void {
+    this.provider = provider;
+    this.attempts += 1;
+  }
+
+  async measure<T>(phase: Phase, operation: () => Promise<T>): Promise<T> {
+    const start = performance.now();
+    try { return await operation(); }
+    finally {
+      this.durations[phase] = Math.round((this.durations[phase] ?? 0) + performance.now() - start);
+    }
+  }
+
+  snapshot(finalErrorCode: FinalCode) {
+    return {
+      event: "ai_gateway_request",
+      requestId: this.requestId,
+      endpoint: this.endpoint,
+      ...(this.provider ? { provider: this.provider } : {}),
+      ...(this.routingMode ? { routingMode: this.routingMode } : {}),
+      ...this.durations,
+      totalDurationMs: Math.round(performance.now() - this.startedAt),
+      attemptNumber: this.attempts,
+      ...(this.memoryFailureKind ? { memoryFailureKind: this.memoryFailureKind } : {}),
+      finalErrorCode,
+    };
+  }
+
+  finish(finalErrorCode: FinalCode): void {
+    if (this.finished) return;
+    this.finished = true;
+    if (process.env.NODE_ENV !== "test") console.info(JSON.stringify(this.snapshot(finalErrorCode)));
+  }
+}

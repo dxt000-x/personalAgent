@@ -24,6 +24,13 @@ function fakeDailyUsage() {
 }
 
 describe("cloud quota RPC contract with a deterministic fake", () => {
+  it("passes cancellation to the authenticated quota RPC", async () => {
+    const signal = new AbortController().signal;
+    const abortSignal = vi.fn().mockResolvedValue({ data: [{ allowed: true, remaining_count: 29 }], error: null });
+    const client = { rpc: vi.fn().mockReturnValue({ abortSignal }) } as unknown as SupabaseClient;
+    expect(await reserveCloudAiQuota(client, signal)).toEqual({ remainingCount: 29 });
+    expect(abortSignal).toHaveBeenCalledWith(signal);
+  });
   it("reserves the first use and reports 29 remaining", async () => {
     const { counts, clientFor } = fakeDailyUsage();
     expect(await reserveCloudAiQuota(clientFor("A"))).toEqual({ remainingCount: 29 });

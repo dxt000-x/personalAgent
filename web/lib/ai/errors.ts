@@ -32,7 +32,6 @@ export class AIGatewayError extends Error {
 }
 
 export function providerFailure(error: unknown, signal: AbortSignal) {
-  if (signal.aborted) return new AIGatewayError("TIMEOUT");
   if (typeof error === "object" && error !== null) {
     if ("status" in error && error.status === 429) {
       return new AIGatewayError("RATE_LIMITED");
@@ -41,5 +40,6 @@ export function providerFailure(error: unknown, signal: AbortSignal) {
       return new AIGatewayError("TIMEOUT");
     }
   }
+  if (signal.aborted) return new AIGatewayError("TIMEOUT");
   return new AIGatewayError("PROVIDER_ERROR");
 }

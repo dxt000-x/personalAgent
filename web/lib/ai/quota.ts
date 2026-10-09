@@ -6,14 +6,17 @@ type AuthenticatedSupabaseClient = NonNullable<Awaited<ReturnType<typeof createC
 export type CloudQuotaReservation = { remainingCount: number };
 
 /** The RPC derives the user and UTC date from its authenticated database context. */
-export async function reserveCloudAiQuota(supabase: AuthenticatedSupabaseClient): Promise<CloudQuotaReservation> {
+export async function reserveCloudAiQuota(supabase: AuthenticatedSupabaseClient, signal?: AbortSignal): Promise<CloudQuotaReservation> {
   let result: Awaited<ReturnType<typeof supabase.rpc>>;
   try {
-    result = await supabase.rpc("reserve_cloud_ai_quota");
+    const operation = supabase.rpc("reserve_cloud_ai_quota");
+    result = await (signal ? operation.abortSignal(signal) : operation);
   } catch {
+    if (signal?.aborted) throw new AIGatewayError("TIMEOUT");
     throw new AIGatewayError("QUOTA_UNAVAILABLE");
   }
 
+  if (signal?.aborted) throw new AIGatewayError("TIMEOUT");
   if (result.error || !Array.isArray(result.data) || result.data.length !== 1) {
     throw new AIGatewayError("QUOTA_UNAVAILABLE");
   }
