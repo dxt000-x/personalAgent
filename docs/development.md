@@ -104,7 +104,15 @@ ESLint 9 的安装还提示该版本已停止支持；当前保留与 Next.js �
 
 ## Task 2 演示边界
 
-Dashboard 与 Knowledge Base 中的用户、任务、项目进度和文件列表仍为演示示例。Personal Memory 已改为 Supabase 手动 CRUD；Agent 在服务端读取当前用户的有限记忆并作为不可信背景上下文交给所选 Provider。智能记忆建议需主动开启，AI 只生成候选，不自动创建记忆。Agent Workspace 已连接 AI Gateway，Timeline 显示真实请求阶段。当前对话保存在前端内存，刷新后清空；不实现 RAG、Agent Planning、Tool Calling 或 Local Connector。
+Dashboard 中的用户、任务与项目进度仍为演示示例。Knowledge Base 文件列表已改为真实 API/Storage 流程，迁移与线上联调待人工验收。Personal Memory 已改为 Supabase 手动 CRUD；Agent 在服务端读取当前用户的有限记忆并作为不可信背景上下文交给所选 Provider。智能记忆建议需主动开启，AI 只生成候选，不自动创建记忆。Agent Workspace 已连接 AI Gateway，Timeline 显示真实请求阶段。当前对话保存在前端内存，刷新后清空；不实现 RAG、Agent Planning、Tool Calling 或 Local Connector。
+
+## Knowledge Base 文件接入与验收
+
+迁移文件：[`supabase/migrations/20261009120000_create_knowledge_base.sql`](../supabase/migrations/20261009120000_create_knowledge_base.sql)。先在隔离 Supabase 项目人工审查并执行，再检查 `knowledge_documents` / `knowledge_chunks` 的 RLS、所有权策略、五个 RPC 仅 authenticated 可执行、`knowledge-files` Bucket 的 `public=false`、4 MiB 限制、MIME 限制及 Storage 三条所有权策略。确认后才考虑目标项目部署。本分支没有执行任何生产 SQL 或 Storage 设置；migration 同时创建 Bucket，无须另在控制台建立同名 Bucket。若已有同名 Bucket 但安全配置不符，migration 会回滚，需人工排查而非静默沿用。
+
+[Vercel Function 请求体上限为 4.5 MB](https://vercel.com/docs/functions/limitations)，因此 `POST /api/knowledge` 只接收最多 4 KiB 的初始化 JSON，文件由浏览器的 Supabase 客户端直传私有 Bucket；4 MiB 也低于 [Supabase 标准上传建议的 6 MB 阈值](https://supabase.com/docs/guides/storage/uploads/standard-uploads)。Bucket MIME/大小、用户路径 RLS 是入口防线。服务端下载原件后再次核对大小、扩展名对应格式、PDF 头与解析结果、UTF-8 和明显二进制特征，拒绝空正文、超长正文、超过 50 页的 PDF 或超过 200 段的文档。PDF 使用 `pdfjs-dist` 提取文字；无 OCR。Markdown 作为原文保存，不执行 HTML。
+
+自动化测试使用内存中的假数据库、Storage 和客户端，不访问真实 Supabase。至少验收：登录 A 上传三种文件，列表/片段顺序、刷新、删除并确认 Storage 无对象；登录 B 不可列出、处理或删除 A 的文档，也不可通过 Supabase Storage SDK 下载 A 文件；匿名 API 返回 401；错误扩展名、超限、空文件、损坏/扫描 PDF、上传中断和重复删除均有安全结果。进一步通过只读 SQL 核验 chunk 数与 `storage.objects` 私有路径，并手动检查原件没有进入公开 URL。受控测试项目中模拟 Storage 删除失败后应留下 `deleting` 可重试记录；`processing` 被中断超过 10 分钟后可继续处理。真实 RLS、Storage 权限、函数时限与跨服务一致性尚待实测，不能由 fake 测试替代。
 
 ## Personal Memory 数据安全
 

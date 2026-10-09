@@ -20,10 +20,13 @@
 - Memory Context 作为服务端 system/developer instruction 参数传给 Provider；明确将保存内容视为不可信数据，禁止其覆盖系统、安全、认证、隐私或路由规则。Memory 查询失败时不记录原始错误或内容，聊天可继续且 metadata 显示 unavailable；认证失败仍返回 AUTH_REQUIRED。
 - Agent Timeline 展示 Received、Validating、Retrieving Memory、Routing、Generating、Completed；响应仅返回 memory status/count，不返回 Memory 内容或数据库标识。
 - 缺少或无效的公开配置时不创建客户端，认证页显示提示，受保护页面跳转登录；无开发绕过入口。
-- Dashboard 与 Knowledge Base 仍展示演示数据；`/memory` 已使用真实 Supabase 数据，不再显示 Mock Memory。Agent 页面是真实 Chat UI，但不执行 Agent Planning 或工具。
+- Dashboard 仍展示演示数据；`/memory` 使用真实 Supabase 数据。`/knowledge` 的文件上传、元数据和有序正文片段已接入代码，数据库与 Storage migration 仍待人工部署和真实验收。Agent 页面是真实 Chat UI，但不执行 Agent Planning 或工具。
 - Personal Context Layer 当前实现：Authenticated User → Personal Memory UI → Next.js Memory API → Supabase SSR Session → `public.memories` → RLS。API 从已验证 claims 获取用户 ID；请求不接受客户端指定 `user_id`；数据库仅授予 authenticated 必需的 SELECT、受限列 INSERT/UPDATE 与 DELETE 权限。
 - Memory API 提供 `GET/POST /api/memories` 和 `GET/PATCH/DELETE /api/memories/[id]`，强制 private/no-store 响应。SQL 约束类别、重要度和内容长度；POST 省略 `source`，由数据库 `DEFAULT 'manual'` 填充；更新时间由 trigger 维护。
 - 记忆所有权由 SELECT、INSERT、UPDATE、DELETE 四条 authenticated RLS policy 保障。按用户过滤是额外防护，不替代 RLS；跨用户单条访问以 404 安全失败。
+- 知识库路径：Browser 以当前登录态直传私有 `knowledge-files` Bucket → 认证的 `POST /api/knowledge/[id]/process` 读取并校验原件 → `public.knowledge_documents` 与 `public.knowledge_chunks`。初始化和列表由 `GET/POST /api/knowledge` 提供，删除由 `DELETE /api/knowledge/[id]` 提供。服务端从 `getClaims()` 获得用户 ID，不接受客户端所有权或 Storage 路径。文件请求不经过 Vercel Function；处理函数只收文档 ID。
+- 两张知识库表均启用 RLS，普通角色只能插入自己的待上传元数据和读取自己的记录。状态转换与片段写入使用固定 `search_path` 的 SECURITY DEFINER RPC，逐一核对 `auth.uid()`；片段关联 `(document_id,user_id)` 复合外键，删除文档时级联清理。Storage 的 INSERT/SELECT/DELETE policy 仅允许当前用户记录的生成路径，Bucket 为 private，限制 4 MiB 与三种 MIME。迁移尚未在真实 Supabase 验收。
+- 删除先转 `deleting`，用 Storage API 删除原件，再由数据库 RPC 检查对象已不存在后删除元数据和片段；失败保留可重试状态。确定性内容/解析失败标记 `failed` 并尝试清理；临时 Storage/数据库故障保留原件和 `processing`，超过 10 分钟可重试。跨 Storage 与 PostgreSQL 不存在单一原子事务，账号整体删除时的旧对象清理也仍需独立运维方案。
 - Migration 已由项目维护者在 Supabase 执行并确认 RLS 与四条 Policy。真实登录态使用最小列权限完成 GET 200、POST 201、PATCH 200 与 DELETE 204；响应中的 source 为 `manual`，更新时间 trigger 产生新时间。匿名五种 API 操作均返回 401 `AUTH_REQUIRED`。A/B 双账号的 AI Memory Context 隔离已有人工验收；跨账号单条 Memory API 访问的单独复测不与该结果混同。
 - 联调期间多次 PATCH 曾返回 503 `MEMORY_SERVICE_ERROR`，重试后 PATCH 返回 200；未观察到权限拒绝 403。该间歇性服务错误应在后续联调中继续留意。
 - `web/` 使用 TypeScript 与 Tailwind CSS，提供 lint、类型检查与生产构建脚本。

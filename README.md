@@ -110,7 +110,7 @@ npm run start
 - Agent 可选择开启智能记忆建议：聊天成功后单独分析本轮用户消息，展示最多 3 条候选；点击确认后复用 `POST /api/memories` 保存，忽略则不写入。
 - Agent Timeline 显示 Received、Validating、Retrieving Memory、Routing、Generating、Completed；Memory 仅作为当前用户的安全上下文，不模拟 Planning、RAG 或工具调用。
 - `/memory`：通过 `GET/POST /api/memories` 与 `GET/PATCH/DELETE /api/memories/[id]` 访问当前用户的 Personal Memory，支持新增、编辑、删除、加载/空/错误状态；服务端从已验证 Session 获取 `user_id`，不接受客户端指定所有权字段。
-- `/knowledge`：演示文件列表；上传与检索暂不可用。
+- `/knowledge`：当前账号的 PDF、TXT、Markdown 文件列表、直传、服务端正文解析与有序片段、处理状态和删除。数据库与私有 Storage migration 待人工部署和真实环境验收；检索未实现。
 - `/settings`：模型、自主程度的本地 UI 选择，以及服务商/连接器占位。
 - `POST /api/ai/chat`：认证后支持 Auto 或显式选择 OpenRouter、OpenAI、DeepSeek、Gemini、Ollama；验证输入并返回统一的非流式文本结果。Auto 按规则路由并最多尝试两个候选；显式选择不回退。
 - 云端 AI 每用户每日 30 次预占限制已在 Gateway 与迁移文件中实现；数据库迁移须经人工审查并部署后才可用于真实云端调用。
@@ -121,7 +121,7 @@ npm run start
 - 后端与本地连接器占位目录。
 - 环境变量示例、敏感文件忽略规则与架构/开发文档。
 
-Agent 对话只保存在前端内存，刷新后清空；发送时只传递最近且符合 Gateway 限制的消息。Gateway 在服务端使用当前登录 Session 和 RLS 查询最多 8 条记忆，并在 4000 字符及剩余输入预算内注入；客户端不能提交 Memory Context。Dashboard 与 Knowledge Base 仍使用标明的演示内容。当前没有自动写入记忆、Embedding、Semantic Search、Vector RAG、文件读取或命令执行。
+Agent 对话只保存在前端内存，刷新后清空；发送时只传递最近且符合 Gateway 限制的消息。Gateway 在服务端使用当前登录 Session 和 RLS 查询最多 8 条记忆，并在 4000 字符及剩余输入预算内注入；客户端不能提交 Memory Context。Dashboard 仍使用标明的演示内容。知识库文件尚不参与 AI 对话；当前没有 Embedding、Semantic Search、Vector RAG、工具文件读取或命令执行。
 
 ## Planned Features
 
@@ -165,6 +165,14 @@ OLLAMA_MODEL=qwen3:8b
 每个用户每个 **UTC 日期最多预占 30 次云端 AI Gateway 请求**，在下一个 UTC 日期 00:00 重置。首次尝试云 Provider 前预占一次；上游成功或失败均计一次，同一请求在云 Provider 间 fallback 不重复计数。未配置 Provider 在尝试前被拒绝时不计数。此计数是云端请求次数，**不代表 token 用量或真实费用**。额度用尽时返回 HTTP 429 `CLOUD_QUOTA_EXCEEDED`；数据库无法核验时返回 HTTP 503 `QUOTA_UNAVAILABLE`，均不调用云模型。匿名、无效输入、Ollama 和 Privacy 不消耗云额度。
 
 配额由 Supabase PostgreSQL 的原子 UPSERT 维护，可跨 Vercel 实例共享。自动测试使用 fake RPC；真实 PostgreSQL 并发与权限验收仍待在隔离测试项目完成，步骤见 [开发文档](docs/development.md)。
+
+### 个人知识库文件（待数据库与 Storage 人工验收）
+
+在隔离 Supabase 项目审查并执行 [`supabase/migrations/20261009120000_create_knowledge_base.sql`](supabase/migrations/20261009120000_create_knowledge_base.sql)，确认文档/片段 RLS 和 `knowledge-files` 私有 Bucket 后，再由维护者决定目标项目部署。仓库不会自动执行 SQL，也不修改 Vercel 环境。迁移未部署时知识库 API 会以安全服务错误失败。
+
+支持 PDF、UTF-8 TXT 和 Markdown，单文件上限 4 MiB。浏览器使用当前 Supabase 登录态将文件直接上传到按用户/文档生成的私有 Storage 路径；Next.js 仅接收小型元数据 JSON。服务端随后重新下载原件，验证实际字节数、PDF 头与解析结果或文本 UTF-8/二进制特征，再拆成有序片段。这样文件请求不经过 Vercel Function 的 [4.5 MB 请求体限制](https://vercel.com/docs/functions/limitations)；Supabase [标准直传](https://supabase.com/docs/guides/storage/uploads/standard-uploads)适用于当前 4 MiB 上限。
+
+删除先标记 `deleting`，再通过 Storage API 移除原件，最后在数据库中删除文档并级联删除片段；Storage 失败时保留可重试状态。确定性的格式/解析失败标记 `failed` 并尝试清理原件；临时 Storage/数据库错误保留原件与 `processing` 状态。未完成的上传可在页面继续处理或删除；长时间卡住的处理在 10 分钟后可重新认领。扫描版、加密版或无文字 PDF 无法提取；本阶段不提供 OCR、Embedding 或 RAG。自动测试使用假 Supabase/Storage，不代表目标项目权限和真实文件联调已通过；步骤见 [开发文档](docs/development.md)。
 
 ### 智能记忆建议（本分支，待人工联调）
 

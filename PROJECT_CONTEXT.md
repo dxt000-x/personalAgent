@@ -16,7 +16,7 @@
 ## 仓库与交接状态
 
 - 当前仓库由用户确认沿用原位置；不要自动迁移或复制项目。原请求中的新路径不存在，启动新对话时应绑定当前实际仓库。
-- 当前智能记忆候选任务 branch：`feat/ai-memory-extraction`；任务开始时 HEAD 为 `a1a13ee`（合并云配额 PR #26），工作区 clean，并与本地 `main`、`origin/main` 一致。未联网核对远端最新 main。
+- 当前知识库接入任务 branch：`feat/knowledge-base-ingestion`；任务开始时 HEAD 为 `8b9cd90`，工作区 clean。历史智能记忆候选任务 branch 为 `feat/ai-memory-extraction`，当时基线是 `a1a13ee`。本轮未联网核对远端最新 main。
 - 先前 Agent 输入交互任务 branch：`feat/agent-enter-to-send`；该任务已合并到当前基线。
 - 先前稳定性任务 branch 为 `test/ai-gateway-regression`；当时 HEAD 与本地 `main`、`origin/main` 均为 `ac1e55a`。
 - OpenRouter 合并基线：`2874015`，`Merge pull request #21 from dxt000-x/feat/openrouter-provider`。
@@ -62,7 +62,7 @@ Browser / Agent Workspace
 - 恢复：移除测试进程覆盖，Ollama `/api/tags` HTTP 200，`qwen3:8b` 仍存在；正常 Auto 再次选择 Ollama 并回复 `Auto Local 联调成功`。
 - 匿名 AI 接口：上一轮真实请求中 GET providers 与 POST chat 均返回 401 `AUTH_REQUIRED`。
 - 云端配额代码已添加，但 SQL 尚未执行；当前没有真实数据库并发或部署后的云调用验收，不将自动测试描述为已完成数据库原子性验收。
-- Dashboard 与 Knowledge Base 仍含明确的演示数据；Knowledge 上传/检索未接入。Settings 部分为 UI 设置或占位。
+- Dashboard 仍含明确的演示数据。Knowledge Base 上传、解析、列表和删除已接入代码，但新 migration 与私有 Storage 尚待人工部署和真实账号验收；知识检索未接入。Settings 部分为 UI 设置或占位。
 
 ## 各 Provider 状态
 
@@ -158,6 +158,14 @@ Agent 输入交互任务：只修改 `web/components/agent-workspace.tsx` 的输
 - 每条 AI 请求最多一条 `ai_gateway_request` 安全结构化日志，含随机 requestId、阶段耗时、实际尝试的 Provider、尝试数、Memory 失败粗分类与最终安全错误码，不含用户内容、身份或密钥。Memory 查询仍限 2 秒，底层请求不结束时可按原规则 fail-soft；Auth 失败仍是 401。粗分类无法单独证明数据库/代理根因。
 - 本地只读 `/api/show` 元数据确认 `qwen3:8b` 支持 `think:false`，故仅候选提取请求启用；普通聊天与其他模型保持原参数。`openrouter/free` 的实际模型选择与延迟可能变化；本分支没有更换生产模型或环境配置，也没有执行真实模型推理验收。
 - Vitest 从原有 127 项增至 13 个文件 145 项，覆盖共享 Deadline、显式/Auto/Privacy 超时、晚到候选、Memory 慢查询 fail-soft、Ollama 提取参数与安全错误映射。测试只用 fake Provider/fetch/Supabase；真实 Vercel 函数限制、上游 429/5xx/超时、Ollama 排队与 Memory 间歇 unavailable 仍待独立人工验证。
+
+### 2026-10-09 Knowledge Base Task 1（`feat/knowledge-base-ingestion`）
+
+- 原 `/knowledge` 固定演示文档与禁用上传已替换为当前账号真实文件列表、浏览器直传、处理状态、删除与空/错误状态。只接受 PDF、UTF-8 TXT、Markdown，单文件最多 4 MiB；正文最多 200,000 字符、PDF 最多 50 页、片段最多 200 个。扫描/加密/无文字 PDF 不支持 OCR。
+- 迁移 `supabase/migrations/20261009120000_create_knowledge_base.sql` 定义 `public.knowledge_documents`、`public.knowledge_chunks`、两表 RLS、当前用户所有权及复合外键、五个基于 `auth.uid()` 的受限状态/片段 RPC，以及私有 `knowledge-files` Bucket 的大小、MIME 和路径策略。没有使用 service_role。迁移**未执行**；真实 Storage/RLS 权限和多账号隔离**未验收**。
+- Vercel Function 请求体上限当前官方文档为 4.5 MB，所以文件由浏览器凭当前 Supabase Session 直传 Storage，Next.js API 仅接收小型元数据和文档 ID。处理路由重新下载原件，校验真实字节、内容和格式，再解析 PDF 或文本并拆有序片段。原始文件不会传给 AI Gateway，也没有 Embedding/RAG。
+- 确定性的格式/解析失败将记录标记 `failed` 并尝试清理文件；临时 Storage/数据库错误保留原件与 `processing`。删除先标记 `deleting`，Storage 删除成功后 RPC 核对对象不存在，再删文档并级联删除片段。中途失败保留可重试状态；停在 `processing` 超过 10 分钟可重新认领。跨 Storage 与数据库没有全局事务，整账号注销删除后的 Storage 孤儿清理仍是运维待办。
+- 自动测试使用 fake 数据库/Storage/Session，另用 `pdfjs-dist` 真正解析测试用 PDF 字节；不连接真实 Supabase、云模型或 Ollama。新增 4 个测试文件、32 个用例；全量 17 个文件、177 项测试通过。lint、`npx tsc --noEmit` 与生产构建通过，最终状态以本分支提交报告为准。人工验收先审查并在隔离项目部署迁移，验证 Bucket private、策略、A/B 数据隔离、三种文件、错误与删除恢复，再决定目标环境部署。
 
 ## 本地运行和复测
 

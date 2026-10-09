@@ -20,6 +20,7 @@
     "@supabase/supabase-js": "^2.117.2",
     "next": "^16.3.8",
     "openai": "^6.49.0",
+    "pdfjs-dist": "4.10.38",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"
   },
