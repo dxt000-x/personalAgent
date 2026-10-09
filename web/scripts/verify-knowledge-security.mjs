@@ -6,7 +6,8 @@ import { createClient } from "@supabase/supabase-js";
 
 assert.equal(process.env.KB_TEST_PROJECT_KIND, "isolated-test-project", "Isolated test project flag required");
 const required = ["KB_TEST_URL", "KB_TEST_PUBLISHABLE_KEY", "KB_TEST_JWT_A", "KB_TEST_JWT_B",
-  "KB_TEST_DOC_A", "KB_TEST_DOC_B", "KB_TEST_PENDING_DOC_A", "KB_TEST_USER_A_ID"];
+  "KB_TEST_DOC_A", "KB_TEST_DOC_B", "KB_TEST_PENDING_DOC_A", "KB_TEST_USER_A_ID",
+  "KB_TEST_USER_B_ID", "KB_TEST_STORAGE_PATH_A", "KB_TEST_STORAGE_PATH_B"];
 for (const key of required) assert.ok(process.env[key], `Missing ${key}`);
 
 const url = process.env.KB_TEST_URL;
@@ -53,6 +54,25 @@ for (const [current, ownId, otherId] of [
     .eq("document_id", otherId);
   assert.ifError(otherChunks.error);
   assert.equal(otherChunks.data.length, 0, "cross-user chunks visible");
+}
+
+for (const [current, forbiddenPath] of [
+  [a, process.env.KB_TEST_STORAGE_PATH_B],
+  [b, process.env.KB_TEST_STORAGE_PATH_A],
+]) {
+  const download = await current.storage.from("knowledge-files").download(forbiddenPath);
+  assert.ok(download.error, "cross-user Storage download unexpectedly succeeded");
+  const list = await current.storage.from("knowledge-files").list(forbiddenPath.split("/")[0]);
+  assert.ok(list.error || !list.data?.some((item) => item.name === forbiddenPath.split("/")[1]),
+    "cross-user Storage listing unexpectedly succeeded");
+}
+
+const forbiddenUploadPath = `${process.env.KB_TEST_USER_B_ID}/00000000-0000-4000-8000-000000000000/source.txt`;
+const forbiddenUpload = await a.storage.from("knowledge-files").upload(forbiddenUploadPath,
+  new TextEncoder().encode("isolated test"), { contentType: "text/plain", upsert: false });
+if (!forbiddenUpload.error) {
+  await a.storage.from("knowledge-files").remove([forbiddenUploadPath]);
+  assert.fail("cross-user Storage upload unexpectedly succeeded; inspect residual test object");
 }
 
 console.log("Knowledge direct-RPC denial and A/B RLS checks passed in isolated test project.");

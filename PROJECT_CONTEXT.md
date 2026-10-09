@@ -173,6 +173,12 @@ Agent 输入交互任务：只修改 `web/components/agent-workspace.tsx` 的输
 - 领取前查 Storage 原件，处理代次防止过期提交；删除使代次失效。临时错误标记 `failed/temporary` 可重试，确定性无效文件仅可删除后重传，清理失败保留元数据及原件。DB 状态失败可在 10 分钟后重领。Trigger 限每用户 100 文档、100 MiB、UTC 小时 20 次初始化，领取每小时 60 次。
 - 本地 Vitest 共 20 文件、195/195 通过（相较前次 177 项新增 18 项）；lint、`npx tsc --noEmit`、Next production build 通过。Mock 与 SQL 静态断言不等于 PostgreSQL 安全/并发验收。新增隔离项目直接 RPC/RLS 脚本和只读权限审查 SQL；迁移、专用登录角色、真实 A/B、Storage、边界和并发均**未执行、待实测**。没有改生产 Vercel 配置。
 
+### 2026-10-09 Knowledge Base 第二轮审查补充（同分支）
+
+- 只读审查 SQL 扩展为角色危险属性、递归继承、数据库/Schema/表/序列/函数有效权限、PUBLIC 和默认权限审计；Storage 查询列出 `storage.objects` 的**全部**策略、适用 authenticated 的角色关系与完整 USING/WITH CHECK，不再按策略名筛选。其他 permissive 策略可能按 OR 放宽 `knowledge-files`，实际目标数据库尚未检查。
+- Next.js 受限连接限定 Supabase Shared Transaction Pooler `:6543`、自定义角色项目后缀、独立 CA 与 TLS 证书/主机名校验；模块级连接池仍最多 2 个/温实例，连接超时 5 秒、查询超时 10 秒。生产环境变量未查看或修改，Vercel Fluid Compute、真实连接数和证书联调待核实。
+- 新增隔离项目数据库并发脚本：两条独立受限 PostgreSQL 连接加隔离项目夹具连接，计划验证领取竞争、过期代次、删除并发、Storage 缺失、100 文档/100 MiB、UTC 小时上传与处理限额。测试脚本会写入隔离项目并尝试清理，**未运行**；须人工批准后执行。用户 ID 仍仅来自服务端 `getClaims().claims.sub`，所有私有例程调用均传该值；上传初始化中的 `user_id` 额外字段被拒绝，处理/删除请求中的同名字段不会覆盖授权身份。自动测试新增身份传递断言。本轮本地 Vitest 为 20 文件、199/199 通过；lint、typecheck、production build 通过。
+
 ## 本地运行和复测
 
 在仓库根目录使用 Windows setup/start 脚本，或在 `web/` 执行：

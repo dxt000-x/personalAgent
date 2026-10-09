@@ -42,4 +42,18 @@ describe("Knowledge repository database boundaries", () => {
     await expect(repo.create(userId, input)).rejects.toMatchObject({ code: "KNOWLEDGE_UNAVAILABLE" });
     expect(from).not.toHaveBeenCalled();
   });
+  it("passes the authenticated user ID to every private transition", async () => {
+    const repo = new SupabaseKnowledgeRepository({ rpc: vi.fn() } as never);
+    vi.mocked(callKnowledgeTransition).mockResolvedValue(true);
+    await repo.claim(userId, documentId);
+    await repo.fail(userId, documentId, 4, "temporary");
+    await repo.complete(userId, documentId, 4, ["parsed"]);
+    await repo.markDeleting(userId, documentId);
+    await repo.finishDeleting(userId, documentId);
+    expect(callKnowledgeTransition).toHaveBeenNthCalledWith(1, "claim", [userId, documentId]);
+    expect(callKnowledgeTransition).toHaveBeenNthCalledWith(2, "fail", [userId, documentId, 4, "temporary"]);
+    expect(callKnowledgeTransition).toHaveBeenNthCalledWith(3, "complete", [userId, documentId, 4, '["parsed"]']);
+    expect(callKnowledgeTransition).toHaveBeenNthCalledWith(4, "markDeleting", [userId, documentId]);
+    expect(callKnowledgeTransition).toHaveBeenNthCalledWith(5, "finishDeleting", [userId, documentId]);
+  });
 });

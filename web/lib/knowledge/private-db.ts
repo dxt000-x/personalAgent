@@ -9,20 +9,29 @@ let pool: Pool | undefined;
 function knowledgePool(): Pool {
   if (pool) return pool;
   const raw = process.env.KNOWLEDGE_DB_URL;
-  if (!raw) throw new KnowledgeError("KNOWLEDGE_UNAVAILABLE");
+  const certificate = process.env.KNOWLEDGE_DB_CA_CERT_BASE64;
+  if (!raw || !certificate) throw new KnowledgeError("KNOWLEDGE_UNAVAILABLE");
   try {
     const url = new URL(raw);
     const username = decodeURIComponent(url.username);
+    const ca = Buffer.from(certificate, "base64").toString("utf8");
     if (!["postgres:", "postgresql:"].includes(url.protocol) ||
-        !/^knowledge_writer_login(?:\.[a-zA-Z0-9_-]+)?$/u.test(username) ||
-        !url.hostname || !url.password || !url.pathname.slice(1)) {
+        !/^knowledge_writer_login\.[a-zA-Z0-9_-]+$/u.test(username) ||
+        !/^[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)*\.pooler\.supabase\.com$/u.test(url.hostname) ||
+        url.port !== "6543" || url.pathname !== "/postgres" ||
+        url.search !== "" || url.hash !== "" || !url.password ||
+        !ca.includes("-----BEGIN CERTIFICATE-----") || !ca.includes("-----END CERTIFICATE-----")) {
       throw new Error("Invalid knowledge database role");
     }
-    pool = new Pool({ host: url.hostname, port: url.port ? Number(url.port) : 5432,
+    const nextPool = new Pool({ host: url.hostname, port: 6543,
       user: username, password: decodeURIComponent(url.password),
-      database: decodeURIComponent(url.pathname.slice(1)), max: 2,
-      connectionTimeoutMillis: 5000, idleTimeoutMillis: 10000,
-      ssl: { rejectUnauthorized: true } });
+      database: "postgres", max: 2, connectionTimeoutMillis: 5000,
+      idleTimeoutMillis: 10000, query_timeout: 10000,
+      ssl: { ca, servername: url.hostname, rejectUnauthorized: true } });
+    // Serverless instances can resume with stale idle sockets. Keep an error
+    // listener so their raw connection errors never become unhandled logs.
+    nextPool.on("error", () => undefined);
+    pool = nextPool;
     return pool;
   } catch {
     throw new KnowledgeError("KNOWLEDGE_UNAVAILABLE");

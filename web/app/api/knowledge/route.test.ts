@@ -80,6 +80,17 @@ describe("knowledge API security and upload lifecycle", () => {
     expect(repository.create).toHaveBeenCalledWith(userA, expect.objectContaining({ byteSize: content.length }));
   });
 
+  it("rejects client-supplied ownership on upload initialization", async () => {
+    const repository = fakeRepository();
+    vi.mocked(requireKnowledgeContext).mockResolvedValue({ userId: userA, repository });
+    const response = await POST(request("/api/knowledge", "POST", {
+      fileName: "notes.txt", size: content.length, user_id: userB,
+    }));
+    expect(response.status).toBe(400);
+    expect((await response.json()).error.code).toBe("INVALID_REQUEST");
+    expect(repository.create).not.toHaveBeenCalled();
+  });
+
   it("rejects invalid type, oversized body, and cross-origin mutation before creating data", async () => {
     const repository = fakeRepository();
     vi.mocked(requireKnowledgeContext).mockResolvedValue({ userId: userA, repository });
@@ -111,11 +122,12 @@ describe("knowledge API security and upload lifecycle", () => {
   it("processes stored file through service and returns ready metadata", async () => {
     const repository = fakeRepository();
     vi.mocked(requireKnowledgeContext).mockResolvedValue({ userId: userA, repository });
-    const response = await PROCESS(request(`/api/knowledge/${documentId}/process`, "POST"),
+    const response = await PROCESS(request(`/api/knowledge/${documentId}/process`, "POST", { user_id: userB }),
       { params: Promise.resolve({ id: documentId }) });
     expect(response.status, JSON.stringify(await response.clone().json())).toBe(200);
     expect((await response.json()).document.status).toBe("ready");
     expect(repository.read).toHaveBeenCalledWith(document.storage_path);
+    expect(repository.claim).toHaveBeenCalledWith(userA, documentId);
     expect(repository.complete).toHaveBeenCalledWith(userA, documentId, 1, ["实际上传的正文。"]);
   });
 
@@ -134,10 +146,11 @@ describe("knowledge API security and upload lifecycle", () => {
   it("deletes through Storage first and responds without leaking file content", async () => {
     const repository = fakeRepository();
     vi.mocked(requireKnowledgeContext).mockResolvedValue({ userId: userA, repository });
-    const response = await DELETE(request(`/api/knowledge/${documentId}`, "DELETE"),
+    const response = await DELETE(request(`/api/knowledge/${documentId}`, "DELETE", { user_id: userB }),
       { params: Promise.resolve({ id: documentId }) });
     expect(response.status).toBe(204);
     expect(repository.remove).toHaveBeenCalledWith(document.storage_path);
+    expect(repository.markDeleting).toHaveBeenCalledWith(userA, documentId);
     expect(repository.remove.mock.invocationCallOrder[0]).toBeLessThan(
       repository.finishDeleting.mock.invocationCallOrder[0],
     );

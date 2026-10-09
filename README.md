@@ -170,7 +170,7 @@ OLLAMA_MODEL=qwen3:8b
 
 在隔离 Supabase 项目审查并执行 [`supabase/migrations/20261009120000_create_knowledge_base.sql`](supabase/migrations/20261009120000_create_knowledge_base.sql)，确认文档/片段 RLS 和 `knowledge-files` 私有 Bucket 后，再由维护者决定目标项目部署。仓库不会自动执行 SQL，也不修改 Vercel 环境。迁移未部署时知识库 API 会以安全服务错误失败。
 
-安全审查后，五个处理/删除例程位于不暴露给 Data API 的 `knowledge_private` Schema；普通 authenticated JWT 没有执行权限。Next.js 验证用户 claims 后，使用专用 `knowledge_writer_login` 数据库连接调用这些例程，未配置 `KNOWLEDGE_DB_URL` 时安全失败。该凭据不使用 `service_role`，也不能直接读写知识库表；它仍是服务端敏感凭据，须审计数据库对 `PUBLIC` 的其他默认权限。部署顺序和隔离项目验收见 [开发文档](docs/development.md)。
+安全审查后，五个处理/删除例程位于不暴露给 Data API 的 `knowledge_private` Schema；普通 authenticated JWT 没有执行权限。Next.js 验证用户 claims 后，使用专用 `knowledge_writer_login` 数据库连接调用这些例程。服务端需要 Supabase Shared Transaction Pooler 的 `KNOWLEDGE_DB_URL` 和用于 TLS 证书/主机名验证的 `KNOWLEDGE_DB_CA_CERT_BASE64`；缺少配置时安全失败。该凭据不使用 `service_role`，也不能直接读写知识库表；它仍是服务端敏感凭据，须审计数据库对 `PUBLIC` 的其他默认权限及全部适用于 authenticated 的 Storage 策略。部署顺序和隔离项目验收见 [开发文档](docs/development.md)。
 
 支持 PDF、UTF-8 TXT 和 Markdown，单文件上限 4 MiB。浏览器使用当前 Supabase 登录态将文件直接上传到按用户/文档生成的私有 Storage 路径；Next.js 仅接收小型元数据 JSON。服务端随后重新下载原件，验证实际字节数、PDF 头与解析结果或文本 UTF-8/二进制特征，再拆成有序片段。这样文件请求不经过 Vercel Function 的 [4.5 MB 请求体限制](https://vercel.com/docs/functions/limitations)；Supabase [标准直传](https://supabase.com/docs/guides/storage/uploads/standard-uploads)适用于当前 4 MiB 上限。
 
