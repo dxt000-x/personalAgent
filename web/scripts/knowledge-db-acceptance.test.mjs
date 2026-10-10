@@ -82,6 +82,33 @@ describe("Knowledge DB acceptance safety boundaries", () => {
     expect(() => parseMode([])).toThrow("INVALID_MODE");
     expect(() => requireTestWorktree("D:\\龙虾\\Codex\\PersonalAgent\\web", (x) => x))
       .toThrow("WRONG_WORKTREE");
+    expect(() => requireTestWorktree(TEST_WEB_DIRECTORY, (x) => x)).not.toThrow();
+  });
+
+  it.each([
+    ["Windows development checkout", "D:\\龙虾\\Codex\\PersonalAgent\\web"],
+    ["Linux GitHub checkout", "/home/runner/work/personalAgent/personalAgent/web"],
+  ])("rejects the %s before reading environment configuration", (_label, cwd) => {
+    const env = new Proxy({}, { get: () => { throw new Error("CONFIG_ACCESSED"); } });
+    expect(() => validateConfiguration("execute", env, cwd, (path) => path))
+      .toThrow("WRONG_WORKTREE");
+  });
+
+  it("classifies a missing or inaccessible fixed worktree as a safe refusal", () => {
+    const resolver = (path) => {
+      if (path === TEST_WEB_DIRECTORY) {
+        const error = new Error("test-only secret must not appear");
+        error.code = "ENOENT";
+        throw error;
+      }
+      return path;
+    };
+    let diagnosis;
+    try { validateConfiguration("preflight", {}, "/home/runner/work/personalAgent/web", resolver); }
+    catch (error) { diagnosis = safePreflightDiagnostic(error); }
+    expect(diagnosis).toMatchObject({ stage: "PROJECT_IDENTITY", category: "ASSERTION",
+      code: "WRONG_WORKTREE" });
+    expect(JSON.stringify(diagnosis)).not.toContain("test-only secret");
   });
 
   it("pins project, users, two pooler roles, port and strict TLS", () => {

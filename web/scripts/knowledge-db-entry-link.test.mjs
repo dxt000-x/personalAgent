@@ -34,7 +34,11 @@ describe("Knowledge DB entry ESM linkage", () => {
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("WRONG_WORKTREE");
+    expect(result.stderr).toContain("stage: PROJECT_IDENTITY");
+    expect(result.stderr).toContain("category: ASSERTION");
     expect(result.stderr).not.toContain("SyntaxError");
+    expect(result.stderr).not.toContain("AUTH_C");
+    expect(result.stderr).not.toContain("ADMIN_CONNECTION");
     expect(result.stderr).toContain("本轮未开始写入");
   });
 });

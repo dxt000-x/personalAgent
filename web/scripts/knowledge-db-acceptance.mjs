@@ -84,8 +84,17 @@ export function parseMode(args) {
 }
 
 export function requireTestWorktree(cwd, resolve = realpathSync.native) {
-  check(normalize(resolve(cwd)).toLowerCase() === normalize(resolve(TEST_WEB_DIRECTORY)).toLowerCase(),
-    "WRONG_WORKTREE");
+  let actual;
+  let expected;
+  try {
+    actual = normalize(resolve(cwd)).toLowerCase();
+    expected = normalize(resolve(TEST_WEB_DIRECTORY)).toLowerCase();
+  } catch {
+    // The fixed Windows acceptance worktree does not exist in an Ubuntu CI
+    // checkout. A failed canonicalization must be a safe worktree rejection.
+    throw new AcceptanceError("WRONG_WORKTREE");
+  }
+  check(actual === expected, "WRONG_WORKTREE");
 }
 
 function parsePooler(raw, role, ca) {
