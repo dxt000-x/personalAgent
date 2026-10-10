@@ -16,7 +16,7 @@
 ## 仓库与交接状态
 
 - 当前仓库由用户确认沿用原位置；不要自动迁移或复制项目。原请求中的新路径不存在，启动新对话时应绑定当前实际仓库。
-- 当前文档收尾分支：`docs/knowledge-base-production-status`，从最新 `origin/main` 的 PR #32 合并提交 `15c3ab5` 创建；该分支仅校准知识库生产状态说明。历史知识库接入任务 branch 为 `feat/knowledge-base-ingestion`，当时起点 `8b9cd90`。历史智能记忆候选任务 branch 为 `feat/ai-memory-extraction`，当时基线是 `a1a13ee`。
+- 当前只读安全验收工具分支：`test/knowledge-readonly-security`，基于 `main` 的 PR #33 合并提交 `2f7317008c27c1fb789936a2e14d7d590d30f047`；本分支保存固定生产项目的只读验收工具、离线测试及维护者报告的验收结果。此前文档收尾分支为 `docs/knowledge-base-production-status`。历史知识库接入任务 branch 为 `feat/knowledge-base-ingestion`，当时起点 `8b9cd90`。历史智能记忆候选任务 branch 为 `feat/ai-memory-extraction`，当时基线是 `a1a13ee`。
 - 先前 Agent 输入交互任务 branch：`feat/agent-enter-to-send`；该任务已合并到当前基线。
 - 先前稳定性任务 branch 为 `test/ai-gateway-regression`；当时 HEAD 与本地 `main`、`origin/main` 均为 `ac1e55a`。
 - OpenRouter 合并基线：`2874015`，`Merge pull request #21 from dxt000-x/feat/openrouter-provider`。
@@ -62,7 +62,7 @@ Browser / Agent Workspace
 - 恢复：移除测试进程覆盖，Ollama `/api/tags` HTTP 200，`qwen3:8b` 仍存在；正常 Auto 再次选择 Ollama 并回复 `Auto Local 联调成功`。
 - 匿名 AI 接口：上一轮真实请求中 GET providers 与 POST chat 均返回 401 `AUTH_REQUIRED`。
 - 云端配额代码已添加，但 SQL 尚未执行；当前没有真实数据库并发或部署后的云调用验收，不将自动测试描述为已完成数据库原子性验收。
-- Dashboard 仍含明确的演示数据。Knowledge Base 上传、解析、列表和删除已在生产运行；独立测试项目已完成迁移、文件、隔离、并发和限额真实验收，生产已完成迁移、受限 Writer、三种格式文件及部分 A/B 隔离验收，剩余直接跨账号读取、写入拒绝和异常恢复待验收；知识检索未接入。Settings 部分为 UI 设置或占位。
+- Dashboard 仍含明确的演示数据。Knowledge Base 上传、解析、列表和删除已在生产运行；独立测试项目已完成迁移、文件、隔离、并发和限额真实验收。生产已完成迁移、受限 Writer、三种格式文件，以及 A/B 直接读取片段与原件的只读隔离验收；跨账号处理、删除拒绝及异常恢复仍待验收。知识检索未接入；Settings 部分为 UI 设置或占位。
 
 ## 各 Provider 状态
 
@@ -218,7 +218,9 @@ Agent 输入交互任务：只修改 `web/components/agent-workspace.tsx` 的输
 - PR #32 已合并至 `main`，Merge Commit 为 `15c3ab5`；GitHub Actions Ubuntu CI 已通过，Vercel Production Deployment 状态 Ready。合并前 Windows 本地自动化测试为 279/279 通过；本轮文档分支验证结果应以实际运行记录为准。
 - 生产 Supabase `personal-ai-assistant` 已执行知识库 Migration，维护者核验私有 Schema、表、RLS、私有 Storage Bucket、函数与限额触发器。生产专用 `knowledge_writer_login` 已创建，Session Pooler 5432、Transaction Pooler 6543 连接测试及 Writer 最小权限检查 6/6 通过；Vercel Production 已配置受限连接与 TLS CA 所需服务端变量。备份、归档读取、权限快照和副本已准备，但未进行完整数据库恢复演练。
 - 生产 TXT、Markdown、PDF 上传与解析均达到 `ready` 并生成片段；删除和数据库/Storage 清理已通过。A/B 双向页面列表隔离通过，B 的 `GET /api/knowledge` 返回 200 和空 `documents`。维护者只读 SQL 确认本轮测试文档、知识库全部文档、全部片段、Storage 对象及孤立对象均为 0；上传和处理审计事件可按设计保留，不应当作残留文件删除。
-- **生产待验收：**普通用户直接跨账号读取 `knowledge_chunks` 和下载 Storage 原件；跨账号处理、删除拒绝；Storage 删除失败与损坏文件残留恢复；完整数据库恢复演练。独立项目 A/B 和 C/D 验收不能替代这些生产测试。当前知识库仅支持 PDF/TXT/MD 文件接入、解析与持久化，尚未实现 Embedding、向量检索或 RAG。
+- **生产只读跨账号实测（维护者报告）：**使用 `web/scripts/verify-knowledge-readonly-production.mjs` 对同一份 A 所有的登记文件验收：A 直接读取 `knowledge_chunks` 返回 1 条，B 用自身会话查询同一 `document_id` 返回 0 条；A 下载 Storage 原件为 475 字节，B 对同一路径收到 HTTP 400，SDK 错误代码为 `NoSuchKey`，未取得原件；B 身份二次核验后，A 再次下载的大小及 SHA-256 与首次一致，工具最终输出 `READONLY_ACCEPTANCE PASS`。这份结果限于该生产测试文件与当次 A/B 会话，不等于所有策略组合均经实测。
+- 维护者随后通过正常页面删除该测试文件，并用生产只读 SQL 确认：测试文档、测试片段、测试 Storage 对象，以及知识库全部文档、全部片段、全部 Storage 对象和孤立 Storage 对象的残留数均为 0。上传/处理审计事件可按设计保留。本轮未重新连接生产项目或执行 SQL。
+- **生产仍待验收：**跨账号处理、删除拒绝；Storage 删除失败与损坏文件残留恢复；完整数据库恢复演练。独立项目 A/B 和 C/D 验收不能替代这些生产测试。当前知识库仅支持 PDF/TXT/MD 文件接入、解析与持久化，尚未实现 Embedding、向量检索或 RAG。
 
 ## 本地运行和复测
 
