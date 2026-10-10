@@ -2,6 +2,7 @@ import "server-only";
 import { createDeepSeekProvider } from "./deepseek-provider";
 import { AIGatewayError } from "./errors";
 import { createGeminiProvider } from "./gemini-provider";
+import { createGroqProvider } from "./groq-provider";
 import { createOpenAIProvider } from "./openai-provider";
 import { createOllamaProvider } from "./ollama-provider";
 import { createOpenRouterProvider } from "./openrouter-provider";
@@ -15,11 +16,12 @@ const defaultModels: Record<ProviderId, string> = {
   gemini: "gemini-3.8-flash",
   ollama: "qwen3:8b",
   openrouter: "openrouter/free",
+  groq: "openai/gpt-oss-20b",
 };
 
 const defaultOllamaBaseUrl = "http://127.0.0.1:11434";
-const providerIds: ProviderId[] = ["openai", "deepseek", "gemini", "ollama", "openrouter"];
-const providerTypes = { openai: "cloud", deepseek: "cloud", gemini: "cloud", ollama: "local", openrouter: "cloud" } as const;
+const providerIds: ProviderId[] = ["openai", "deepseek", "gemini", "ollama", "openrouter", "groq"];
+const providerTypes = { openai: "cloud", deepseek: "cloud", gemini: "cloud", ollama: "local", openrouter: "cloud", groq: "cloud" } as const;
 
 function getOllamaBaseUrl(): string | undefined {
   const value = process.env.OLLAMA_BASE_URL?.trim() || defaultOllamaBaseUrl;
@@ -41,6 +43,7 @@ function getProviderConfig(id: ProviderId) {
     gemini: { key: process.env.GEMINI_API_KEY, model: process.env.GEMINI_MODEL },
     ollama: { model: process.env.OLLAMA_MODEL },
     openrouter: { key: process.env.OPENROUTER_API_KEY, model: process.env.OPENROUTER_MODEL },
+    groq: { key: process.env.GROQ_API_KEY, model: process.env.GROQ_MODEL },
   };
   return {
     key: env[id].key?.trim() ?? "",
@@ -104,5 +107,6 @@ export function getProvider(id: ProviderId): AIProvider {
     case "deepseek": return createDeepSeekProvider(key, model);
     case "gemini": return createGeminiProvider(key, model);
     case "openrouter": return createOpenRouterProvider(key, model);
+    case "groq": return createGroqProvider(key, model);
   }
 }

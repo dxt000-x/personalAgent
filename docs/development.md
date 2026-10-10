@@ -24,9 +24,11 @@ Task 1、Task 2 与 Task 3 已完成项目基础架构、Workspace UI 和 Supaba
 - 提交前检查差异，执行与修改相关的验证。
 - Ollama 本地 Provider 通过 `OLLAMA_BASE_URL` 与 `OLLAMA_MODEL` 配置，默认连接 `http://127.0.0.1:11434` 的 `qwen3:8b`。本地推理不产生云 API Token 费用，输入交由本机 Ollama 处理。
 - 如果 Next.js 运行在云端，`127.0.0.1` 指云服务器自身，不能直连开发者电脑的 Ollama；需要服务器可达的 Ollama 服务，或后续实现受控 Local Connector。
-- AI Auto Router 采用固定规则，不执行模型评估：本地 Ollama 可用时优先；否则按 OpenRouter、OpenAI、DeepSeek、Gemini 考虑最多两个已配置候选。只有 Provider 错误或超时可 fallback；认证、输入校验和限流错误不得 fallback。显式选择 Provider 不切换。
+- AI Auto Router 采用固定规则，不执行模型评估：本地 Ollama 可用时优先；否则按 OpenRouter、Groq、OpenAI、DeepSeek、Gemini 考虑最多两个已配置候选。只有 Provider 错误或超时可 fallback；认证、输入校验和限流错误不得 fallback。显式选择 Provider 不切换。
 - Privacy 模式只允许本地 Ollama；不可用时要清楚失败，不得尝试云 Provider。Provider 配置与可用性是独立字段；云 Provider 未执行真实调用前健康状态保持 unknown。
 - OpenRouter 使用服务端 `OPENROUTER_API_KEY`，默认 `OPENROUTER_MODEL=openrouter/free`。显式选择或 Auto 路由到 OpenRouter 时，当前用户的受限 Memory Context 会发送到该云服务；Privacy 下不得发送。不要将 API Key、完整 Memory、Token 或 Cookie 写入日志。
+- Groq 使用服务端 `GROQ_API_KEY` 与可选 `GROQ_MODEL`，当前默认 `openai/gpt-oss-20b`。通过现有 OpenAI SDK 的 Groq 兼容地址调用，SDK 自动重试关闭；显式选择或 Auto 路由到 Groq 时，当前用户的受限 Memory Context 会发送到该云服务，智能记忆候选提取若使用 Groq 则是独立云端请求。Privacy 不发送到 Groq。Groq 属于现有每日 30 次云请求配额范围；此计数不代表费用，亦不保证模型永久免费。本阶段只做离线测试，真实 Groq Key、目标数据库配额部署状态与生产联调尚未验证。
+- Groq Chat Completions 使用 `max_completion_tokens`，保持现有输出 Token 上限。仅默认 `openai/gpt-oss-20b` 发送 `reasoning_effort: low`；自定义 `GROQ_MODEL` 不附加模型专属推理参数。智能记忆候选的 `disableThinking` 不能在 GPT-OSS 上完全关闭推理，`low` 仅降低推理强度；真实延迟和输出质量仍需联调。上游明确的 401/403 返回安全的 `PROVIDER_AUTH_FAILED`（502），408 返回 `TIMEOUT`（504），429 返回 `RATE_LIMITED`（429），其他 4xx 返回 `PROVIDER_REQUEST_REJECTED`（502）。仅 408 超时沿用可 fallback 规则；5xx 和无状态网络故障维持既有可恢复规则。
 - 云端调用依赖 Supabase PostgreSQL 的持久化 per-user daily quota；迁移未部署或配额不可用时必须拒绝云调用。不要用易失内存计数器替代，也不要把 30 次请求计数解释为费用预算。
 - Vercel 端无法访问用户电脑的 localhost。当前没有 Local Connector，不能把本地模型健康状态解读为用户个人电脑可连接。
 

@@ -4,7 +4,7 @@ import { getProviderStatuses } from "../provider-registry";
 vi.mock("server-only", () => ({}));
 
 beforeEach(() => {
-  for (const key of ["OPENROUTER_API_KEY", "OPENAI_API_KEY", "DEEPSEEK_API_KEY", "GEMINI_API_KEY"] as const) {
+  for (const key of ["OPENROUTER_API_KEY", "GROQ_API_KEY", "OPENAI_API_KEY", "DEEPSEEK_API_KEY", "GEMINI_API_KEY"] as const) {
     vi.stubEnv(key, `fake-${key.toLowerCase()}`);
   }
   vi.stubEnv("OLLAMA_BASE_URL", "http://127.0.0.1:11434");
@@ -25,6 +25,7 @@ describe("provider status classification", () => {
     expect(Object.fromEntries(statuses.map(({ id, type }) => [id, type]))).toEqual({
       ollama: "local",
       openrouter: "cloud",
+      groq: "cloud",
       openai: "cloud",
       deepseek: "cloud",
       gemini: "cloud",
@@ -33,5 +34,13 @@ describe("provider status classification", () => {
     for (const status of statuses.filter(({ type }) => type === "cloud")) {
       expect(status).toMatchObject({ configured: true, availability: "unknown" });
     }
+  });
+
+  it("reports Groq unconfigured without a key and honors its model override", async () => {
+    vi.stubEnv("GROQ_API_KEY", "");
+    vi.stubEnv("GROQ_MODEL", "fake-groq-model");
+    const statuses = await getProviderStatuses();
+    expect(statuses.find(({ id }) => id === "groq")).toMatchObject({ type: "cloud", configured: false, availability: "unavailable", model: "fake-groq-model" });
+    expect(statuses.filter(({ id }) => id !== "groq")).toHaveLength(5);
   });
 });

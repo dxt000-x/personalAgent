@@ -37,12 +37,12 @@ https://personal-agent-seven-mu.vercel.app
 ## 技术架构概览
 
 ```text
-当前：Browser → Agent Chat (Next.js) → Authenticated AI Gateway → Session-scoped Memory Retrieval (Supabase + RLS) → Safe Context → Rule-based Model Router → OpenRouter / OpenAI / DeepSeek / Gemini / Ollama
+当前：Browser → Agent Chat (Next.js) → Authenticated AI Gateway → Session-scoped Memory Retrieval (Supabase + RLS) → Safe Context → Rule-based Model Router → Ollama / OpenRouter / Groq / OpenAI / DeepSeek / Gemini
 未来：Browser → Next.js Web → FastAPI → Personal Agent → Memory / RAG / Tools
                                                        └→ Windows Local Connector
 ```
 
-Supabase 用于认证与 Personal Memory 持久化。Agent Chat 的 Auto 路由优先选取本地可用的 Ollama；本地不可用时优先考虑已配置的 OpenRouter，再考虑其他云 Provider。云 Provider 只显示配置状态，健康状态保持未知，真实调用失败后才可按规则尝试下一个候选。用户也可以显式选择 Provider，显式选择不触发切换。FastAPI Agent 与 Windows Local Connector 仍为规划。OpenRouter 已完成真实上游验收；OpenAI、DeepSeek 尚无真实成功验收记录，Gemini 仍受上游权限限制。
+Supabase 用于认证与 Personal Memory 持久化。Agent Chat 的 Auto 路由优先选取本地可用的 Ollama；本地不可用时按 OpenRouter、Groq、OpenAI、DeepSeek、Gemini 考虑已配置的云 Provider，最多尝试两个。云 Provider 只显示配置状态，健康状态保持未知。用户也可以显式选择 Provider，显式选择不触发切换。FastAPI Agent 与 Windows Local Connector 仍为规划。OpenRouter 已完成真实上游验收；Groq 本阶段仅通过离线测试，尚未使用真实 Key 联调或部署；OpenAI、DeepSeek 尚无真实成功验收记录，Gemini 仍受上游权限限制。
 
 ```text
 web/          Next.js + TypeScript + Tailwind CSS + App Router
@@ -79,7 +79,7 @@ npm run start
 
 ## Automated Regression Tests
 
-在 `web/` 运行 `npm test`。该命令使用 Vitest 单次执行并退出，覆盖 AI Router、Privacy、显式 Provider、Auto fallback、输入边界、公开错误响应、Memory Context、候选提取与确认交互。测试采用确定性的 fake Provider、fake 配置和受控认证/Memory 替身；不会调用真实 OpenRouter、OpenAI、DeepSeek、Gemini 或 Ollama，也不需要云 API Key、Supabase Secret 或本地 Ollama 服务。`npm run test:watch` 仅供开发时使用。
+在 `web/` 运行 `npm test`。该命令使用 Vitest 单次执行并退出，覆盖 AI Router、Privacy、显式 Provider、Auto fallback、输入边界、公开错误响应、Memory Context、候选提取与确认交互。测试采用确定性的 fake Provider、fake 配置和受控认证/Memory 替身；不会调用真实 Groq、OpenRouter、OpenAI、DeepSeek、Gemini 或 Ollama，也不需要云 API Key、Supabase Secret 或本地 Ollama 服务。`npm run test:watch` 仅供开发时使用。
 
 自动回归测试补充独立的真实 Provider 人工集成验收，不替代上游联调。Ollama、OpenRouter、Privacy、Auto 云切换与双用户 Memory 隔离已有阶段性人工验收；OpenAI、DeepSeek 和 Gemini 不因此视为已通过真实调用。
 

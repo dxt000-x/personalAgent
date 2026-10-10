@@ -13,6 +13,12 @@ describe("AI chat request validation", () => {
       .toMatchObject({ provider: "auto", routingPreference: "auto", messages: [message("hi"), message("hello", "assistant"), message("next")] });
   });
 
+  it("accepts explicit Groq but rejects Groq with Privacy", () => {
+    expect(validateChatRequest(input([message()], "groq")).provider).toBe("groq");
+    expect(() => validateChatRequest(input([message()], "groq", "privacy")))
+      .toThrowError(expect.objectContaining({ code: "INVALID_REQUEST" }));
+  });
+
   it("rejects empty messages", () => {
     expect(() => validateChatRequest(input([]))).toThrowError(expect.objectContaining({ code: "INVALID_REQUEST" }));
   });

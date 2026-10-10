@@ -6,11 +6,12 @@
 - `/login`、`/signup` 与 `/auth/callback` 提供 Supabase Email / Password 认证基础。
 - `@supabase/ssr` 使用 Cookie 会话，`web/proxy.ts` 刷新并通过 `getClaims()` 验证身份；`(workspace)` 服务端布局再次验证后渲染原 UI，URL 不变。
 - `POST /api/ai/chat` 与 `GET /api/ai/providers` 是 Next.js 服务端 Route Handler，均通过 Supabase `getClaims()` 验证身份。
-- `web/lib/ai/` 提供统一 Provider 接口；OpenAI 使用 Responses API，DeepSeek 与 OpenRouter 使用兼容的 Chat Completions API，Gemini 使用 Google Gen AI SDK，Ollama 使用本地 `/api/chat` HTTP API。云模型密钥与 Ollama 地址/模型只在服务端读取。
+- `web/lib/ai/` 提供统一 Provider 接口；OpenAI 使用 Responses API，DeepSeek、OpenRouter 与 Groq 使用兼容的 Chat Completions API，Gemini 使用 Google Gen AI SDK，Ollama 使用本地 `/api/chat` HTTP API。云模型密钥与 Ollama 地址/模型只在服务端读取。
 - Ollama 默认使用 `http://127.0.0.1:11434` 与 `qwen3:8b`，无云 API Key；Gateway 通过非流式请求取得模型文本，保留统一响应格式。云 Provider 与本地 Provider 可共存。
 - Chat Gateway 对消息数、单条与总输入长度、请求体大小、Provider 超时和输出长度设限，并将上游错误转换为固定错误码。
+- 上游 401/403 认证或权限失败、408 超时、429 限流及其他 4xx 请求或模型配置拒绝均映射为固定安全错误；除 408 超时外，其余 4xx 不触发 Auto fallback。5xx 与无状态网络故障仍按可恢复 Provider 故障处理。
 - `/agent` 默认使用确定性 Auto 路由，可选显式 Provider 与 Privacy 仅本地模式。Ollama 使用短超时 `/api/tags` 检查可用性；云 Provider 只显示已配置与健康未知，不发起健康探测模型调用。
-- Auto 本地可用时优先 Ollama；本地不可用时按 OpenRouter、OpenAI、DeepSeek、Gemini 的固定顺序考虑已配置的云 Provider。最多调用两个候选，且仅在上游错误或超时后 fallback；鉴权、请求校验、限流错误不会触发 fallback。显式 Provider 永不切换。Privacy 模式只尝试本地 Ollama，模型不可用时返回明确错误，不向云端发送消息或 Personal Memory。
+- Auto 本地可用时优先 Ollama；本地不可用时按 OpenRouter、Groq、OpenAI、DeepSeek、Gemini 的固定顺序考虑已配置的云 Provider。最多调用两个候选，且仅在上游错误或超时后 fallback；鉴权、请求校验、限流错误不会触发 fallback。显式 Provider 永不切换。Privacy 模式只尝试本地 Ollama，模型不可用时返回明确错误，不向云端发送消息或 Personal Memory。
 - 云端 Provider 构造成功后、实际调用前，Gateway 通过当前 authenticated SSR Client 调用 `reserve_cloud_ai_quota()`。同一请求仅预占一次；本地 Ollama、Privacy、认证或输入失败不调用该 RPC。云 Provider 间 fallback 复用已预占额度。额度耗尽或配额存储不可用时，云端调用 fail-closed。
 - `POST /api/ai/memory-candidates` 是独立的认证请求，只分析本轮用户消息。它与聊天路由共用 `runAiGateway`，因此沿用相同的 Router、Registry、超时、fallback、安全错误与云额度预占；提取请求若调用云端，会在普通聊天之外独立消耗一次额度。Privacy 仍只有 Ollama 候选。
 - 提取模型的 JSON 输出经严格字段、分类、条数与长度校验；当前用户的 Memory 仅在模型返回后用于规范化去重，不作为提取模型输入。候选只存在页面内存；用户点击确认才调用现有 `POST /api/memories`，由当前 authenticated Session 和 RLS 限定所有权。无新数据库表或 RLS 变更。

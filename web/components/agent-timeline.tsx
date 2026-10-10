@@ -11,6 +11,7 @@ const providerNames: Record<ProviderId, string> = {
   deepseek: "DeepSeek",
   gemini: "Gemini",
   openrouter: "OpenRouter",
+  groq: "Groq",
 };
 
 const reasonLabels: Record<RoutingReason, string> = {

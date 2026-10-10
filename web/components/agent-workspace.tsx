@@ -22,6 +22,8 @@ type GatewayErrorCode =
   | "PRIVACY_PROVIDER_UNAVAILABLE"
   | "INVALID_REQUEST"
   | "PROVIDER_ERROR"
+  | "PROVIDER_AUTH_FAILED"
+  | "PROVIDER_REQUEST_REJECTED"
   | "RATE_LIMITED"
   | "CLOUD_QUOTA_EXCEEDED"
   | "QUOTA_UNAVAILABLE"
@@ -38,6 +40,7 @@ const providerLabels: Record<ProviderId, string> = {
   deepseek: "DeepSeek",
   gemini: "Gemini",
   openrouter: "OpenRouter",
+  groq: "Groq",
 };
 
 const errorMessages: Record<GatewayErrorCode, string> = {
@@ -46,6 +49,8 @@ const errorMessages: Record<GatewayErrorCode, string> = {
   PRIVACY_PROVIDER_UNAVAILABLE: "没有可用的本地模型。Privacy 模式不会将消息发送到云端。",
   INVALID_REQUEST: "消息超出当前对话限制，请缩短内容或清空会话后重试。",
   PROVIDER_ERROR: "模型服务暂时不可用。请检查 Provider 服务状态后重试。",
+  PROVIDER_AUTH_FAILED: "模型服务认证或权限校验失败，请检查 Provider 配置。",
+  PROVIDER_REQUEST_REJECTED: "模型服务拒绝了当前请求，请检查所选模型配置。",
   RATE_LIMITED: "请求过于频繁，请稍后重试。",
   CLOUD_QUOTA_EXCEEDED: "今日云端 AI 使用次数已达到上限，请于下一个 UTC 日期重置后再试。",
   QUOTA_UNAVAILABLE: "云端 AI 使用额度暂时无法核验，请稍后重试。",
@@ -58,6 +63,8 @@ const gatewayErrorCodes = new Set<GatewayErrorCode>([
   "PRIVACY_PROVIDER_UNAVAILABLE",
   "INVALID_REQUEST",
   "PROVIDER_ERROR",
+  "PROVIDER_AUTH_FAILED",
+  "PROVIDER_REQUEST_REJECTED",
   "RATE_LIMITED",
   "CLOUD_QUOTA_EXCEEDED",
   "QUOTA_UNAVAILABLE",
@@ -94,7 +101,7 @@ function boundedConversation(messages: ChatMessage[]): ChatMessage[] {
 
 function readProviderStatuses(value: unknown): ProviderStatus[] {
   if (!Array.isArray(value)) throw new Error("invalid provider status");
-  const allowedIds = new Set<ProviderId>(["ollama", "openrouter", "openai", "deepseek", "gemini"]);
+  const allowedIds = new Set<ProviderId>(["ollama", "openrouter", "groq", "openai", "deepseek", "gemini"]);
   return value.filter((item): item is ProviderStatus => {
     if (typeof item !== "object" || item === null) return false;
     const status = item as Partial<ProviderStatus>;
@@ -303,7 +310,7 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
       };
       if (typeof result.text !== "string" || !result.text.trim()
         || typeof result.provider !== "string"
-        || !["openai", "deepseek", "gemini", "ollama", "openrouter"].includes(result.provider)
+        || !["openai", "deepseek", "gemini", "ollama", "openrouter", "groq"].includes(result.provider)
         || (request.provider !== "auto" && result.provider !== request.provider)
         || typeof result.model !== "string") {
         throw new Error("PROVIDER_ERROR");

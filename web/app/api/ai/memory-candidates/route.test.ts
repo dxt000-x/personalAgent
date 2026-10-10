@@ -12,7 +12,7 @@ vi.mock("@/lib/ai/provider-registry", () => ({ getProvider: vi.fn(), getProvider
 vi.mock("@/lib/ai/quota", () => ({ reserveCloudAiQuota: vi.fn() }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
 
-const ids: ProviderId[] = ["ollama", "openrouter", "openai", "deepseek", "gemini"];
+const ids: ProviderId[] = ["ollama", "openrouter", "groq", "openai", "deepseek", "gemini"];
 const calls = Object.fromEntries(ids.map((id) => [id, vi.fn<AIProvider["generate"]>()])) as Record<ProviderId, ReturnType<typeof vi.fn<AIProvider["generate"]>>>;
 const stored: { content: string }[] = [];
 const eq = vi.fn();
@@ -95,7 +95,7 @@ describe("POST /api/ai/memory-candidates", () => {
     for (const id of ids) expect(calls[id]).not.toHaveBeenCalled();
   });
 
-  it.each(["openrouter", "openai", "deepseek", "gemini"] as const)("rejects explicit cloud %s with Privacy before model or quota work", async (provider) => {
+  it.each(["openrouter", "groq", "openai", "deepseek", "gemini"] as const)("rejects explicit cloud %s with Privacy before model or quota work", async (provider) => {
     const { response, body } = await responseFor(undefined, provider, "privacy");
     expect(response.status).toBe(400);
     expect(body.error.code).toBe("INVALID_REQUEST");
@@ -147,7 +147,7 @@ describe("POST /api/ai/memory-candidates", () => {
     const { response } = await responseFor();
     expect(response.status).toBe(200);
     expect(calls.openrouter).toHaveBeenCalledTimes(1);
-    expect(calls.openai).toHaveBeenCalledTimes(1);
+    expect(calls.groq).toHaveBeenCalledTimes(1);
     expect(reserveCloudAiQuota).toHaveBeenCalledTimes(1);
   });
 
