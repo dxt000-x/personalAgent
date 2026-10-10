@@ -1,6 +1,6 @@
 # Personal AI Assistant — 开发交接
 
-更新日期：2026-10-09（Asia/Shanghai）。本文件用于新 Codex 对话接续开发；先核对实际仓库、Git 状态和用户指定任务，再开始修改。
+更新日期：2026-10-10（Asia/Shanghai）。本文件用于新 Codex 对话接续开发；先核对实际仓库、Git 状态和用户指定任务，再开始修改。
 
 ## 项目目标与技术栈
 
@@ -16,13 +16,13 @@
 ## 仓库与交接状态
 
 - 当前仓库由用户确认沿用原位置；不要自动迁移或复制项目。原请求中的新路径不存在，启动新对话时应绑定当前实际仓库。
-- 当前知识库接入任务 branch：`feat/knowledge-base-ingestion`；任务开始时 HEAD 为 `8b9cd90`，工作区 clean。历史智能记忆候选任务 branch 为 `feat/ai-memory-extraction`，当时基线是 `a1a13ee`。本轮未联网核对远端最新 main。
+- 当前文档收尾分支：`docs/knowledge-base-production-status`，从最新 `origin/main` 的 PR #32 合并提交 `15c3ab5` 创建；该分支仅校准知识库生产状态说明。历史知识库接入任务 branch 为 `feat/knowledge-base-ingestion`，当时起点 `8b9cd90`。历史智能记忆候选任务 branch 为 `feat/ai-memory-extraction`，当时基线是 `a1a13ee`。
 - 先前 Agent 输入交互任务 branch：`feat/agent-enter-to-send`；该任务已合并到当前基线。
 - 先前稳定性任务 branch 为 `test/ai-gateway-regression`；当时 HEAD 与本地 `main`、`origin/main` 均为 `ac1e55a`。
 - OpenRouter 合并基线：`2874015`，`Merge pull request #21 from dxt000-x/feat/openrouter-provider`。
 - origin：`https://github.com/dxt000-x/personalAgent.git`。
 - OpenRouter 功能提交：`7fdf648`（Provider）、`91e176c`（Auto 云候选）、`befa6c5`（文档）。已合并至本地 main。
-- 历史稳定性任务只新增自动测试、测试依赖与文档；本分支为智能记忆候选提取，复用现有 Gateway 规则。
+- 历史稳定性任务只新增自动测试、测试依赖与文档；智能记忆候选提取任务复用现有 Gateway 规则。
 - 任务开始时尝试 `git ls-remote` 核对远端 main，但本机 Git 返回 `SEC_E_NO_CREDENTIALS`；因此只确认与本地 main 和本地 origin/main 一致，不声称已核对 GitHub 最新状态。
 
 ## 当前架构
@@ -62,7 +62,7 @@ Browser / Agent Workspace
 - 恢复：移除测试进程覆盖，Ollama `/api/tags` HTTP 200，`qwen3:8b` 仍存在；正常 Auto 再次选择 Ollama 并回复 `Auto Local 联调成功`。
 - 匿名 AI 接口：上一轮真实请求中 GET providers 与 POST chat 均返回 401 `AUTH_REQUIRED`。
 - 云端配额代码已添加，但 SQL 尚未执行；当前没有真实数据库并发或部署后的云调用验收，不将自动测试描述为已完成数据库原子性验收。
-- Dashboard 仍含明确的演示数据。Knowledge Base 上传、解析、列表和删除已接入代码；独立测试项目已完成迁移、文件、隔离、并发和限额真实验收，生产迁移、受限连接与 Vercel 联调尚未完成；知识检索未接入。Settings 部分为 UI 设置或占位。
+- Dashboard 仍含明确的演示数据。Knowledge Base 上传、解析、列表和删除已在生产运行；独立测试项目已完成迁移、文件、隔离、并发和限额真实验收，生产已完成迁移、受限 Writer、三种格式文件及部分 A/B 隔离验收，剩余直接跨账号读取、写入拒绝和异常恢复待验收；知识检索未接入。Settings 部分为 UI 设置或占位。
 
 ## 各 Provider 状态
 
@@ -135,7 +135,7 @@ Agent 输入交互任务：只修改 `web/components/agent-workspace.tsx` 的输
 6. development 中旧 npm audit / ESLint 风险说明未在本次重新联网验证；后续单独检查依赖，不执行未经评估的 force upgrade。
 7. Streaming、会话持久化、Embedding、Semantic Search/RAG、Agent Planning、Tools、FastAPI 与 Local Connector 均尚未实现。
 
-## 本分支：AI 智能记忆候选提取
+## 历史任务：AI 智能记忆候选提取
 
 - `web/app/api/ai/memory-candidates/route.ts` 通过当前 Supabase claims 认证与同源/输入校验，只接收本轮用户消息。模型通过现有 Registry/Router 和共用 `web/lib/ai/gateway.ts` 执行真实语义提取；不是关键词规则。候选模型不接收已有 Memory Context 或 AI 回复。
 - `web/lib/ai/memory-candidates.ts` 固定服务端指令与严格 JSON schema 边界，限定现有 7 类、每轮 0～3 条、内容与原因长度，并过滤明显敏感内容。模型输出无效时安全失败。当前用户既有 Memory 只在模型调用后通过 authenticated client + RLS 查询，用 NFKC、小写、空白/标点规范化与候选去重。
@@ -161,7 +161,7 @@ Agent 输入交互任务：只修改 `web/components/agent-workspace.tsx` 的输
 
 ### 2026-10-09 Knowledge Base Task 1（`feat/knowledge-base-ingestion`）
 
-以下知识库条目按开发发生时间记录；其中“未执行”“待实测”等表述仅反映当时状态，当前结论以文末“独立测试项目最终验收”段为准。
+以下知识库条目按开发发生时间记录；其中“未执行”“待实测”等表述仅反映当时状态，当前结论以文末“生产上线与验收状态”段为准。
 
 - 原 `/knowledge` 固定演示文档与禁用上传已替换为当前账号真实文件列表、浏览器直传、处理状态、删除与空/错误状态。只接受 PDF、UTF-8 TXT、Markdown，单文件最多 4 MiB；正文最多 200,000 字符、PDF 最多 50 页、片段最多 200 个。扫描/加密/无文字 PDF 不支持 OCR。
 - 迁移 `supabase/migrations/20261009120000_create_knowledge_base.sql` 定义 `public.knowledge_documents`、`public.knowledge_chunks`、两表 RLS、当前用户所有权及复合外键，以及私有 `knowledge-files` Bucket 的大小、MIME 和路径策略。后续静态安全审查发现：将 `complete_knowledge_document` 授权 authenticated 会允许绕过服务端解析。五个 SECURITY DEFINER 例程现已改置非 Data API 的 `knowledge_private` Schema，撤销 authenticated 权限，改由专用 `knowledge_writer_login` 服务端数据库角色执行；该角色需要维护者在迁移后单独创建并配置 `KNOWLEDGE_DB_URL`，不使用 service_role。迁移**未执行**；真实 Storage/RLS/角色权限和多账号隔离**未验收**。
@@ -206,12 +206,19 @@ Agent 输入交互任务：只修改 `web/components/agent-workspace.tsx` 的输
 - 后续独立 Worktree 启动 `--preflight` 时发现 ESM 链接错误：入口导入了辅助模块未再导出的 `PROJECT_NAME`、`PROJECT_REF`。现从既有测试项目常量重新导出，并新增三种入口模式的离线 Node.js ESM 链接测试；测试在开发 Worktree 保护处退出，不读取凭据或连接数据库。真实 `--preflight` 仍待人工重试。
 - 用户后续已修正旧 A/B 环境变量名称并用独立只读检查确认 C/D Auth、Writer/Admin TLS 连接成功，但完整 `--preflight` 返回 `UNKNOWN_FAILURE`。脚本原来在运行清单创建前统一显示阶段 `preflight`，多种原始 SQL/网络异常被合并为未知。现将预检拆成逐项只读阶段，失败仅报告当前阶段、最后成功阶段、安全分类和代码；文档/片段、Storage、事件分别查询。新增 13 项 fake 测试，全量 Vitest 26 文件、276/276 通过，lint、typecheck、production build 通过。真实根因仍待人工在独立测试 Worktree 重跑只读预检定位，本轮未连接数据库或执行真实预检。
 
-### 2026-10-10 Knowledge Base 独立测试项目最终验收（当前状态）
+### 2026-10-10 Knowledge Base 独立测试项目最终验收（历史里程碑）
 
 - 独立测试项目 `personal-agent-quota-test`（Ref `pxfaqcepztzqyqtmbdrf`）已执行并验证知识库迁移和受限角色。TXT、Markdown、PDF 的真实上传与解析通过；A/B 双账号 API、RLS、Storage 隔离及跨账号下载、删除、上传拒绝通过。
 - C/D 专用空白账号的 PostgreSQL 只读预检全部 PASS；真实双连接争领、过期 generation、处理与删除竞态、原件缺失拒绝领取通过。每用户 100 文档、100 MiB 声明容量、每 UTC 小时 20 次上传初始化及 60 次处理领取限制通过。100 MiB 测试只验证数据库声明容量，并未实际上传 100 MiB 文件。
 - Run ID `ad0ef8cd-f98e-4a79-9f85-3b53816f9788` 的登记文档及 Storage 对象已清理并经 `--inspect-run` 只读复核；上传与处理事件行保留供审计。此前 `UNKNOWN_FAILURE` 和“并发未运行”是历史状态，不代表当前验收失败。
-- 生产 Supabase 知识库迁移、`knowledge_writer_login` 及受限连接配置、生产 Vercel 知识库联调仍未完成；部分失败恢复与异常场景尚待完整人工验收。独立测试项目通过不代表生产上线。知识库目前只实现文件接入与片段保存，未实现 Embedding、向量检索或 RAG；PR 与 Merge 亦未完成。
+- 当时生产 Supabase 知识库迁移、受限连接及 Vercel 联调、PR Merge 尚未完成；这是合并前的历史状态，不代表当前部署状态。知识库目前只实现文件接入与片段保存，未实现 Embedding、向量检索或 RAG。
+
+### 2026-10-10 Knowledge Base 生产上线与验收状态（当前里程碑）
+
+- PR #32 已合并至 `main`，Merge Commit 为 `15c3ab5`；GitHub Actions Ubuntu CI 已通过，Vercel Production Deployment 状态 Ready。合并前 Windows 本地自动化测试为 279/279 通过；本轮文档分支验证结果应以实际运行记录为准。
+- 生产 Supabase `personal-ai-assistant` 已执行知识库 Migration，维护者核验私有 Schema、表、RLS、私有 Storage Bucket、函数与限额触发器。生产专用 `knowledge_writer_login` 已创建，Session Pooler 5432、Transaction Pooler 6543 连接测试及 Writer 最小权限检查 6/6 通过；Vercel Production 已配置受限连接与 TLS CA 所需服务端变量。备份、归档读取、权限快照和副本已准备，但未进行完整数据库恢复演练。
+- 生产 TXT、Markdown、PDF 上传与解析均达到 `ready` 并生成片段；删除和数据库/Storage 清理已通过。A/B 双向页面列表隔离通过，B 的 `GET /api/knowledge` 返回 200 和空 `documents`。维护者只读 SQL 确认本轮测试文档、知识库全部文档、全部片段、Storage 对象及孤立对象均为 0；上传和处理审计事件可按设计保留，不应当作残留文件删除。
+- **生产待验收：**普通用户直接跨账号读取 `knowledge_chunks` 和下载 Storage 原件；跨账号处理、删除拒绝；Storage 删除失败与损坏文件残留恢复；完整数据库恢复演练。独立项目 A/B 和 C/D 验收不能替代这些生产测试。当前知识库仅支持 PDF/TXT/MD 文件接入、解析与持久化，尚未实现 Embedding、向量检索或 RAG。
 
 ## 本地运行和复测
 
