@@ -16,7 +16,7 @@
 ## 仓库与交接状态
 
 - 当前仓库由用户确认沿用原位置；不要自动迁移或复制项目。原请求中的新路径不存在，启动新对话时应绑定当前实际仓库。
-- 当前智能记忆候选任务 branch：`feat/ai-memory-extraction`；任务开始时 HEAD 为 `a1a13ee`（合并云配额 PR #26），工作区 clean，并与本地 `main`、`origin/main` 一致。未联网核对远端最新 main。
+- 当前知识库接入任务 branch：`feat/knowledge-base-ingestion`；任务开始时 HEAD 为 `8b9cd90`，工作区 clean。历史智能记忆候选任务 branch 为 `feat/ai-memory-extraction`，当时基线是 `a1a13ee`。本轮未联网核对远端最新 main。
 - 先前 Agent 输入交互任务 branch：`feat/agent-enter-to-send`；该任务已合并到当前基线。
 - 先前稳定性任务 branch 为 `test/ai-gateway-regression`；当时 HEAD 与本地 `main`、`origin/main` 均为 `ac1e55a`。
 - OpenRouter 合并基线：`2874015`，`Merge pull request #21 from dxt000-x/feat/openrouter-provider`。
@@ -62,7 +62,7 @@ Browser / Agent Workspace
 - 恢复：移除测试进程覆盖，Ollama `/api/tags` HTTP 200，`qwen3:8b` 仍存在；正常 Auto 再次选择 Ollama 并回复 `Auto Local 联调成功`。
 - 匿名 AI 接口：上一轮真实请求中 GET providers 与 POST chat 均返回 401 `AUTH_REQUIRED`。
 - 云端配额代码已添加，但 SQL 尚未执行；当前没有真实数据库并发或部署后的云调用验收，不将自动测试描述为已完成数据库原子性验收。
-- Dashboard 与 Knowledge Base 仍含明确的演示数据；Knowledge 上传/检索未接入。Settings 部分为 UI 设置或占位。
+- Dashboard 仍含明确的演示数据。Knowledge Base 上传、解析、列表和删除已接入代码；独立测试项目已完成迁移、文件、隔离、并发和限额真实验收，生产迁移、受限连接与 Vercel 联调尚未完成；知识检索未接入。Settings 部分为 UI 设置或占位。
 
 ## 各 Provider 状态
 
@@ -158,6 +158,60 @@ Agent 输入交互任务：只修改 `web/components/agent-workspace.tsx` 的输
 - 每条 AI 请求最多一条 `ai_gateway_request` 安全结构化日志，含随机 requestId、阶段耗时、实际尝试的 Provider、尝试数、Memory 失败粗分类与最终安全错误码，不含用户内容、身份或密钥。Memory 查询仍限 2 秒，底层请求不结束时可按原规则 fail-soft；Auth 失败仍是 401。粗分类无法单独证明数据库/代理根因。
 - 本地只读 `/api/show` 元数据确认 `qwen3:8b` 支持 `think:false`，故仅候选提取请求启用；普通聊天与其他模型保持原参数。`openrouter/free` 的实际模型选择与延迟可能变化；本分支没有更换生产模型或环境配置，也没有执行真实模型推理验收。
 - Vitest 从原有 127 项增至 13 个文件 145 项，覆盖共享 Deadline、显式/Auto/Privacy 超时、晚到候选、Memory 慢查询 fail-soft、Ollama 提取参数与安全错误映射。测试只用 fake Provider/fetch/Supabase；真实 Vercel 函数限制、上游 429/5xx/超时、Ollama 排队与 Memory 间歇 unavailable 仍待独立人工验证。
+
+### 2026-10-09 Knowledge Base Task 1（`feat/knowledge-base-ingestion`）
+
+以下知识库条目按开发发生时间记录；其中“未执行”“待实测”等表述仅反映当时状态，当前结论以文末“独立测试项目最终验收”段为准。
+
+- 原 `/knowledge` 固定演示文档与禁用上传已替换为当前账号真实文件列表、浏览器直传、处理状态、删除与空/错误状态。只接受 PDF、UTF-8 TXT、Markdown，单文件最多 4 MiB；正文最多 200,000 字符、PDF 最多 50 页、片段最多 200 个。扫描/加密/无文字 PDF 不支持 OCR。
+- 迁移 `supabase/migrations/20261009120000_create_knowledge_base.sql` 定义 `public.knowledge_documents`、`public.knowledge_chunks`、两表 RLS、当前用户所有权及复合外键，以及私有 `knowledge-files` Bucket 的大小、MIME 和路径策略。后续静态安全审查发现：将 `complete_knowledge_document` 授权 authenticated 会允许绕过服务端解析。五个 SECURITY DEFINER 例程现已改置非 Data API 的 `knowledge_private` Schema，撤销 authenticated 权限，改由专用 `knowledge_writer_login` 服务端数据库角色执行；该角色需要维护者在迁移后单独创建并配置 `KNOWLEDGE_DB_URL`，不使用 service_role。迁移**未执行**；真实 Storage/RLS/角色权限和多账号隔离**未验收**。
+- Vercel Function 请求体上限当前官方文档为 4.5 MB，所以文件由浏览器凭当前 Supabase Session 直传 Storage，Next.js API 仅接收小型元数据和文档 ID。处理路由重新下载原件，校验真实字节、内容和格式，再解析 PDF 或文本并拆有序片段。原始文件不会传给 AI Gateway，也没有 Embedding/RAG。
+- 确定性的格式/解析失败标记 `failed/invalid_file` 并尝试清理文件；临时错误标记 `failed/temporary`，保留原件及页面重试操作。领取前查 Storage 对象，增加 `processing_generation`；超时重新领取后旧结果不能提交。删除先标记 `deleting` 并使代次失效，Storage 删除成功后核对对象不存在，再删文档并级联片段。数据库 trigger 限每用户 100 文档、100 MiB、每 UTC 小时 20 次初始化，领取每小时限 60 次。跨 Storage 与数据库没有全局事务，整账号注销删除后的 Storage 孤儿清理仍是运维待办。
+- 自动测试使用 fake 数据库/Storage/Session，另用 `pdfjs-dist` 真正解析测试用 PDF 字节；不连接真实 Supabase、云模型或 Ollama。新增 4 个测试文件、32 个用例；全量 17 个文件、177 项测试通过。lint、`npx tsc --noEmit` 与生产构建通过，最终状态以本分支提交报告为准。人工验收先审查并在隔离项目部署迁移，验证 Bucket private、策略、A/B 数据隔离、三种文件、错误与删除恢复，再决定目标环境部署。
+
+### 2026-10-09 Knowledge Base SQL 安全审查修正（同分支）
+
+- 发现旧迁移中 public `complete_knowledge_document` 授权 authenticated 可让用户绕过 Next.js 解析，直接写任意自己的片段。已改用非 Data API 的 `knowledge_private` SECURITY DEFINER 例程，并撤销普通 JWT 执行权限。独立 NOLOGIN 权限组仅授五个例程；维护者还需单独建立 `knowledge_writer_login`，配置仅服务端使用的 `KNOWLEDGE_DB_URL`。应用拒绝 `postgres` 用户名并使用 TLS；未配置或无完成权限时初始化上传 fail-closed。Supabase `service_role` 未使用。该数据库角色仍可能继承目标库对 PUBLIC 的默认权限，必须在隔离项目做有效权限审计。
+- 领取前查 Storage 原件，处理代次防止过期提交；删除使代次失效。临时错误标记 `failed/temporary` 可重试，确定性无效文件仅可删除后重传，清理失败保留元数据及原件。DB 状态失败可在 10 分钟后重领。Trigger 限每用户 100 文档、100 MiB、UTC 小时 20 次初始化，领取每小时 60 次。
+- 本地 Vitest 共 20 文件、195/195 通过（相较前次 177 项新增 18 项）；lint、`npx tsc --noEmit`、Next production build 通过。Mock 与 SQL 静态断言不等于 PostgreSQL 安全/并发验收。新增隔离项目直接 RPC/RLS 脚本和只读权限审查 SQL；迁移、专用登录角色、真实 A/B、Storage、边界和并发均**未执行、待实测**。没有改生产 Vercel 配置。
+
+### 2026-10-09 Knowledge Base 第二轮审查补充（同分支）
+
+- 只读审查 SQL 扩展为角色危险属性、递归继承、数据库/Schema/表/序列/函数有效权限、PUBLIC 和默认权限审计；Storage 查询列出 `storage.objects` 的**全部**策略、适用 authenticated 的角色关系与完整 USING/WITH CHECK，不再按策略名筛选。其他 permissive 策略可能按 OR 放宽 `knowledge-files`，实际目标数据库尚未检查。
+- Next.js 受限连接限定 Supabase Shared Transaction Pooler `:6543`、自定义角色项目后缀、独立 CA 与 TLS 证书/主机名校验；模块级连接池仍最多 2 个/温实例，连接超时 5 秒、查询超时 10 秒。生产环境变量未查看或修改，Vercel Fluid Compute、真实连接数和证书联调待核实。
+- 新增隔离项目数据库并发脚本：两条独立受限 PostgreSQL 连接加隔离项目夹具连接，计划验证领取竞争、过期代次、删除并发、Storage 缺失、100 文档/100 MiB、UTC 小时上传与处理限额。测试脚本会写入隔离项目并尝试清理，**未运行**；须人工批准后执行。用户 ID 仍仅来自服务端 `getClaims().claims.sub`，所有私有例程调用均传该值；上传初始化中的 `user_id` 额外字段被拒绝，处理/删除请求中的同名字段不会覆盖授权身份。自动测试新增身份传递断言。本轮本地 Vitest 为 20 文件、199/199 通过；lint、typecheck、production build 通过。
+
+### 2026-10-09 Knowledge Base 验收脚本可靠性补强（同分支）
+
+- 隔离项目安全脚本改为先通过 Auth 确认 A/B 身份，并验证各自元数据与原始文件确实可下载，再对真实原件验证跨账号下载/删除边界；A 上传拒绝使用 B 的真实待上传 TXT 文档路径。异常放行的临时对象由受限写入角色切换状态、B 本人删除，失败时只输出固定提示。脚本所需变量与清理方式见 `docs/development.md`。
+- 隔离项目并发脚本在写入前校验 A/B JWT 身份，异常允许的限额插入也追踪为清理夹具；数据库错误和清理异常不输出原始连接错误或敏感内容。`parse.ts` 的四类明确错误码均已在 `service.ts` 列为不可重试；补充空正文、超限、非法 UTF-8 的服务层状态与清理测试。真实 Supabase 脚本仍**未运行、待人工批准后验收**。
+- 本轮本地自动化测试 20 文件、202/202 通过；lint、`npx tsc --noEmit` 与 production build 通过。未执行 Supabase SQL 或隔离项目验收脚本。
+
+### 2026-10-10 Knowledge Base PDF 解析修复（同分支）
+
+- 用户在独立 Supabase 测试项目 `personal-agent-quota-test` 已人工确认 TXT 与 Markdown 上传解析为 ready，PDF 上传失败；迁移、受限角色与 TLS 已通过先前检查。原失败 PDF 在直接 Node.js 中可提取 1 页、259 个字符。另用本机 Word 导出的无敏感两页文字 PDF 复现：直接 Node.js 成功，但修复前 Next.js 生产路由返回 `PDF_PARSE_FAILED`，底层错误是 worker 从 `.next/server/chunks/pdf.worker.mjs` 加载失败。`serverExternalPackages: ["pdfjs-dist"]` 后，本地生产路由能解析 Word 样本及用户原失败文件（后者返回 1 个片段、259 字符）。诊断路由和用户文件均未提交。
+- 解析器将无文字层 PDF 明确报告为暂不支持 OCR；已知损坏/加密 PDF 继续拒绝，未知运行时故障按临时错误处理并保留原件。4 MiB、50 页、200,000 字符、200 片段限制不变。真实 Supabase/Vercel 重新上传验收仍待人工执行；旧 `failed/invalid_file` 记录可能已清理原件，需要新建上传。
+- `next.config.ts` 也明确将 `pdf.worker.mjs` 纳入知识库处理路由的文件追踪；最终 `.nft.json` 已确认包含 worker。全量 Vitest 23 文件、212/212 项通过，lint、`npx tsc --noEmit`、production build 通过。新增测试夹具仅为自制 Word 导出 PDF，用户桌面原件未复制到仓库。
+
+### 2026-10-10 Knowledge Base 交互式 Storage 安全验收准备（同分支）
+
+- 旧 `verify-knowledge-security.mjs` 无参数模式保留；新增 `--interactive-storage` 仅允许在 `PersonalAgent-KB-Test/web` 运行，固定独立测试项目 Ref `pxfaqcepztzqyqtmbdrf`，人工确认项目名称。脚本不读取原开发目录 `.env.local`，凭据在终端隐藏输入、仅存进程内；A/B 各需一份已主动确认可丢弃的 `kb-isolation-test-` ready 文件。双向 Storage 下载/删除后由所有者复查字节大小及 SHA-256；跨账号上传使用本轮一次性 B uploading 文档，受限写入角色仅执行知识库标记/完成删除例程进行清理。清理失败报告对象 ID 并以非零状态退出。
+- 上述记录是当时的脚本开发状态。后续用户已在独立测试项目 `personal-agent-quota-test` 确认 TXT、Markdown、PDF 真实上传，A/B API 与 Storage 双向越权隔离，以及 Storage 一次性夹具清理均通过；并发与额度验收的最终结果见下方当前里程碑。
+
+### 2026-10-10 Knowledge Base 数据库并发验收脚本加固（同分支）
+
+- 数据库并发脚本改为固定项目 Ref `pxfaqcepztzqyqtmbdrf` 和独立测试 Worktree，显式 `--preflight`（只读）、`--execute`（需交互确认完整项目名）、`--inspect-run <Run-ID>`（只读恢复检查）。只允许全新 C/D 测试账号，两人知识库文档、片段、Storage 原件及上传/处理事件必须全部为空；不复用已验收的 A/B。
+- `--execute` 在每项写入前将精确文档 ID、路径、归属、阶段写入 Git 忽略的 `.kb-acceptance-runs` 清单；网络结果不确定时停止，保留清单供只读检查。清理只对本轮登记的精确对象执行，并复核用户、数据库角色与归属；不再按用户 ID 自动清空事件。上传/处理事件保留供审计。
+- 两条受限连接与仅隔离项目的 `postgres` 夹具连接均限定同一测试项目 Transaction Pooler `:6543`、独立 CA 和严格 TLS。原有双连接争领、过期代次、删除竞态、原件缺失、每小时上传/处理、100 文档及 100 MiB 声明容量断言保留。新增 13 项 fake 测试；全量 Vitest 25 文件、259/259 通过，lint、TypeScript 与 production build 通过。**真实并发验收本轮未执行，生产部署未确认**。运行和中断恢复步骤见 `docs/development.md`。
+- 后续独立 Worktree 启动 `--preflight` 时发现 ESM 链接错误：入口导入了辅助模块未再导出的 `PROJECT_NAME`、`PROJECT_REF`。现从既有测试项目常量重新导出，并新增三种入口模式的离线 Node.js ESM 链接测试；测试在开发 Worktree 保护处退出，不读取凭据或连接数据库。真实 `--preflight` 仍待人工重试。
+- 用户后续已修正旧 A/B 环境变量名称并用独立只读检查确认 C/D Auth、Writer/Admin TLS 连接成功，但完整 `--preflight` 返回 `UNKNOWN_FAILURE`。脚本原来在运行清单创建前统一显示阶段 `preflight`，多种原始 SQL/网络异常被合并为未知。现将预检拆成逐项只读阶段，失败仅报告当前阶段、最后成功阶段、安全分类和代码；文档/片段、Storage、事件分别查询。新增 13 项 fake 测试，全量 Vitest 26 文件、276/276 通过，lint、typecheck、production build 通过。真实根因仍待人工在独立测试 Worktree 重跑只读预检定位，本轮未连接数据库或执行真实预检。
+
+### 2026-10-10 Knowledge Base 独立测试项目最终验收（当前状态）
+
+- 独立测试项目 `personal-agent-quota-test`（Ref `pxfaqcepztzqyqtmbdrf`）已执行并验证知识库迁移和受限角色。TXT、Markdown、PDF 的真实上传与解析通过；A/B 双账号 API、RLS、Storage 隔离及跨账号下载、删除、上传拒绝通过。
+- C/D 专用空白账号的 PostgreSQL 只读预检全部 PASS；真实双连接争领、过期 generation、处理与删除竞态、原件缺失拒绝领取通过。每用户 100 文档、100 MiB 声明容量、每 UTC 小时 20 次上传初始化及 60 次处理领取限制通过。100 MiB 测试只验证数据库声明容量，并未实际上传 100 MiB 文件。
+- Run ID `ad0ef8cd-f98e-4a79-9f85-3b53816f9788` 的登记文档及 Storage 对象已清理并经 `--inspect-run` 只读复核；上传与处理事件行保留供审计。此前 `UNKNOWN_FAILURE` 和“并发未运行”是历史状态，不代表当前验收失败。
+- 生产 Supabase 知识库迁移、`knowledge_writer_login` 及受限连接配置、生产 Vercel 知识库联调仍未完成；部分失败恢复与异常场景尚待完整人工验收。独立测试项目通过不代表生产上线。知识库目前只实现文件接入与片段保存，未实现 Embedding、向量检索或 RAG；PR 与 Merge 亦未完成。
 
 ## 本地运行和复测
 

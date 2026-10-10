@@ -24,7 +24,7 @@ https://personal-agent-seven-mu.vercel.app
 - ✅ 服务端身份认证与受保护路由
 - ✅ Vercel 公网部署
 
-> OpenRouter 在本地及 Vercel 的真实调用已有阶段性人工验收记录；线上部署内容仍应按实际发布版本核对。智能记忆候选提取已在本分支实现，仍待人工联调；知识库、Agent Planning 与工具能力仍在开发中。
+> OpenRouter 在本地及 Vercel 的真实调用已有阶段性人工验收记录；线上部署内容仍应按实际发布版本核对。智能记忆候选提取已在本分支实现，仍待人工联调；知识库文件接入已通过独立测试项目验收，生产部署待完成。知识检索、Agent Planning 与工具能力仍在开发中。
 
 ## 比赛项目目标
 
@@ -110,7 +110,7 @@ npm run start
 - Agent 可选择开启智能记忆建议：聊天成功后单独分析本轮用户消息，展示最多 3 条候选；点击确认后复用 `POST /api/memories` 保存，忽略则不写入。
 - Agent Timeline 显示 Received、Validating、Retrieving Memory、Routing、Generating、Completed；Memory 仅作为当前用户的安全上下文，不模拟 Planning、RAG 或工具调用。
 - `/memory`：通过 `GET/POST /api/memories` 与 `GET/PATCH/DELETE /api/memories/[id]` 访问当前用户的 Personal Memory，支持新增、编辑、删除、加载/空/错误状态；服务端从已验证 Session 获取 `user_id`，不接受客户端指定所有权字段。
-- `/knowledge`：演示文件列表；上传与检索暂不可用。
+- `/knowledge`：当前账号的 PDF、TXT、Markdown 文件列表、直传、服务端正文解析与有序片段、处理状态和删除。数据库与私有 Storage migration 已在独立测试项目部署并验收，生产环境尚未部署；检索未实现。
 - `/settings`：模型、自主程度的本地 UI 选择，以及服务商/连接器占位。
 - `POST /api/ai/chat`：认证后支持 Auto 或显式选择 OpenRouter、OpenAI、DeepSeek、Gemini、Ollama；验证输入并返回统一的非流式文本结果。Auto 按规则路由并最多尝试两个候选；显式选择不回退。
 - 云端 AI 每用户每日 30 次预占限制已在 Gateway 与迁移文件中实现；数据库迁移须经人工审查并部署后才可用于真实云端调用。
@@ -121,7 +121,7 @@ npm run start
 - 后端与本地连接器占位目录。
 - 环境变量示例、敏感文件忽略规则与架构/开发文档。
 
-Agent 对话只保存在前端内存，刷新后清空；发送时只传递最近且符合 Gateway 限制的消息。Gateway 在服务端使用当前登录 Session 和 RLS 查询最多 8 条记忆，并在 4000 字符及剩余输入预算内注入；客户端不能提交 Memory Context。Dashboard 与 Knowledge Base 仍使用标明的演示内容。当前没有自动写入记忆、Embedding、Semantic Search、Vector RAG、文件读取或命令执行。
+Agent 对话只保存在前端内存，刷新后清空；发送时只传递最近且符合 Gateway 限制的消息。Gateway 在服务端使用当前登录 Session 和 RLS 查询最多 8 条记忆，并在 4000 字符及剩余输入预算内注入；客户端不能提交 Memory Context。Dashboard 仍使用标明的演示内容。知识库文件尚不参与 AI 对话；当前没有 Embedding、Semantic Search、Vector RAG、工具文件读取或命令执行。
 
 ## Planned Features
 
@@ -165,6 +165,16 @@ OLLAMA_MODEL=qwen3:8b
 每个用户每个 **UTC 日期最多预占 30 次云端 AI Gateway 请求**，在下一个 UTC 日期 00:00 重置。首次尝试云 Provider 前预占一次；上游成功或失败均计一次，同一请求在云 Provider 间 fallback 不重复计数。未配置 Provider 在尝试前被拒绝时不计数。此计数是云端请求次数，**不代表 token 用量或真实费用**。额度用尽时返回 HTTP 429 `CLOUD_QUOTA_EXCEEDED`；数据库无法核验时返回 HTTP 503 `QUOTA_UNAVAILABLE`，均不调用云模型。匿名、无效输入、Ollama 和 Privacy 不消耗云额度。
 
 配额由 Supabase PostgreSQL 的原子 UPSERT 维护，可跨 Vercel 实例共享。自动测试使用 fake RPC；真实 PostgreSQL 并发与权限验收仍待在隔离测试项目完成，步骤见 [开发文档](docs/development.md)。
+
+### 个人知识库文件（独立测试项目已验收，待生产部署）
+
+[`supabase/migrations/20261009120000_create_knowledge_base.sql`](supabase/migrations/20261009120000_create_knowledge_base.sql) 已在独立 Supabase 测试项目 `personal-agent-quota-test` 部署并完成文档/片段 RLS、私有 Storage、A/B 隔离及 C/D 并发与限额验收。测试夹具已清理并经只读复核，测试事件保留供审计。生产 Supabase 迁移、受限数据库角色与连接配置及 Vercel 知识库联调尚未完成；迁移未部署时知识库 API 会以安全服务错误失败。
+
+安全审查后，五个处理/删除例程位于不暴露给 Data API 的 `knowledge_private` Schema；普通 authenticated JWT 没有执行权限。Next.js 验证用户 claims 后，使用专用 `knowledge_writer_login` 数据库连接调用这些例程。服务端需要 Supabase Shared Transaction Pooler 的 `KNOWLEDGE_DB_URL` 和用于 TLS 证书/主机名验证的 `KNOWLEDGE_DB_CA_CERT_BASE64`；缺少配置时安全失败。该凭据不使用 `service_role`，也不能直接读写知识库表；它仍是服务端敏感凭据，须审计数据库对 `PUBLIC` 的其他默认权限及全部适用于 authenticated 的 Storage 策略。部署顺序和隔离项目验收见 [开发文档](docs/development.md)。
+
+支持 PDF、UTF-8 TXT 和 Markdown，单文件上限 4 MiB。浏览器使用当前 Supabase 登录态将文件直接上传到按用户/文档生成的私有 Storage 路径；Next.js 仅接收小型元数据 JSON。服务端随后重新下载原件，验证实际字节数、PDF 头与解析结果或文本 UTF-8/二进制特征，再拆成有序片段。这样文件请求不经过 Vercel Function 的 [4.5 MB 请求体限制](https://vercel.com/docs/functions/limitations)；Supabase [标准直传](https://supabase.com/docs/guides/storage/uploads/standard-uploads)适用于当前 4 MiB 上限。
+
+删除先标记 `deleting` 并使处理代次失效，再通过 Storage API 移除原件，最后删除文档并级联删除片段；Storage 失败时保留可重试状态。确定性的格式/解析失败标记 `failed` 并尝试清理原件；临时错误尽量标记可重试的 `failed` 并保留原件，数据库不可用导致标记失败时可在处理超时后重领。单用户最多 100 个文档、累计声明容量 100 MiB，每 UTC 小时最多初始化 20 次、领取处理 60 次；单文件仍限 4 MiB。未完成的上传可在页面继续处理或删除；长时间卡住的处理在 10 分钟后可重新认领，旧代次不能提交。扫描版、加密版或无文字 PDF 无法提取；本阶段不提供 OCR、Embedding 或 RAG。自动测试使用假 Supabase/Storage；独立测试项目已通过 TXT/Markdown/PDF 真实上传、A/B 隔离及数据库并发与限额验收。100 MiB 验证的是数据库声明容量，并非实际上传 100 MiB；部分失败恢复与生产环境联调仍待人工验收。步骤见 [开发文档](docs/development.md)。
 
 ### 智能记忆建议（本分支，待人工联调）
 
