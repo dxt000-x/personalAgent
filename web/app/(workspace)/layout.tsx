@@ -32,7 +32,7 @@ export default async function WorkspaceLayout({
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-white px-6 py-4 text-xs text-slate-400 lg:px-10">
           <span>个人工作空间 / Personal workspace</span>
           <span className="rounded-full bg-amber-50 px-3 py-1 text-amber-800">
-            Agent Chat 已连接 Gateway · Personal Memory 已接入 · 知识库待生产部署
+            Agent Chat 已连接 Gateway · Personal Memory 已接入 · 知识库支持文件上传与管理
           </span>
         </div>
         <main className="mx-auto max-w-7xl px-6 py-8 lg:px-10 lg:py-10">
