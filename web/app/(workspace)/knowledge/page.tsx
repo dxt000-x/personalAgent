@@ -17,7 +17,7 @@ export default async function KnowledgePage() {
   return (
     <>
       <PageHeader eyebrow="YOUR KNOWLEDGE, ORGANIZED" title="Knowledge Base · 个人知识库"
-        description="上传并管理个人文档。正文按顺序保存为片段，检索功能将在后续阶段提供。" />
+        description="上传并管理个人文档，按关键词查找已就绪文档的正文片段。" />
       <KnowledgeWorkspace key={userId} />
     </>
   );

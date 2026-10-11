@@ -106,6 +106,12 @@ ESLint 9 的安装还提示该版本已停止支持；当前保留与 Next.js �
 
 Dashboard 中的用户、任务与项目进度仍为演示示例。Knowledge Base 文件列表已改为真实 API/Storage 流程，独立测试项目已通过验收，生产已部署并完成文件接入及部分隔离验收；剩余安全和失败恢复场景见下文。Personal Memory 已改为 Supabase 手动 CRUD；Agent 在服务端读取当前用户的有限记忆并作为不可信背景上下文交给所选 Provider。智能记忆建议需主动开启，AI 只生成候选，不自动创建记忆。Agent Workspace 已连接 AI Gateway，Timeline 显示真实请求阶段。当前对话保存在前端内存，刷新后清空；不实现 RAG、Agent Planning、Tool Calling 或 Local Connector。
 
+## Knowledge Base 基础关键词检索（B1 分支，独立项目部分实测）
+
+`POST /api/knowledge/search` 接收最多 512 字节的 JSON，例如 `{ "query": "关键词", "documentId": "<已授权文档的 UUID>" }`；`documentId` 可省略，提供时精确限制到该文档，省略时检索当前登录用户的全部 ready 文档。关键词经修剪后为 1–100 个 Unicode 字母、组合符、数字或空格；`%`、`_`、`*` 及转义字符被拒绝，避免 ILIKE 通配符扩大匹配。接口先用 SSR Supabase Client 的 `getClaims()` 确认用户，再以同一 authenticated Client 和现有 RLS 查询当前用户的 ready 文档片段。数据库查询限时 3 秒，最多返回 5 条、每条摘录 600 字符、摘录合计不超过 4000 字符，只返回文档 ID、文件名、片段序号与摘录。失败返回固定安全错误，响应为 `Cache-Control: private, no-store`。不调用 Writer、Storage 或 AI，也不需要新 Migration。
+
+Knowledge 页面展示搜索、加载、空结果与错误状态；结果按普通文本渲染，查询变化、卸载或账号切换后旧响应不能覆盖新状态。独立测试项目 `personal-agent-quota-test` 的普通 A/B 会话已通过指定文档的双向搜索隔离；指定 ready 文档精确搜索命中，随后同一合成文档在保留片段的 deleting 状态下，以相同关键词和 `documentId` 搜索返回 HTTP 200 与空结果。另一次验收（Run ID `ffe041f7-5d45-4779-a471-ea4de3c5bd60`）中，A/B 各上传一份唯一关键词的合成 TXT 并解析为 ready；不带 `documentId` 的正式搜索四次均返回 HTTP 200：A 搜 A 与 B 搜 B 各显示本人文件的 1 条结果，A 搜 B 与 B 搜 A 各返回 0 条。Knowledge 正常页面搜索流程 PASS。页面显示的唯一文件名可与登记文档对应，但本轮未直接捕获搜索响应 JSON 中的 `documentId` 字段，不能记为该字段已直接核验。两份夹具通过各自普通账号正常删除；按精确 ID 和路径只读复核，文档、片段及 Storage 对象均为 0。uploading、processing、failed 的真实过滤仍为 NOT RUN；deleting 是已实测的唯一非 ready 状态。Preview 部署检查 Success，但部署环境归属及登录后功能验收未确认；生产 B1 尚未部署或验收。独立测试 Worktree 全量 Vitest 为 306/309：3 项数据库验收入口环境守卫测试预期 WRONG_WORKTREE，实际在授权测试 Worktree 中触发 WRONG_PROJECT_KIND；安全守卫未放宽，不能记为全量通过。定向 B1 测试 38/38 通过。此前验收时同一文档出现两次 DELETE（204、503），第二次 503 的具体失败分支仍 UNKNOWN；历史 Origin 异常根因仅为 LIKELY。关键词匹配不等于语义检索、Embedding 或 RAG。
+
 ## Knowledge Base 文件接入与验收
 
 迁移文件：[`supabase/migrations/20261009120000_create_knowledge_base.sql`](../supabase/migrations/20261009120000_create_knowledge_base.sql)。**独立测试项目** `personal-agent-quota-test` 已人工执行并验证迁移、`knowledge_documents` / `knowledge_chunks` 的 RLS、Storage 所有权策略、私有 Bucket、受限角色权限与跨用户隔离。**生产 Supabase** `personal-ai-assistant` 也已执行迁移，私有 Schema、表、RLS、Bucket、函数与限额触发器经维护者核验；生产专用 Writer 已创建，Session Pooler 5432 和 Transaction Pooler 6543 连接验证通过，最小权限检查 6/6 通过。PR #32 合并提交为 `15c3ab5`，GitHub Actions Ubuntu CI 通过，Vercel Production Deployment 状态 Ready；Production 已配置受限连接和 TLS CA 对应的服务端变量。以上为维护者提供的生产验收结果；生产普通用户直接读取片段/原件的 A/B 隔离现已完成单份文件实测，详情见下方。迁移同时创建 Bucket；若已有同名 Bucket 但配置不符会回滚。若某环境已执行旧版本，必须另写增量迁移，不能重复执行或假设当前版本已生效。

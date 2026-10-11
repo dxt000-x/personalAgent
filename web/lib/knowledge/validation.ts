@@ -41,11 +41,11 @@ export function validateUploadInput(value: unknown): UploadInput {
   };
 }
 
-export async function readSmallJson(request: Request): Promise<unknown> {
+export async function readSmallJson(request: Request, maxBytes = 4096): Promise<unknown> {
   if (request.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() !== "application/json") {
     throw new KnowledgeError("INVALID_REQUEST");
   }
-  if (!request.body || Number(request.headers.get("content-length")) > 4096) {
+  if (!request.body || Number(request.headers.get("content-length")) > maxBytes) {
     throw new KnowledgeError("INVALID_REQUEST");
   }
   const reader = request.body.getReader();
@@ -56,7 +56,7 @@ export async function readSmallJson(request: Request): Promise<unknown> {
       const { done, value } = await reader.read();
       if (done) break;
       size += value.byteLength;
-      if (size > 4096) {
+      if (size > maxBytes) {
         await reader.cancel();
         throw new KnowledgeError("INVALID_REQUEST");
       }

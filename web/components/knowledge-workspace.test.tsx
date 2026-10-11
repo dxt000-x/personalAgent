@@ -19,6 +19,11 @@ const document: KnowledgeDocument = {
 const uploadFile = vi.fn();
 let fetchMock: ReturnType<typeof vi.fn>;
 let stored: KnowledgeDocument[];
+let searchResponse: () => Promise<Response>;
+let deleteFails: boolean;
+let processFails: boolean;
+const searchResult = { documentId: document.id, fileName: document.file_name,
+  chunkIndex: 0, snippet: "过期摘录内容" };
 
 function json(body: unknown, status = 200): Response {
   return { ok: status < 400, status, json: async () => body } as Response;
@@ -27,20 +32,26 @@ function json(body: unknown, status = 200): Response {
 beforeEach(() => {
   vi.resetAllMocks();
   stored = [];
+  searchResponse = async () => json({ results: [searchResult] });
+  deleteFails = false;
+  processFails = false;
   const fakeClient = { storage: { from: vi.fn(() => ({ upload: uploadFile })) } };
   vi.mocked(createClient).mockReturnValue(fakeClient as unknown as NonNullable<ReturnType<typeof createClient>>);
   uploadFile.mockResolvedValue({ error: null });
   fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url === "/api/knowledge/search" && init?.method === "POST") return searchResponse();
     if (url === "/api/knowledge" && !init?.method) return json({ documents: stored });
     if (url === "/api/knowledge" && init?.method === "POST") {
       stored = [{ ...document }];
       return json({ document, upload: { bucket: "knowledge-files", path: document.storage_path, contentType: "text/plain" } }, 201);
     }
     if (url === `/api/knowledge/${document.id}/process`) {
+      if (processFails) return json({ error: { message: "处理暂时失败。" } }, 503);
       stored = [{ ...document, status: "ready", chunk_count: 1 }];
       return json({ document: stored[0] });
     }
     if (url === `/api/knowledge/${document.id}` && init?.method === "DELETE") {
+      if (deleteFails) return json({ error: { message: "删除暂时失败。" } }, 503);
       stored = [];
       return { ok: true, status: 204 } as Response;
     }
@@ -53,6 +64,12 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe("KnowledgeWorkspace", () => {
+  async function showSearchResult() {
+    fireEvent.change(screen.getByLabelText("知识库搜索关键词"), { target: { value: "过期" } });
+    fireEvent.click(screen.getByRole("button", { name: "搜索" }));
+    expect(await screen.findByText(searchResult.snippet)).toBeTruthy();
+  }
+
   it("shows an empty state, uploads directly to private Storage, then finalizes", async () => {
     render(<KnowledgeWorkspace />);
     expect(await screen.findByText(/还没有上传文档/)).toBeTruthy();
@@ -105,5 +122,79 @@ describe("KnowledgeWorkspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "重试处理" }));
     await waitFor(() => expect(screen.getByText("文档处理完成。")).toBeTruthy());
     expect(fetchMock).toHaveBeenCalledWith(`/api/knowledge/${document.id}/process`, { method: "POST" });
+  });
+
+  it("clears an existing search result after successful deletion", async () => {
+    stored = [{ ...document, status: "ready", chunk_count: 1 }];
+    render(<KnowledgeWorkspace />);
+    await screen.findByText("notes.txt");
+    await showSearchResult();
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    await screen.findByText("文档已删除。");
+    expect(screen.queryByText(searchResult.snippet)).toBeNull();
+    expect(screen.getByLabelText("知识库搜索关键词")).toHaveProperty("value", "");
+  });
+
+  it("ignores a pending search response after successful deletion", async () => {
+    stored = [{ ...document, status: "ready", chunk_count: 1 }];
+    let resolve!: (value: Response) => void;
+    searchResponse = () => new Promise<Response>((done) => { resolve = done; });
+    render(<KnowledgeWorkspace />);
+    await screen.findByText("notes.txt");
+    fireEvent.change(screen.getByLabelText("知识库搜索关键词"), { target: { value: "过期" } });
+    fireEvent.click(screen.getByRole("button", { name: "搜索" }));
+    const signal = fetchMock.mock.calls.find(([url]) => url === "/api/knowledge/search")?.[1]?.signal as AbortSignal;
+    expect(signal.aborted).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    await screen.findByText("文档已删除。");
+    expect(signal.aborted).toBe(true);
+    resolve(json({ results: [searchResult] }));
+    await waitFor(() => expect(screen.queryByText(searchResult.snippet)).toBeNull());
+  });
+
+  it("invalidates old results after successful upload and processing", async () => {
+    stored = [{ ...document, status: "ready", chunk_count: 1 }];
+    render(<KnowledgeWorkspace />);
+    await screen.findByText("notes.txt");
+    await showSearchResult();
+    fireEvent.change(screen.getByLabelText("选择知识库文件"), {
+      target: { files: [new File(["new text"], "new.txt", { type: "text/plain" })] },
+    });
+    await screen.findByText("文件已上传并完成正文解析。");
+    expect(screen.queryByText(searchResult.snippet)).toBeNull();
+  });
+
+  it("invalidates old results after successful processing retry", async () => {
+    stored = [{ ...document, status: "failed", failure_kind: "temporary" }];
+    render(<KnowledgeWorkspace />);
+    await screen.findByText("notes.txt");
+    await showSearchResult();
+    fireEvent.click(screen.getByRole("button", { name: "重试处理" }));
+    await screen.findByText("文档处理完成。");
+    expect(screen.queryByText(searchResult.snippet)).toBeNull();
+  });
+
+  it("keeps search results and shows an error when deletion fails", async () => {
+    stored = [{ ...document, status: "ready", chunk_count: 1 }];
+    deleteFails = true;
+    render(<KnowledgeWorkspace />);
+    await screen.findByText("notes.txt");
+    await showSearchResult();
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    expect(await screen.findByRole("alert")).toHaveProperty("textContent", "删除暂时失败。");
+    expect(screen.queryByText("文档已删除。")).toBeNull();
+    expect(screen.getByText(searchResult.snippet)).toBeTruthy();
+  });
+
+  it("does not report processing success when retry fails", async () => {
+    stored = [{ ...document, status: "failed", failure_kind: "temporary" }];
+    processFails = true;
+    render(<KnowledgeWorkspace />);
+    await screen.findByText("notes.txt");
+    await showSearchResult();
+    fireEvent.click(screen.getByRole("button", { name: "重试处理" }));
+    expect(await screen.findByRole("alert")).toHaveProperty("textContent", "处理暂时失败。");
+    expect(screen.queryByText("文档处理完成。")).toBeNull();
+    expect(screen.getByText(searchResult.snippet)).toBeTruthy();
   });
 });
