@@ -24,7 +24,7 @@ https://personal-agent-seven-mu.vercel.app
 - ✅ 服务端身份认证与受保护路由
 - ✅ Vercel 公网部署
 
-> OpenRouter 在本地及 Vercel 的真实调用已有阶段性人工验收记录；线上部署内容仍应按实际发布版本核对。智能记忆候选提取已实现，仍待人工联调；知识库文件接入已通过独立测试项目及部分生产验收，生产安全与失败恢复验收仍有待办。基础关键词检索已在本地开发，并通过独立测试项目的指定文档 A/B 隔离及 ready/deleting 对照验收；B1 尚未部署生产。Agent Planning 与工具能力仍在开发中。
+> OpenRouter 在本地及 Vercel 的真实调用已有阶段性人工验收记录。知识库文件接入与基础关键词搜索已合并并部署生产；正式 Knowledge 页面搜索入口及空结果流程通过基础验收，生产正向命中仍待验证。独立测试项目已通过 A/B 双向检索隔离、ready/deleting 过滤及页面搜索；其他非 ready 状态仍待真实验证。AI Gateway 上游 4xx 不可恢复错误的分类修复已随 PR #38 上线，真实上游 4xx 故障场景尚未生产实测。智能记忆候选提取已实现，仍待人工联调；自主 Agent Planning、工具调用与 Local Connector 尚未实现。
 
 ## 比赛项目目标
 
@@ -32,7 +32,7 @@ https://personal-agent-seven-mu.vercel.app
 
 ## 当前开发阶段
 
-**Memory-aware Agent。** `/memory` 使用 Supabase Postgres 与 authenticated Session 实现手动 CRUD；`/agent` 在服务端按当前登录用户检索有限的 Personal Memory，并作为不可信背景数据注入模型上下文。数据库 RLS 仍是最终行级边界。Agent 的智能记忆建议默认关闭，启用后仅生成候选，用户确认后才保存。知识库基础关键词检索已在本地开发，不参与 Agent 对话；Embedding、Semantic Search 与 Vector RAG 未实现。
+**Memory-aware Agent 与知识库关键词搜索。** `/memory` 使用 Supabase Postgres 与 authenticated Session 实现手动 CRUD；`/agent` 在服务端按当前登录用户检索有限的 Personal Memory，并作为不可信背景数据注入模型上下文。数据库 RLS 仍是最终行级边界。Agent 的智能记忆建议默认关闭，启用后仅生成候选，用户确认后才保存。`/knowledge` 的基础关键词搜索已部署，不参与 Agent 对话；Embedding、Semantic Search 与 Vector RAG 未实现。
 
 ## 技术架构概览
 
@@ -110,10 +110,10 @@ npm run start
 - Agent 可选择开启智能记忆建议：聊天成功后单独分析本轮用户消息，展示最多 3 条候选；点击确认后复用 `POST /api/memories` 保存，忽略则不写入。
 - Agent Timeline 显示 Received、Validating、Retrieving Memory、Routing、Generating、Completed；Memory 仅作为当前用户的安全上下文，不模拟 Planning、RAG 或工具调用。
 - `/memory`：通过 `GET/POST /api/memories` 与 `GET/PATCH/DELETE /api/memories/[id]` 访问当前用户的 Personal Memory，支持新增、编辑、删除、加载/空/错误状态；服务端从已验证 Session 获取 `user_id`，不接受客户端指定所有权字段。
-- `/knowledge`：当前账号的 PDF、TXT、Markdown 文件列表、直传、服务端正文解析与有序片段、处理状态和删除。生产 Migration 和受限 Writer 已部署，三种格式的生产上传、解析与删除已验收；指定测试文档的生产 A/B 直接读取片段和原件隔离已通过。B1 分支已实现 `POST /api/knowledge/search` 基础关键词搜索，可选 `documentId` 精确过滤；独立测试项目的指定文档 A/B 双向搜索隔离、ready 命中及 deleting 排除已实测。普通 A/B 会话不带 `documentId` 的四次交叉搜索与 Knowledge 页面流程也已通过，两份合成夹具已精确清理；响应中的 `documentId` 字段未直接捕获核验。Preview 检查成功，但环境归属和登录后功能未核实；生产 B1 尚未部署或验收。
+- `/knowledge`：当前账号的 PDF、TXT、Markdown 文件列表、直传、服务端正文解析与有序片段、处理状态、删除及已上线的关键词搜索。搜索接口 `POST /api/knowledge/search` 支持可选 `documentId` 精确过滤，只查询当前用户的 ready 片段。生产 Migration、受限 Writer、三种格式的上传解析与删除、指定文档的 A/B 直接读取隔离已验收。独立测试项目已实测指定文档 A/B 双向搜索隔离、ready 命中、deleting 排除、不带 `documentId` 的四次交叉搜索与页面流程；夹具已精确清理，响应中的 `documentId` 字段当次未直接捕获核验。生产搜索入口和空结果流程已有基础验收；生产正向命中、其他非 ready 状态过滤及剩余异常恢复仍待验证。
 - `/settings`：模型、自主程度的本地 UI 选择，以及服务商/连接器占位。
 - `POST /api/ai/chat`：认证后支持 Auto 或显式选择 OpenRouter、OpenAI、DeepSeek、Gemini、Ollama；验证输入并返回统一的非流式文本结果。Auto 按规则路由并最多尝试两个候选；显式选择不回退。
-- 云端 AI 每用户每日 30 次预占限制已在 Gateway 与迁移文件中实现；数据库迁移须经人工审查并部署后才可用于真实云端调用。
+- 云端 AI 每用户每日 30 次预占限制已在 Gateway 与迁移文件中实现；目标环境的迁移部署及真实并发验收状态须单独核实，不以代码存在代替数据库验收。
 - `GET /api/ai/providers`：认证后只返回 Provider 名称、类型、配置状态、可用性和模型显示信息，不包含地址或密钥。Ollama 通过短超时模型列表检查；云 Provider 保持健康未知。
 - Ollama 本地推理默认使用 `qwen3:8b`，不需要云 API Token；输入在配置的本地 Ollama 服务处理，不向云模型 Provider 发送。
 - TypeScript 严格类型配置、Tailwind CSS 样式。
@@ -154,7 +154,7 @@ OLLAMA_MODEL=qwen3:8b
 
 使用 Supabase 项目的 Project URL 和 publishable key。配置优先读取 `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`；未填写或仅含空白时兼容旧的 `NEXT_PUBLIC_SUPABASE_ANON_KEY`。两者同时存在时使用 publishable key。严禁把 service_role、secret key 或数据库密码填入这些公开变量。至少为希望使用的云 Provider 配置对应 Key；模型变量可覆盖集中默认值。OpenRouter 使用服务端 `OPENROUTER_API_KEY`，默认模型为 `openrouter/free`，不向浏览器返回 Key。Ollama 使用服务端变量 `OLLAMA_BASE_URL` 与 `OLLAMA_MODEL`，默认地址为 `http://127.0.0.1:11434`，默认模型为 `qwen3:8b`。本地推理不产生云 API Token 费用，但会占用本机计算资源。修改后重启开发服务；生产环境修改后需重新构建。根目录示例不会自动被 Web 加载。
 
-登录后可从同源页面调用 `GET /api/ai/providers` 查看配置与可用性，再向 `POST /api/ai/chat` 发送 `{"provider":"auto","routingPreference":"auto","messages":[{"role":"user","content":"你好"}]}`。也可明确设置 `provider` 为 `openrouter`、`openai`、`deepseek`、`gemini` 或 `ollama`。Auto 最多尝试两个 Provider，且只有上游错误或超时才会切换；鉴权、请求校验、限流错误不会切换。Privacy 偏好只允许已确认可用的 Ollama，无法使用时直接失败。显式选择 OpenRouter 或 Auto 路由到它时，当前用户的受限 Personal Memory Context 会随请求发送到云端；需要仅本地处理时选择 Privacy。请求最多 20 条消息、单条 4000 字符、总计 16000 字符、请求体 64 KiB。服务端对显式调用设置 25 秒超时、Auto 每个候选设置 12 秒超时，且两者均受整次 27 秒 Deadline 约束；输出最多 1024 token。API 不接受系统角色消息，也不返回 Key。
+登录后可从同源页面调用 `GET /api/ai/providers` 查看配置与可用性，再向 `POST /api/ai/chat` 发送 `{"provider":"auto","routingPreference":"auto","messages":[{"role":"user","content":"你好"}]}`。也可明确设置 `provider` 为 `openrouter`、`openai`、`deepseek`、`gemini` 或 `ollama`。Auto 最多尝试两个 Provider，仅可恢复的 Provider 故障或超时才会切换；上游 401/403、其他不可恢复 4xx 及 429 不切换，408 按超时处理。Privacy 偏好只允许已确认可用的 Ollama，无法使用时直接失败。显式选择 OpenRouter 或 Auto 路由到它时，当前用户的受限 Personal Memory Context 会随请求发送到云端；需要仅本地处理时选择 Privacy。请求最多 20 条消息、单条 4000 字符、总计 16000 字符、请求体 64 KiB。服务端对显式调用设置 25 秒超时、Auto 每个候选设置 12 秒超时，且两者均受整次 27 秒 Deadline 约束；输出最多 1024 token。API 不接受系统角色消息，也不返回 Key。
 
 使用 Ollama 时，需要让运行 Next.js 的服务器能访问 `OLLAMA_BASE_URL`。本地开发可在机器上运行 Ollama；部署到 Vercel 等云端时，`127.0.0.1` 指云端服务器自身，无法直接访问开发者电脑上的 Ollama。当前没有 Local Connector。
 
