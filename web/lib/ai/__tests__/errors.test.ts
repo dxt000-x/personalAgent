@@ -11,6 +11,8 @@ describe("public AI errors", () => {
     ["PRIVACY_PROVIDER_UNAVAILABLE", 503],
     ["INVALID_REQUEST", 400],
     ["PROVIDER_ERROR", 502],
+    ["PROVIDER_AUTH_FAILED", 502],
+    ["PROVIDER_REQUEST_REJECTED", 502],
     ["RATE_LIMITED", 429],
     ["CLOUD_QUOTA_EXCEEDED", 429],
     ["QUOTA_UNAVAILABLE", 503],
@@ -47,9 +49,22 @@ describe("public AI errors", () => {
   it("classifies upstream 429 and aborts without exposing raw errors", () => {
     const signal = new AbortController().signal;
     expect(providerFailure({ status: 429, message: "fake private header" }, signal).code).toBe("RATE_LIMITED");
+    expect(providerFailure({ status: 401, message: "fake private header" }, signal).code).toBe("PROVIDER_AUTH_FAILED");
+    expect(providerFailure({ statusCode: 403, message: "fake private header" }, signal).code).toBe("PROVIDER_AUTH_FAILED");
+    expect(providerFailure({ status: 400 }, signal).code).toBe("PROVIDER_REQUEST_REJECTED");
+    expect(providerFailure({ status: 404 }, signal).code).toBe("PROVIDER_REQUEST_REJECTED");
+    expect(providerFailure({ statusCode: 422 }, signal).code).toBe("PROVIDER_REQUEST_REJECTED");
+    expect(providerFailure({ status: 408 }, signal).code).toBe("TIMEOUT");
+    expect(providerFailure({ status: 503 }, signal).code).toBe("PROVIDER_ERROR");
     expect(providerFailure({ status: 429, message: "fake private header" }, AbortSignal.abort()).code).toBe("RATE_LIMITED");
     expect(providerFailure({ name: "AbortError", message: "fake secret" }, signal).code).toBe("TIMEOUT");
     expect(providerFailure(new Error("fake secret"), signal).code).toBe("PROVIDER_ERROR");
     expect(providerFailure(new Error("fake secret"), AbortSignal.abort()).code).toBe("TIMEOUT");
+  });
+
+  it.each([402, 405, 409, 413, 415, 418])("classifies upstream HTTP %i as a safe non-retryable rejection", (status) => {
+    const safeError = providerFailure({ status, message: "fake secret header" }, new AbortController().signal);
+    expect(safeError).toMatchObject({ code: "PROVIDER_REQUEST_REJECTED", status: 502 });
+    expect(safeError.message).not.toContain("fake secret header");
   });
 });

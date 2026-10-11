@@ -274,6 +274,15 @@ npm run dev -- --port 3032
 
 验证显式 OpenRouter、Auto 本地优先、临时不可用后的云切换及恢复、Privacy、匿名 401。模拟只用可恢复的进程级配置，不改正式 Router 或环境文件。另用两个独立 Supabase Session 验证 Memory CRUD 与上下文隔离；不要复制 Cookie/Token 到聊天或日志。
 
+## 阶段 A1：Groq Provider 本地开发（2026-10-10）
+
+- 从 `e504612` 的 clean main 创建 `feat/groq-provider-integration`。新增 Groq 到现有 `AIProvider`、Registry、Agent 选择器与共用 Chat/Memory Candidate Gateway；使用现有 OpenAI SDK、Groq 兼容地址及服务端 `GROQ_API_KEY` / `GROQ_MODEL`，默认模型 `openai/gpt-oss-20b`（依据开发时 Groq 官方支持列表，未来仍需复核）。
+- Auto 顺序为 Ollama（可用时）→ OpenRouter → Groq → OpenAI → DeepSeek → Gemini，仍最多两个候选。Privacy 仅 Ollama；显式 Groq 不 fallback。Groq 调用复用 authenticated Gateway 的云额度预占，每请求云 fallback 只预占一次；未配置 Key 不计额度。智能记忆候选若实际使用云 Provider 是独立请求，会另计一次。
+- 本阶段仅运行离线模拟与本地静态验证；**未使用真实 Groq Key、未调用 Groq API、未配置生产环境、未完成 Groq 生产验收**。历史云配额部署状态陈述需与当前目标 Supabase 实测记录分别核对，不能仅凭代码或 fake RPC 声称目标数据库已验收。此前章节中的 Provider 列表和路由顺序为当时状态。
+- 后续若要增加 Ollama → OpenRouter → Groq 第三候选，须单独审查 27 秒总 Deadline、单次时限、配额和费用；本阶段不扩大 Auto 候选上限。
+- 人工审核后针对性修复：明确上游 401/403 及 400/404/422 不可 fallback，响应仅返回安全错误码与文案；429、超时和真正可恢复错误保留原规则。Groq 改用 `max_completion_tokens`；仅默认 GPT-OSS 20B 发送 `reasoning_effort: low`，自定义模型不发送该参数。`disableThinking` 对 GPT-OSS 不等于关闭推理，真实调用效果待验证。
+- 最后错误边界修正：上游 HTTP 401/403 为认证失败，408 为可恢复超时，429 为限流，其他全部 400～499 为不可 fallback 的安全请求拒绝；500～599 与无状态网络异常仍按现有可恢复故障处理。新增 402、405、409、413、415 等回归测试，Privacy 与云配额规则不变。
+
 ## 新 Codex 对话开始方式
 
 让新对话先读本文件、README、docs/architecture.md、docs/development.md 及相关 AGENTS.md，然后执行 git status、当前 branch 与近期 log，核对本文件的提交状态。由用户确定下一任务分支和下一阶段范围，不自动 Push、PR、Merge 或实现待办。

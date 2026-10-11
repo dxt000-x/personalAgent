@@ -6,9 +6,10 @@ const providerNames: Record<ProviderId, string> = {
   deepseek: "DeepSeek",
   gemini: "Gemini",
   openrouter: "OpenRouter",
+  groq: "Groq",
 };
 
-const providerOrder: ProviderId[] = ["ollama", "openrouter", "openai", "deepseek", "gemini"];
+const providerOrder: ProviderId[] = ["ollama", "openrouter", "groq", "openai", "deepseek", "gemini"];
 
 export function AgentProviderSelector({
   providers,

@@ -12,11 +12,12 @@ vi.mock("@/lib/ai/quota", () => ({ reserveCloudAiQuota: vi.fn() }));
 vi.mock("@/lib/memories/context", () => ({ retrievePersonalMemoryContext: vi.fn() }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
 
-const ids: ProviderId[] = ["ollama", "openrouter", "openai", "deepseek", "gemini"];
-const cloudIds: ProviderId[] = ["openrouter", "openai", "deepseek", "gemini"];
+const ids: ProviderId[] = ["ollama", "openrouter", "groq", "openai", "deepseek", "gemini"];
+const cloudIds: ProviderId[] = ["openrouter", "groq", "openai", "deepseek", "gemini"];
 const calls = {
   ollama: vi.fn(),
   openrouter: vi.fn(),
+  groq: vi.fn(),
   openai: vi.fn(),
   deepseek: vi.fn(),
   gemini: vi.fn(),
@@ -170,6 +171,17 @@ describe("POST /api/ai/chat with fake providers", () => {
     for (const other of ids.filter((candidate) => candidate !== id)) expect(calls[other]).not.toHaveBeenCalled();
   });
 
+  it.each([401, 403])("returns a safe 502 for explicit Groq upstream HTTP %i", async (status) => {
+    calls.groq.mockRejectedValue(Object.assign(new Error("fake-upstream-secret"), { status }));
+    const { response, body } = await responseFor("groq");
+    expect(response.status).toBe(502);
+    expect(body.error.code).toBe("PROVIDER_AUTH_FAILED");
+    expect(JSON.stringify(body)).not.toContain("fake-upstream-secret");
+    expect(calls.groq).toHaveBeenCalledTimes(1);
+    expect(reserveCloudAiQuota).toHaveBeenCalledTimes(1);
+    for (const other of ids.filter((id) => id !== "groq")) expect(calls[other]).not.toHaveBeenCalled();
+  });
+
   it.each(["PROVIDER_ERROR", "TIMEOUT"] as const)("falls back once after %s", async (code) => {
     calls.ollama.mockRejectedValue(new AIGatewayError(code));
     const { response, body } = await responseFor();
@@ -250,10 +262,10 @@ describe("POST /api/ai/chat with fake providers", () => {
     calls.openrouter.mockRejectedValue(new AIGatewayError("PROVIDER_ERROR"));
     const { response, body } = await responseFor();
     expect(response.status).toBe(200);
-    expect(body.provider).toBe("openai");
+    expect(body.provider).toBe("groq");
     expect(reserveCloudAiQuota).toHaveBeenCalledTimes(1);
     expect(calls.openrouter).toHaveBeenCalledTimes(1);
-    expect(calls.openai).toHaveBeenCalledTimes(1);
+    expect(calls.groq).toHaveBeenCalledTimes(1);
   });
 
   it("returns a safe 429 and never calls cloud when quota is exhausted", async () => {

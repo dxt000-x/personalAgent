@@ -6,7 +6,7 @@ import type { ProviderId, ProviderStatus } from "../types";
 
 vi.mock("../provider-registry", () => ({ getProviderStatuses: vi.fn() }));
 
-const ids: ProviderId[] = ["ollama", "openrouter", "openai", "deepseek", "gemini"];
+const ids: ProviderId[] = ["ollama", "openrouter", "groq", "openai", "deepseek", "gemini"];
 const cloudIds: ProviderId[] = ids.filter((id) => id !== "ollama");
 
 function statuses(configured: ProviderId[], ollamaAvailable = false): ProviderStatus[] {
@@ -32,7 +32,7 @@ describe("deterministic Auto router", () => {
   it("starts with OpenRouter when Ollama is unavailable", async () => {
     vi.mocked(getProviderStatuses).mockResolvedValue(statuses(ids));
     const route = await getAutoRoute({ preference: "auto" });
-    expect(route.map(({ provider }) => provider)).toEqual(["openrouter", "openai"]);
+    expect(route.map(({ provider }) => provider)).toEqual(["openrouter", "groq"]);
   });
 
   it("continues through the existing cloud priority when OpenRouter is absent", async () => {
@@ -42,11 +42,16 @@ describe("deterministic Auto router", () => {
     expect((await getAutoRoute({ preference: "auto" })).map(({ provider }) => provider)).toEqual(["gemini"]);
   });
 
+  it("selects configured Groq after OpenRouter and before other clouds", async () => {
+    vi.mocked(getProviderStatuses).mockResolvedValue(statuses(["groq", "openai", "deepseek"]));
+    expect((await getAutoRoute({ preference: "auto" })).map(({ provider }) => provider)).toEqual(["groq", "openai"]);
+  });
+
   it("skips an unavailable OpenRouter before considering other cloud providers", async () => {
     const providerStatuses = statuses(ids);
     providerStatuses.find(({ id }) => id === "openrouter")!.availability = "unavailable";
     vi.mocked(getProviderStatuses).mockResolvedValue(providerStatuses);
-    expect((await getAutoRoute({ preference: "auto" })).map(({ provider }) => provider)).toEqual(["openai", "deepseek"]);
+    expect((await getAutoRoute({ preference: "auto" })).map(({ provider }) => provider)).toEqual(["groq", "openai"]);
   });
 
   it("never returns more than the configured attempt limit", async () => {
