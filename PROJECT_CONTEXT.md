@@ -217,7 +217,8 @@ Agent 输入交互任务：只修改 `web/components/agent-workspace.tsx` 的输
 
 - `feat/knowledge-search-mvp` 基于已核实的 `main` 提供只读基础关键词检索与 Knowledge 页面来源摘录；正式 `POST /api/knowledge/search` 支持可选 `documentId` UUID 精确过滤，不提供时检索当前用户全部 ready 文档。接口使用当前 SSR authenticated Client、现有 RLS 和 ready 文档过滤；输入最多 100 字、请求体最多 512 字节，最多 5 条结果、每条摘录 600 字、摘录合计不超过 4000 字，查询限时 3 秒。不需要新 Migration，不调用 AI 或 Storage。
 - 独立测试项目 `personal-agent-quota-test` 使用普通 A/B 身份，对已授权的指定文档完成双向搜索隔离 PASS；ready 精确搜索命中 PASS；唯一合成 TXT 文档在片段仍存在的 deleting 状态下，同一 A 会话以相同关键词和 `documentId` 搜索得到 HTTP 200、空结果 PASS；该 Run ID 登记的文档、片段及 Storage 对象精确清理 PASS。这些实测只覆盖指定文档及会话，不代表生产验收。
-- uploading、processing、failed 其他非 ready 状态的真实过滤均 NOT RUN；不带 `documentId` 的真实宽范围搜索 NOT RUN；生产 B1 未部署、未验收。独立测试 Worktree 的 B1 定向测试 38/38 通过，Lint、TypeScript 和 Production Build 通过；全量 Vitest 实际为 306/309，3 项数据库验收入口环境守卫测试在授权测试 Worktree 中得到 WRONG_PROJECT_KIND，而旧断言预期 WRONG_WORKTREE，不得写为全量通过。主开发仓库本轮验证以实际运行结果另行记录。
+- 另一轮独立项目验收 Run ID `ffe041f7-5d45-4779-a471-ea4de3c5bd60`：普通 A/B 各建立一份唯一关键词的合成 ready TXT；不带 `documentId` 的正式搜索四次均为 HTTP 200，A 搜 A、B 搜 B 各显示本人合成文件的 1 条结果，A 搜 B、B 搜 A 各返回 0 条；Knowledge 正常页面搜索流程 PASS。页面唯一文件名与登记文档对应，但未直接捕获响应 JSON 中的 `documentId` 字段，不得宣称该字段已直接核验。两份夹具各由本人正常删除，按精确文档 ID 与 Storage 路径只读复核文档、片段、对象均为 0；上传/处理审计事件可按设计保留。
+- uploading、processing、failed 其他非 ready 状态的真实过滤均 NOT RUN；生产 B1 未部署、未验收。Preview 部署检查 Success，但环境归属及登录后功能验收未确认。独立测试 Worktree 的 B1 定向测试 38/38 通过，Lint、TypeScript 和 Production Build 通过；全量 Vitest 实际为 306/309，3 项数据库验收入口环境守卫测试在授权测试 Worktree 中得到 WRONG_PROJECT_KIND，而旧断言预期 WRONG_WORKTREE，不得写为全量通过。主开发仓库本轮验证以实际运行结果另行记录。
 - 同一测试文档在验收过程观察到两次 DELETE，分别返回 204 与 503；第二次 503 的具体失败分支仍 UNKNOWN，最终对象清理复核为零不代表此异常已定位。历史 localhost/127.0.0.1 Origin 故障根因仅为 LIKELY。上述独立项目验收本身不代表 B1 已部署；后续 Git 与发布状态以仓库和部署记录为准。
 
 ### 2026-10-10 Knowledge Base 生产上线与验收状态（当前里程碑）

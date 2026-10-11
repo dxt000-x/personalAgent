@@ -110,7 +110,7 @@ npm run start
 - Agent 可选择开启智能记忆建议：聊天成功后单独分析本轮用户消息，展示最多 3 条候选；点击确认后复用 `POST /api/memories` 保存，忽略则不写入。
 - Agent Timeline 显示 Received、Validating、Retrieving Memory、Routing、Generating、Completed；Memory 仅作为当前用户的安全上下文，不模拟 Planning、RAG 或工具调用。
 - `/memory`：通过 `GET/POST /api/memories` 与 `GET/PATCH/DELETE /api/memories/[id]` 访问当前用户的 Personal Memory，支持新增、编辑、删除、加载/空/错误状态；服务端从已验证 Session 获取 `user_id`，不接受客户端指定所有权字段。
-- `/knowledge`：当前账号的 PDF、TXT、Markdown 文件列表、直传、服务端正文解析与有序片段、处理状态和删除。生产 Migration 和受限 Writer 已部署，三种格式的生产上传、解析与删除已验收；指定测试文档的生产 A/B 直接读取片段和原件隔离已通过。B1 分支已实现 `POST /api/knowledge/search` 基础关键词搜索，可选 `documentId` 精确过滤；独立测试项目的指定文档 A/B 双向搜索隔离、ready 命中及 deleting 排除已实测，生产 B1 尚未部署或验收。
+- `/knowledge`：当前账号的 PDF、TXT、Markdown 文件列表、直传、服务端正文解析与有序片段、处理状态和删除。生产 Migration 和受限 Writer 已部署，三种格式的生产上传、解析与删除已验收；指定测试文档的生产 A/B 直接读取片段和原件隔离已通过。B1 分支已实现 `POST /api/knowledge/search` 基础关键词搜索，可选 `documentId` 精确过滤；独立测试项目的指定文档 A/B 双向搜索隔离、ready 命中及 deleting 排除已实测。普通 A/B 会话不带 `documentId` 的四次交叉搜索与 Knowledge 页面流程也已通过，两份合成夹具已精确清理；响应中的 `documentId` 字段未直接捕获核验。Preview 检查成功，但环境归属和登录后功能未核实；生产 B1 尚未部署或验收。
 - `/settings`：模型、自主程度的本地 UI 选择，以及服务商/连接器占位。
 - `POST /api/ai/chat`：认证后支持 Auto 或显式选择 OpenRouter、OpenAI、DeepSeek、Gemini、Ollama；验证输入并返回统一的非流式文本结果。Auto 按规则路由并最多尝试两个候选；显式选择不回退。
 - 云端 AI 每用户每日 30 次预占限制已在 Gateway 与迁移文件中实现；数据库迁移须经人工审查并部署后才可用于真实云端调用。
