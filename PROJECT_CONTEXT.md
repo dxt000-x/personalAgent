@@ -1,6 +1,6 @@
 # Personal AI Assistant — 开发交接
 
-更新日期：2026-10-10（Asia/Shanghai）。本文件用于新 Codex 对话接续开发；先核对实际仓库、Git 状态和用户指定任务，再开始修改。
+更新日期：2026-10-11（Asia/Shanghai）。本文件用于新 Codex 对话接续开发；先核对实际仓库、Git 状态和用户指定任务，再开始修改。
 
 ## 项目目标与技术栈
 
@@ -15,15 +15,15 @@
 
 ## 仓库与交接状态
 
-- 当前仓库由用户确认沿用原位置；不要自动迁移或复制项目。原请求中的新路径不存在，启动新对话时应绑定当前实际仓库。
-- 当前只读安全验收工具分支：`test/knowledge-readonly-security`，基于 `main` 的 PR #33 合并提交 `2f7317008c27c1fb789936a2e14d7d590d30f047`；本分支保存固定生产项目的只读验收工具、离线测试及维护者报告的验收结果。此前文档收尾分支为 `docs/knowledge-base-production-status`。历史知识库接入任务 branch 为 `feat/knowledge-base-ingestion`，当时起点 `8b9cd90`。历史智能记忆候选任务 branch 为 `feat/ai-memory-extraction`，当时基线是 `a1a13ee`。
+- 当前仓库沿用 `D:\龙虾\Codex\PersonalAgent`，不自动迁移或复制。2026-10-11 本地 `main` 已仅用 fast-forward 同步至 `31ccadfc8e9228f40126366106f87957343ff8e1`；B1 PR #37 合并提交 `d36616765ed34cf586b4141f81794873dec5a8b2`，AI Gateway 4xx 修复 PR #38 合并提交 `31ccadf`。维护者确认 Vercel Production 为 Ready、Current；正式 Knowledge 搜索入口与空结果流程、Agent 页面与模型/路由控件已有基础验收。生产正向搜索命中和真实上游 4xx 故障仍待实测。
+- 历史只读安全验收工具分支：`test/knowledge-readonly-security`，基于 `main` 的 PR #33 合并提交 `2f7317008c27c1fb789936a2e14d7d590d30f047`；该分支保存固定生产项目的只读验收工具、离线测试及维护者报告的验收结果。此前文档收尾分支为 `docs/knowledge-base-production-status`。历史知识库接入任务 branch 为 `feat/knowledge-base-ingestion`，当时起点 `8b9cd90`。历史智能记忆候选任务 branch 为 `feat/ai-memory-extraction`，当时基线是 `a1a13ee`。
 - 先前 Agent 输入交互任务 branch：`feat/agent-enter-to-send`；该任务已合并到当前基线。
 - 先前稳定性任务 branch 为 `test/ai-gateway-regression`；当时 HEAD 与本地 `main`、`origin/main` 均为 `ac1e55a`。
 - OpenRouter 合并基线：`2874015`，`Merge pull request #21 from dxt000-x/feat/openrouter-provider`。
 - origin：`https://github.com/dxt000-x/personalAgent.git`。
 - OpenRouter 功能提交：`7fdf648`（Provider）、`91e176c`（Auto 云候选）、`befa6c5`（文档）。已合并至本地 main。
 - 历史稳定性任务只新增自动测试、测试依赖与文档；智能记忆候选提取任务复用现有 Gateway 规则。
-- 任务开始时尝试 `git ls-remote` 核对远端 main，但本机 Git 返回 `SEC_E_NO_CREDENTIALS`；因此只确认与本地 main 和本地 origin/main 一致，不声称已核对 GitHub 最新状态。
+- 历史只读验收工具任务开始时，`git ls-remote` 曾返回 `SEC_E_NO_CREDENTIALS`，当时只核对本地引用；本次已成功 `fetch origin` 并确认 `origin/main` 包含 PR #37/#38，再安全同步本地 `main`。两次诊断的时间点不同。
 
 ## 当前架构
 
@@ -42,7 +42,7 @@ Browser / Agent Workspace
 - `web/app/api/ai/chat/route.ts`：认证、请求校验、Memory、路由、模型调用与安全错误响应。
 - `web/app/api/ai/providers/route.ts`：认证后的配置与可用性查询。
 - `web/lib/ai/`：统一类型、Provider、Registry、Router、输入限制和错误类型。
-- `web/lib/ai/quota.ts`、`supabase/migrations/20261008190000_create_ai_daily_usage.sql`：云 Provider 调用前的 authenticated RPC 预占与 PostgreSQL 持久化每日计数；迁移尚待用户审查和部署。
+- `web/lib/ai/quota.ts`、`supabase/migrations/20261008190000_create_ai_daily_usage.sql`：云 Provider 调用前的 authenticated RPC 预占与 PostgreSQL 持久化每日计数；目标环境的迁移部署及真实并发状态须单独核实。
 - `web/components/agent-workspace.tsx`：Agent 聊天输入与发送；Enter 发送、Shift+Enter 换行，IME 组合输入和 keyCode 229 不触发发送。键盘与按钮共用提交逻辑，发送中的同步 ref 防止重复请求。
 - `web/lib/supabase/`、`web/proxy.ts`、workspace layout：官方 SSR Cookie 会话与路由保护。
 - `web/app/api/memories/`、`web/lib/memories/`：当前用户 Memory CRUD 与受限 Context。
@@ -61,8 +61,8 @@ Browser / Agent Workspace
 - Auto 云切换 HTTP 200 的证据为 UI 成功响应及 Gateway 成功分支固定返回 200；当次未保存原始 HTTP 网络记录。不可用的 Ollama 未被调用，OpenRouter 作为首个可用候选成功，无 Provider 错误后的额外重试。
 - 恢复：移除测试进程覆盖，Ollama `/api/tags` HTTP 200，`qwen3:8b` 仍存在；正常 Auto 再次选择 Ollama 并回复 `Auto Local 联调成功`。
 - 匿名 AI 接口：上一轮真实请求中 GET providers 与 POST chat 均返回 401 `AUTH_REQUIRED`。
-- 云端配额代码已添加，但 SQL 尚未执行；当前没有真实数据库并发或部署后的云调用验收，不将自动测试描述为已完成数据库原子性验收。
-- Dashboard 仍含明确的演示数据。Knowledge Base 上传、解析、列表和删除已在生产运行；独立测试项目已完成迁移、文件、隔离、并发和限额真实验收。生产已完成迁移、受限 Writer、三种格式文件，以及 A/B 直接读取片段与原件的只读隔离验收；跨账号处理、删除拒绝及异常恢复仍待验收。B1 基础关键词检索已在本地分支实现，并完成独立测试项目的指定文档 A/B 双向隔离及 ready/deleting 对照验收；生产 B1 尚未部署或验收。Settings 部分为 UI 设置或占位。
+- 云端配额代码已添加；早期交接时 SQL 尚未执行。本次未连接目标数据库复核迁移或并发状态，不能以代码和 fake RPC 测试推断当前生产数据库已完成验收。
+- Dashboard 仍含明确的演示数据。Knowledge Base 上传、解析、列表、删除和 B1 基础关键词检索已在生产运行；独立测试项目已完成迁移、文件、隔离、并发和限额真实验收。生产已完成知识库迁移、受限 Writer、三种格式文件，以及 A/B 直接读取片段与原件的只读隔离验收；跨账号处理、删除拒绝及异常恢复仍待验收。B1 独立测试项目的指定文档 A/B 双向隔离、ready/deleting 对照、不带 `documentId` 的四次交叉搜索和正常页面流程已通过；生产搜索入口及空结果流程已有基础验收，正向命中与其他非 ready 状态真实过滤仍待验收。Settings 部分为 UI 设置或占位。
 
 ## 各 Provider 状态
 
@@ -87,9 +87,9 @@ Browser / Agent Workspace
 - 请求体最多 64 KiB，最多 20 条 user/assistant 消息，单条 4000 字符，总计 16000 字符；最后一条必须是 user。
 - 输出最多 1024 token，并将返回文本截断到 12000 字符。
 - 两条 AI POST 路由各声明 30 秒执行上限，从请求入口实行 27 秒共享 Deadline；显式 Provider 单次上限 25 秒，Auto 每候选单次上限 12 秒且受总剩余时间约束。首个 Auto 候选尽量为第二候选留 4 秒，剩余不足 2 秒不新启云端调用；Ollama 健康检查 1.5 秒。使用 OpenAI SDK 的 Provider 将 `maxRetries` 设为 0；客户端/总截止 AbortSignal 传入可取消 I/O。
-- 错误码：AUTH_REQUIRED 401、INVALID_REQUEST 400（请求体超限可为 413）、PROVIDER_NOT_CONFIGURED 503、PRIVACY_PROVIDER_UNAVAILABLE 503、PROVIDER_ERROR 502、RATE_LIMITED 429、CLOUD_QUOTA_EXCEEDED 429、QUOTA_UNAVAILABLE 503、TIMEOUT 504。
-- 上游 429 映射 RATE_LIMITED；超时/中止映射 TIMEOUT；其余上游错误用固定 PROVIDER_ERROR。客户端不会收到 SDK stack 或原始错误。
-- 本次对错误映射和超时进行代码审查；未重新执行真实 429、强制超时或 SDK 故障注入，不能描述成这些故障场景均已实测。
+- 错误码：AUTH_REQUIRED 401、INVALID_REQUEST 400（请求体超限可为 413）、PROVIDER_NOT_CONFIGURED 503、PRIVACY_PROVIDER_UNAVAILABLE 503、PROVIDER_AUTH_FAILED 502、PROVIDER_REQUEST_REJECTED 502、PROVIDER_ERROR 502、RATE_LIMITED 429、CLOUD_QUOTA_EXCEEDED 429、QUOTA_UNAVAILABLE 503、TIMEOUT 504。
+- PR #38 已上线：上游 401/403 映射 `PROVIDER_AUTH_FAILED`，其他不可恢复 4xx 映射 `PROVIDER_REQUEST_REJECTED`，429 映射 `RATE_LIMITED`，均不可 fallback；408 按 `TIMEOUT` 处理并允许 Auto fallback。5xx 和无明确 HTTP 状态的网络故障仍按可恢复 `PROVIDER_ERROR` 处理。错误消息固定脱敏，不返回 SDK stack 或原始错误；真实上游 4xx 场景尚未生产实测。
+- 历史交接时未重新执行真实 429、强制超时或 SDK 故障注入；这些旧限制保留为当时状态，不能描述成已实测。
 
 Memory 最多 8 条，按 importance 与创建时间排序；上下文最多 4000 字符，并共享总输入预算。只发送 content/category/importance，不发送数据库标识。查询超时 2 秒，失败时以 unavailable metadata 安全继续聊天。保存内容作为不可信背景，不允许覆盖隐私、认证或路由规则。
 
@@ -102,9 +102,9 @@ Memory 最多 8 条，按 importance 与创建时间排序；上下文最多 400
 - API providers 只返回 id/type/configured/availability/model；AI 响应不返回密钥、Cookie、Token、完整 Memory 或内部 Prompt。
 - 已审查 AI/Memory 源码没有记录完整 Memory/Prompt 的日志调用。
 - 云调用会发送当前会话与受限个人上下文至最终云 Provider；Privacy 才是仅本地模型处理边界。
-- 云配额表对 `anon`、`authenticated` 无直接权限，启用 RLS 且无开放策略；无 service_role 用于普通请求。无参数 `SECURITY DEFINER` RPC 从 `auth.uid()` 获得用户，固定空 search_path、固定上限 30，仅 authenticated 可执行。迁移等待人工 SQL 审查。
+- 云配额表的仓库迁移设计为：对 `anon`、`authenticated` 无直接权限，启用 RLS 且无开放策略；普通请求不使用 service_role。无参数 `SECURITY DEFINER` RPC 从 `auth.uid()` 获得用户，固定空 search_path、固定上限 30，仅 authenticated 可执行。目标环境实际迁移与权限状态须另行核实。
 
-## 工程验证（本次交接）
+## 工程验证（历史稳定性任务记录）
 
 | 检查 | 结果 |
 | --- | --- |
@@ -121,7 +121,7 @@ Memory 最多 8 条，按 importance 与创建时间排序；上下文最多 400
 
 Agent 输入交互任务：只修改 `web/components/agent-workspace.tsx` 的输入与发送交互，增加 `web/components/agent-workspace.test.tsx`；测试直接 devDependencies 增加 `@testing-library/react` 与 `jsdom`。Enter 阻止默认换行后调用现有发送流程；Shift+Enter 保留浏览器换行；IME composing 或 keyCode 229 不发送；空白输入及请求进行中不重复发送。发送按钮保留。AI API、Provider、Router、Memory、数据库与认证逻辑未修改。`npm test` 为 53/53，通过 lint、`npx tsc --noEmit` 和生产构建。
 
-云配额任务：新增 `public.ai_daily_usage` 迁移与无参数原子预占 RPC，Gateway 只在云 Provider 构造成功后、上游调用前预占。表以 `(user_id, usage_date)` 为主键，使用数据库 UTC 日期与条件 UPSERT；每用户每天最多 30 次。数据库真实并发验收脚本位于 `web/scripts/verify-ai-quota-concurrency.mjs`，必须在隔离测试项目执行。SQL 尚未执行，真实 PostgreSQL 原子性、权限与部署后云调用均为**待实测**。不能在代码和数据库迁移均完成前把云配额视为线上生效；配额是请求次数，不是 token/费用预算。
+历史云配额任务：新增 `public.ai_daily_usage` 迁移与无参数原子预占 RPC，Gateway 只在云 Provider 构造成功后、上游调用前预占。表以 `(user_id, usage_date)` 为主键，使用数据库 UTC 日期与条件 UPSERT；每用户每天最多 30 次。数据库真实并发验收脚本位于 `web/scripts/verify-ai-quota-concurrency.mjs`，必须在隔离测试项目执行。当时 SQL 尚未执行；本次未核实目标数据库的当前部署、真实 PostgreSQL 并发和权限状态，不能从代码或自动测试推断已通过。配额是请求次数，不是 token/费用预算。
 
 ## 遗留问题与下一阶段候选任务
 
@@ -211,24 +211,24 @@ Agent 输入交互任务：只修改 `web/components/agent-workspace.tsx` 的输
 - 独立测试项目 `personal-agent-quota-test`（Ref `pxfaqcepztzqyqtmbdrf`）已执行并验证知识库迁移和受限角色。TXT、Markdown、PDF 的真实上传与解析通过；A/B 双账号 API、RLS、Storage 隔离及跨账号下载、删除、上传拒绝通过。
 - C/D 专用空白账号的 PostgreSQL 只读预检全部 PASS；真实双连接争领、过期 generation、处理与删除竞态、原件缺失拒绝领取通过。每用户 100 文档、100 MiB 声明容量、每 UTC 小时 20 次上传初始化及 60 次处理领取限制通过。100 MiB 测试只验证数据库声明容量，并未实际上传 100 MiB 文件。
 - Run ID `ad0ef8cd-f98e-4a79-9f85-3b53816f9788` 的登记文档及 Storage 对象已清理并经 `--inspect-run` 只读复核；上传与处理事件行保留供审计。此前 `UNKNOWN_FAILURE` 和“并发未运行”是历史状态，不代表当前验收失败。
-- 当时生产 Supabase 知识库迁移、受限连接及 Vercel 联调、PR Merge 尚未完成；这是合并前的历史状态，不代表当前部署状态。知识库目前只实现文件接入与片段保存，未实现 Embedding、向量检索或 RAG。
+- 当时生产 Supabase 知识库迁移、受限连接及 Vercel 联调、PR Merge 尚未完成；这是合并前的历史状态，不代表当前部署状态。当时知识库只实现文件接入与片段保存；后续 B1 已增加关键词搜索，但 Embedding、向量检索或 RAG 仍未实现。
 
-### 2026-10-10 Knowledge Base 基础关键词检索（本地开发）
+### 2026-10-10 Knowledge Base 基础关键词检索（历史开发与隔离验收记录）
 
 - `feat/knowledge-search-mvp` 基于已核实的 `main` 提供只读基础关键词检索与 Knowledge 页面来源摘录；正式 `POST /api/knowledge/search` 支持可选 `documentId` UUID 精确过滤，不提供时检索当前用户全部 ready 文档。接口使用当前 SSR authenticated Client、现有 RLS 和 ready 文档过滤；输入最多 100 字、请求体最多 512 字节，最多 5 条结果、每条摘录 600 字、摘录合计不超过 4000 字，查询限时 3 秒。不需要新 Migration，不调用 AI 或 Storage。
 - 独立测试项目 `personal-agent-quota-test` 使用普通 A/B 身份，对已授权的指定文档完成双向搜索隔离 PASS；ready 精确搜索命中 PASS；唯一合成 TXT 文档在片段仍存在的 deleting 状态下，同一 A 会话以相同关键词和 `documentId` 搜索得到 HTTP 200、空结果 PASS；该 Run ID 登记的文档、片段及 Storage 对象精确清理 PASS。这些实测只覆盖指定文档及会话，不代表生产验收。
 - 另一轮独立项目验收 Run ID `ffe041f7-5d45-4779-a471-ea4de3c5bd60`：普通 A/B 各建立一份唯一关键词的合成 ready TXT；不带 `documentId` 的正式搜索四次均为 HTTP 200，A 搜 A、B 搜 B 各显示本人合成文件的 1 条结果，A 搜 B、B 搜 A 各返回 0 条；Knowledge 正常页面搜索流程 PASS。页面唯一文件名与登记文档对应，但未直接捕获响应 JSON 中的 `documentId` 字段，不得宣称该字段已直接核验。两份夹具各由本人正常删除，按精确文档 ID 与 Storage 路径只读复核文档、片段、对象均为 0；上传/处理审计事件可按设计保留。
-- uploading、processing、failed 其他非 ready 状态的真实过滤均 NOT RUN；生产 B1 未部署、未验收。Preview 部署检查 Success，但环境归属及登录后功能验收未确认。独立测试 Worktree 的 B1 定向测试 38/38 通过，Lint、TypeScript 和 Production Build 通过；全量 Vitest 实际为 306/309，3 项数据库验收入口环境守卫测试在授权测试 Worktree 中得到 WRONG_PROJECT_KIND，而旧断言预期 WRONG_WORKTREE，不得写为全量通过。主开发仓库本轮验证以实际运行结果另行记录。
-- 同一测试文档在验收过程观察到两次 DELETE，分别返回 204 与 503；第二次 503 的具体失败分支仍 UNKNOWN，最终对象清理复核为零不代表此异常已定位。历史 localhost/127.0.0.1 Origin 故障根因仅为 LIKELY。上述独立项目验收本身不代表 B1 已部署；后续 Git 与发布状态以仓库和部署记录为准。
+- uploading、processing、failed 其他非 ready 状态的真实过滤均 NOT RUN；当时生产 B1 尚未部署，现已由 PR #37 合并上线，但生产正向命中仍待验证。此前 Preview 部署检查 Success，但当次环境归属及登录后功能验收未确认。独立测试 Worktree 的 B1 定向测试 38/38 通过，Lint、TypeScript 和 Production Build 通过；全量 Vitest 实际为 306/309，3 项数据库验收入口环境守卫测试在授权测试 Worktree 中得到 WRONG_PROJECT_KIND，而旧断言预期 WRONG_WORKTREE，不得写为全量通过。
+- 同一测试文档在验收过程观察到两次 DELETE，分别返回 204 与 503；第二次 503 的具体失败分支仍 UNKNOWN，最终对象清理复核为零不代表此异常已定位。历史 localhost/127.0.0.1 Origin 故障根因仅为 LIKELY。上述独立项目验收不能代替生产正向搜索或其他非 ready 状态的实测。
 
-### 2026-10-10 Knowledge Base 生产上线与验收状态（当前里程碑）
+### 2026-10-10 Knowledge Base 文件接入生产上线与验收状态（历史里程碑）
 
 - PR #32 已合并至 `main`，Merge Commit 为 `15c3ab5`；GitHub Actions Ubuntu CI 已通过，Vercel Production Deployment 状态 Ready。合并前 Windows 本地自动化测试为 279/279 通过；本轮文档分支验证结果应以实际运行记录为准。
 - 生产 Supabase `personal-ai-assistant` 已执行知识库 Migration，维护者核验私有 Schema、表、RLS、私有 Storage Bucket、函数与限额触发器。生产专用 `knowledge_writer_login` 已创建，Session Pooler 5432、Transaction Pooler 6543 连接测试及 Writer 最小权限检查 6/6 通过；Vercel Production 已配置受限连接与 TLS CA 所需服务端变量。备份、归档读取、权限快照和副本已准备，但未进行完整数据库恢复演练。
 - 生产 TXT、Markdown、PDF 上传与解析均达到 `ready` 并生成片段；删除和数据库/Storage 清理已通过。A/B 双向页面列表隔离通过，B 的 `GET /api/knowledge` 返回 200 和空 `documents`。维护者只读 SQL 确认本轮测试文档、知识库全部文档、全部片段、Storage 对象及孤立对象均为 0；上传和处理审计事件可按设计保留，不应当作残留文件删除。
 - **生产只读跨账号实测（维护者报告）：**使用 `web/scripts/verify-knowledge-readonly-production.mjs` 对同一份 A 所有的登记文件验收：A 直接读取 `knowledge_chunks` 返回 1 条，B 用自身会话查询同一 `document_id` 返回 0 条；A 下载 Storage 原件为 475 字节，B 对同一路径收到 HTTP 400，SDK 错误代码为 `NoSuchKey`，未取得原件；B 身份二次核验后，A 再次下载的大小及 SHA-256 与首次一致，工具最终输出 `READONLY_ACCEPTANCE PASS`。这份结果限于该生产测试文件与当次 A/B 会话，不等于所有策略组合均经实测。
 - 维护者随后通过正常页面删除该测试文件，并用生产只读 SQL 确认：测试文档、测试片段、测试 Storage 对象，以及知识库全部文档、全部片段、全部 Storage 对象和孤立 Storage 对象的残留数均为 0。上传/处理审计事件可按设计保留。本轮未重新连接生产项目或执行 SQL。
-- **生产仍待验收：**跨账号处理、删除拒绝；Storage 删除失败与损坏文件残留恢复；完整数据库恢复演练。独立项目 A/B 和 C/D 验收不能替代这些生产测试。当前知识库仅支持 PDF/TXT/MD 文件接入、解析与持久化，尚未实现 Embedding、向量检索或 RAG。
+- **生产仍待验收：**跨账号处理、删除拒绝；Storage 删除失败与损坏文件残留恢复；完整数据库恢复演练。独立项目 A/B 和 C/D 验收不能替代这些生产测试。知识库现已支持 PDF/TXT/MD 文件接入、解析、持久化及 B1 关键词搜索，尚未实现 Embedding、向量检索或 RAG。
 
 ## 本地运行和复测
 

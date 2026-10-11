@@ -24,10 +24,10 @@ Task 1、Task 2 与 Task 3 已完成项目基础架构、Workspace UI 和 Supaba
 - 提交前检查差异，执行与修改相关的验证。
 - Ollama 本地 Provider 通过 `OLLAMA_BASE_URL` 与 `OLLAMA_MODEL` 配置，默认连接 `http://127.0.0.1:11434` 的 `qwen3:8b`。本地推理不产生云 API Token 费用，输入交由本机 Ollama 处理。
 - 如果 Next.js 运行在云端，`127.0.0.1` 指云服务器自身，不能直连开发者电脑的 Ollama；需要服务器可达的 Ollama 服务，或后续实现受控 Local Connector。
-- AI Auto Router 采用固定规则，不执行模型评估：本地 Ollama 可用时优先；否则按 OpenRouter、OpenAI、DeepSeek、Gemini 考虑最多两个已配置候选。只有 Provider 错误或超时可 fallback；认证、输入校验和限流错误不得 fallback。显式选择 Provider 不切换。
+- AI Auto Router 采用固定规则，不执行模型评估：本地 Ollama 可用时优先；否则按 OpenRouter、OpenAI、DeepSeek、Gemini 考虑最多两个已配置候选。仅可恢复的 `PROVIDER_ERROR` 或 `TIMEOUT` 可 fallback；上游 401/403、其他不可恢复 4xx 和 429 不切换，408 按可切换的 `TIMEOUT` 处理。显式选择 Provider 不切换。该错误分类修复已由 PR #38 合并上线；真实上游 4xx 场景尚未生产实测。
 - Privacy 模式只允许本地 Ollama；不可用时要清楚失败，不得尝试云 Provider。Provider 配置与可用性是独立字段；云 Provider 未执行真实调用前健康状态保持 unknown。
 - OpenRouter 使用服务端 `OPENROUTER_API_KEY`，默认 `OPENROUTER_MODEL=openrouter/free`。显式选择或 Auto 路由到 OpenRouter 时，当前用户的受限 Memory Context 会发送到该云服务；Privacy 下不得发送。不要将 API Key、完整 Memory、Token 或 Cookie 写入日志。
-- 云端调用依赖 Supabase PostgreSQL 的持久化 per-user daily quota；迁移未部署或配额不可用时必须拒绝云调用。不要用易失内存计数器替代，也不要把 30 次请求计数解释为费用预算。
+- 云端调用依赖 Supabase PostgreSQL 的持久化 per-user daily quota；目标环境若缺少迁移或配额不可用，必须拒绝云调用。目标环境部署与真实并发状态须单独核实；不要用易失内存计数器替代，也不要把 30 次请求计数解释为费用预算。
 - Vercel 端无法访问用户电脑的 localhost。当前没有 Local Connector，不能把本地模型健康状态解读为用户个人电脑可连接。
 
 ## Web 开发与验证
@@ -61,7 +61,7 @@ npm run typecheck
 - 两条 AI POST 路由声明 `maxDuration=30` 秒，从入口起计 27 秒总 Deadline。显式模型单次上限 25 秒，Auto 单次上限 12 秒；实际允许时间取各自上限与剩余总预算较小者。首个 Auto 候选在有后继时预留 4 秒；新的云调用至少要剩 2 秒，且先取得云配额。健康检查 1.5 秒，Memory 查询 2 秒。配额 RPC 与可取消的 HTTP 调用接收同一总取消信号。认证 SDK 不暴露可取消接口；Deadline 可以停止等待，但无法保证该底层操作停止。云配额若在取消前已由数据库提交，按原有无退款策略计数。
 - 查找服务端 `event=ai_gateway_request` 日志中的随机 `requestId`、`endpoint`、`routingMode`、`provider`、`attemptNumber`、`authDurationMs`、`memoryDurationMs`、`routeDurationMs`、`quotaDurationMs`、`providerDurationMs`、`totalDurationMs`、`memoryFailureKind` 与 `finalErrorCode`。只输出实际经过的阶段；不含消息、回复、Memory、用户 ID、认证 Header、Secret 或完整 URL。请求被平台强制终止时可能没有最终日志。
 - `memoryFailureKind=timeout` 表示查询取消信号到期，`database` 表示返回错误或无效数据，`network` 表示抛出异常的非超时路径；这是安全的粗分类，不能单凭它确定 Supabase、代理或数据库的具体根因。认证失败仍是 `AUTH_REQUIRED`，Memory 失败按原逻辑 `unavailable` 继续聊天。Memory 查询超时不会自动放宽，底层传输若忽略取消可能仍继续处理只读查询。
-- `RATE_LIMITED` 对应已知上游 429；连接/响应取消对应 `TIMEOUT`；其他上游故障仍是安全的 `PROVIDER_ERROR`。使用 fake Provider 验证错误映射不等于真实上游故障注入。记录出现时间与阶段耗时后，在隔离环境逐一测试显式 Ollama、显式 OpenRouter、Auto 与 Memory，勿把间歇超时直接归咎于 GPU、免费模型或数据库。
+- `RATE_LIMITED` 对应已知上游 429；408 与连接/响应取消对应 `TIMEOUT`；上游 401/403 分为 `PROVIDER_AUTH_FAILED`，其他不可恢复 4xx 为 `PROVIDER_REQUEST_REJECTED`，均使用固定脱敏文案且不触发 Auto fallback；5xx 与无明确 HTTP 状态的网络故障仍是可恢复的 `PROVIDER_ERROR`。使用 fake Provider 验证错误映射不等于真实上游故障注入。记录出现时间与阶段耗时后，在隔离环境逐一测试显式 Ollama、显式 OpenRouter、Auto 与 Memory，勿把间歇超时直接归咎于 GPU、免费模型或数据库。
 - OpenRouter `openrouter/free` 由可用免费模型动态选路，延迟可能随实际模型变化。若计划固定一个免费模型，先比较相同 Prompt 的多次响应时间、可用率、模型能力与配额，再审查配置变更；本任务没有改生产 `OPENROUTER_MODEL`。本地 `/api/show` 元数据确认当前 `qwen3:8b` 支持 `think:false`，因此仅短的候选提取使用该参数；普通聊天不改。不同模型 tag 不自动启用。
 - 人工验收仍需核对目标 Vercel 部署的函数限制与日志、Ollama 的排队和推理、OpenRouter 上游 429/5xx/超时、Memory 间歇 unavailable，以及 Privacy/配额边界。仓库声明的 30 秒不证明线上当前计划或部署设置；真实故障根因仍未定位。
 
@@ -106,11 +106,11 @@ ESLint 9 的安装还提示该版本已停止支持；当前保留与 Next.js �
 
 Dashboard 中的用户、任务与项目进度仍为演示示例。Knowledge Base 文件列表已改为真实 API/Storage 流程，独立测试项目已通过验收，生产已部署并完成文件接入及部分隔离验收；剩余安全和失败恢复场景见下文。Personal Memory 已改为 Supabase 手动 CRUD；Agent 在服务端读取当前用户的有限记忆并作为不可信背景上下文交给所选 Provider。智能记忆建议需主动开启，AI 只生成候选，不自动创建记忆。Agent Workspace 已连接 AI Gateway，Timeline 显示真实请求阶段。当前对话保存在前端内存，刷新后清空；不实现 RAG、Agent Planning、Tool Calling 或 Local Connector。
 
-## Knowledge Base 基础关键词检索（B1 分支，独立项目部分实测）
+## Knowledge Base 基础关键词检索（B1 已上线；独立项目实测与生产基础验收）
 
 `POST /api/knowledge/search` 接收最多 512 字节的 JSON，例如 `{ "query": "关键词", "documentId": "<已授权文档的 UUID>" }`；`documentId` 可省略，提供时精确限制到该文档，省略时检索当前登录用户的全部 ready 文档。关键词经修剪后为 1–100 个 Unicode 字母、组合符、数字或空格；`%`、`_`、`*` 及转义字符被拒绝，避免 ILIKE 通配符扩大匹配。接口先用 SSR Supabase Client 的 `getClaims()` 确认用户，再以同一 authenticated Client 和现有 RLS 查询当前用户的 ready 文档片段。数据库查询限时 3 秒，最多返回 5 条、每条摘录 600 字符、摘录合计不超过 4000 字符，只返回文档 ID、文件名、片段序号与摘录。失败返回固定安全错误，响应为 `Cache-Control: private, no-store`。不调用 Writer、Storage 或 AI，也不需要新 Migration。
 
-Knowledge 页面展示搜索、加载、空结果与错误状态；结果按普通文本渲染，查询变化、卸载或账号切换后旧响应不能覆盖新状态。独立测试项目 `personal-agent-quota-test` 的普通 A/B 会话已通过指定文档的双向搜索隔离；指定 ready 文档精确搜索命中，随后同一合成文档在保留片段的 deleting 状态下，以相同关键词和 `documentId` 搜索返回 HTTP 200 与空结果。另一次验收（Run ID `ffe041f7-5d45-4779-a471-ea4de3c5bd60`）中，A/B 各上传一份唯一关键词的合成 TXT 并解析为 ready；不带 `documentId` 的正式搜索四次均返回 HTTP 200：A 搜 A 与 B 搜 B 各显示本人文件的 1 条结果，A 搜 B 与 B 搜 A 各返回 0 条。Knowledge 正常页面搜索流程 PASS。页面显示的唯一文件名可与登记文档对应，但本轮未直接捕获搜索响应 JSON 中的 `documentId` 字段，不能记为该字段已直接核验。两份夹具通过各自普通账号正常删除；按精确 ID 和路径只读复核，文档、片段及 Storage 对象均为 0。uploading、processing、failed 的真实过滤仍为 NOT RUN；deleting 是已实测的唯一非 ready 状态。Preview 部署检查 Success，但部署环境归属及登录后功能验收未确认；生产 B1 尚未部署或验收。独立测试 Worktree 全量 Vitest 为 306/309：3 项数据库验收入口环境守卫测试预期 WRONG_WORKTREE，实际在授权测试 Worktree 中触发 WRONG_PROJECT_KIND；安全守卫未放宽，不能记为全量通过。定向 B1 测试 38/38 通过。此前验收时同一文档出现两次 DELETE（204、503），第二次 503 的具体失败分支仍 UNKNOWN；历史 Origin 异常根因仅为 LIKELY。关键词匹配不等于语义检索、Embedding 或 RAG。
+Knowledge 页面展示搜索、加载、空结果与错误状态；结果按普通文本渲染，查询变化、卸载或账号切换后旧响应不能覆盖新状态。B1 PR #37 已合并至 `main`（`d366167`），Vercel Production 已部署；正式页面搜索入口与空结果流程通过基础验收，生产正向命中尚未验证。独立测试项目 `personal-agent-quota-test` 的普通 A/B 会话已通过指定文档的双向搜索隔离；指定 ready 文档精确搜索命中，随后同一合成文档在保留片段的 deleting 状态下，以相同关键词和 `documentId` 搜索返回 HTTP 200 与空结果。另一次验收（Run ID `ffe041f7-5d45-4779-a471-ea4de3c5bd60`）中，A/B 各上传一份唯一关键词的合成 TXT 并解析为 ready；不带 `documentId` 的正式搜索四次均返回 HTTP 200：A 搜 A 与 B 搜 B 各显示本人文件的 1 条结果，A 搜 B 与 B 搜 A 各返回 0 条。Knowledge 正常页面搜索流程 PASS。页面显示的唯一文件名可与登记文档对应，但当次未直接捕获搜索响应 JSON 中的 `documentId` 字段，不能记为该字段已直接核验。两份夹具通过各自普通账号正常删除；按精确 ID 和路径只读复核，文档、片段及 Storage 对象均为 0。uploading、processing、failed 的真实过滤仍为 NOT RUN；deleting 是已实测的唯一非 ready 状态。此前 Preview 检查 Success，但当次环境归属及登录后功能未核实，不能把 Preview 检查记为生产功能验收。独立测试 Worktree 全量 Vitest 为 306/309：3 项数据库验收入口环境守卫测试预期 WRONG_WORKTREE，实际在授权测试 Worktree 中触发 WRONG_PROJECT_KIND；安全守卫未放宽，不能记为全量通过。定向 B1 测试 38/38 通过。此前验收时同一文档出现两次 DELETE（204、503），第二次 503 的具体失败分支仍 UNKNOWN；历史 Origin 异常根因仅为 LIKELY。关键词匹配不等于语义检索、Embedding 或 RAG。
 
 ## Knowledge Base 文件接入与验收
 
