@@ -37,4 +37,13 @@ describe("Ollama request options with fake fetch", () => {
     await expect(createOllamaProvider("http://localhost.invalid", "qwen3:8b")
       .generate([{ role: "user", content: "fake" }], controller.signal)).rejects.toMatchObject({ code: "TIMEOUT" });
   });
+
+  it.each([400, 401, 403, 404, 422, 429, 503])("preserves safe upstream HTTP %i classification", async (status) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status }));
+    const expected = status === 429 ? "RATE_LIMITED"
+      : status === 401 || status === 403 ? "PROVIDER_AUTH_FAILED"
+        : status >= 500 ? "PROVIDER_ERROR" : "PROVIDER_REQUEST_REJECTED";
+    await expect(createOllamaProvider("http://localhost.invalid", "qwen3:8b")
+      .generate([{ role: "user", content: "fake" }], new AbortController().signal)).rejects.toMatchObject({ code: expected });
+  });
 });

@@ -256,6 +256,57 @@ describe("POST /api/ai/chat with fake providers", () => {
     expect(calls.openai).toHaveBeenCalledTimes(1);
   });
 
+  it.each([400, 401, 403, 404, 422, 429])("does not fall back or reserve twice after upstream HTTP %i", async (status) => {
+    vi.mocked(getProviderStatuses).mockResolvedValue(statuses(false));
+    calls.openrouter.mockRejectedValue({ status, message: "sk-test-secret-do-not-leak" });
+    const { response, body } = await responseFor();
+    expect(response.status).toBe(status === 429 ? 429 : 502);
+    expect(body.error.code).toBe(status === 429 ? "RATE_LIMITED"
+      : status === 401 || status === 403 ? "PROVIDER_AUTH_FAILED" : "PROVIDER_REQUEST_REJECTED");
+    expect(JSON.stringify(body)).not.toContain("sk-test-secret-do-not-leak");
+    expect(calls.openrouter).toHaveBeenCalledTimes(1);
+    expect(calls.openai).not.toHaveBeenCalled();
+    expect(reserveCloudAiQuota).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([503, undefined])("keeps Auto fallback for upstream %s", async (status) => {
+    vi.mocked(getProviderStatuses).mockResolvedValue(statuses(false));
+    calls.openrouter.mockRejectedValue(status ? { status } : new Error("fake network failure"));
+    const { response, body } = await responseFor();
+    expect(response.status).toBe(200);
+    expect(body.provider).toBe("openai");
+    expect(calls.openai).toHaveBeenCalledTimes(1);
+    expect(reserveCloudAiQuota).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows timeout fallback but never reserves cloud quota twice", async () => {
+    vi.mocked(getProviderStatuses).mockResolvedValue(statuses(false));
+    calls.openrouter.mockRejectedValue({ status: 408 });
+    const { response, body } = await responseFor();
+    expect(response.status).toBe(200);
+    expect(body.provider).toBe("openai");
+    expect(reserveCloudAiQuota).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([401, 403])("does not fall back from explicit OpenRouter upstream HTTP %i", async (status) => {
+    calls.openrouter.mockRejectedValue({ status, message: "sk-test-secret-do-not-leak" });
+    const { response, body } = await responseFor("openrouter");
+    expect(response.status).toBe(502);
+    expect(body.error.code).toBe("PROVIDER_AUTH_FAILED");
+    expect(JSON.stringify(body)).not.toContain("sk-test-secret-do-not-leak");
+    expect(calls.openai).not.toHaveBeenCalled();
+    expect(reserveCloudAiQuota).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps Privacy local-only after an upstream authentication failure", async () => {
+    calls.ollama.mockRejectedValue({ status: 401, message: "sk-test-secret-do-not-leak" });
+    const { response, body } = await responseFor("auto", "privacy");
+    expect(response.status).toBe(502);
+    expect(body.error.code).toBe("PROVIDER_AUTH_FAILED");
+    expectNoCloudCalls();
+    expect(reserveCloudAiQuota).not.toHaveBeenCalled();
+  });
+
   it("returns a safe 429 and never calls cloud when quota is exhausted", async () => {
     vi.mocked(reserveCloudAiQuota).mockRejectedValue(new AIGatewayError("CLOUD_QUOTA_EXCEEDED"));
     const { response, body } = await responseFor("openrouter");
