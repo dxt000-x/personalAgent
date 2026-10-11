@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from "react";
 import { KnowledgeFileRow } from "@/components/knowledge-file-row";
+import { KnowledgeSearch } from "@/components/knowledge-search";
 import { createClient } from "@/lib/supabase/client";
 import { DOCUMENT_PAGE_SIZE, MAX_FILE_BYTES, type KnowledgeDocument } from "@/lib/knowledge/types";
 
@@ -24,6 +25,7 @@ export function KnowledgeWorkspace() {
   const actionRef = useRef(false);
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
+  const [searchVersion, setSearchVersion] = useState(0);
 
   const loadDocuments = useCallback(async () => {
     const generation = ++loadGeneration.current;
@@ -122,6 +124,7 @@ export function KnowledgeWorkspace() {
       }
       const process = await fetch(`/api/knowledge/${documentId}/process`, { method: "POST" });
       if (!process.ok) throw new Error(await responseMessage(process));
+      setSearchVersion((version) => version + 1);
       setMessage("文件已上传并完成正文解析。");
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "上传失败，请稍后重试。");
@@ -136,6 +139,7 @@ export function KnowledgeWorkspace() {
     try {
       const response = await fetch(`/api/knowledge/${document.id}/process`, { method: "POST" });
       if (!response.ok) throw new Error(await responseMessage(response));
+      setSearchVersion((version) => version + 1);
       setMessage("文档处理完成。");
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "处理失败，请稍后重试。");
@@ -148,6 +152,7 @@ export function KnowledgeWorkspace() {
     try {
       const response = await fetch(`/api/knowledge/${document.id}`, { method: "DELETE" });
       if (!response.ok) throw new Error(await responseMessage(response));
+      setSearchVersion((version) => version + 1);
       setMessage("文档已删除。");
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "删除失败，请稍后重试。");
@@ -156,6 +161,7 @@ export function KnowledgeWorkspace() {
 
   return (
     <div className="space-y-6">
+      <KnowledgeSearch key={searchVersion} />
       <section className="rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-8">
         <h2 className="font-semibold">Upload Document · 上传文档</h2>
         <p className="mt-2 text-sm text-slate-500">支持 PDF、TXT、Markdown；单个文件最多 4 MiB。扫描版 PDF 需要 OCR，当前无法提取。</p>
