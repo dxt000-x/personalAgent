@@ -23,7 +23,7 @@ export function validateSearchInput(value: unknown): KnowledgeSearchInput {
   }
   if ("documentId" in input) {
     if (typeof input.documentId !== "string") throw new KnowledgeError("INVALID_REQUEST");
-    return { query, documentId: validateDocumentId(input.documentId) };
+    return { query, documentId: validateDocumentId(input.documentId).toLowerCase() };
   }
   return { query };
 }

@@ -77,6 +77,18 @@ describe("POST /api/knowledge/search", () => {
     expect(searchKnowledgeChunks).toHaveBeenCalledWith(fakeClient, userA, "test", documentA);
   });
 
+  it("passes a canonical documentId for a valid uppercase UUID", async () => {
+    const uppercase = "A1B2C3D4-E5F6-4A7B-8C9D-A1B2C3D4E5F6";
+    const canonical = uppercase.toLowerCase();
+    vi.mocked(searchKnowledgeChunks).mockResolvedValue([{ documentId: canonical,
+      fileName: "A.txt", chunkIndex: 0, snippet: "test" }]);
+    const response = await POST(request({ query: "test", documentId: uppercase }));
+    expect(response.status).toBe(200);
+    expect(searchKnowledgeChunks).toHaveBeenCalledWith(fakeClient, userA, "test", canonical);
+    expect(await response.json()).toEqual({ results: [{ documentId: canonical,
+      fileName: "A.txt", chunkIndex: 0, snippet: "test" }] });
+  });
+
   it("returns a fixed safe error when the database is unavailable", async () => {
     vi.mocked(searchKnowledgeChunks).mockRejectedValue(new Error("fake sensitive SQL data"));
     const response = await POST(request({ query: "笔记" }));

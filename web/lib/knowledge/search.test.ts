@@ -53,6 +53,25 @@ describe("bounded authenticated knowledge keyword search", () => {
     }
   });
 
+  it("normalizes a valid uppercase documentId before comparing the database's canonical UUID", async () => {
+    const uppercase = "A1B2C3D4-E5F6-4A7B-8C9D-A1B2C3D4E5F6";
+    const canonical = uppercase.toLowerCase();
+    const input = validateSearchInput({ query: "shared", documentId: uppercase });
+    expect(input).toEqual({ query: "shared", documentId: canonical });
+    const fake = fakeClient(userA, [row(userA, canonical, "shared")]);
+    expect(await searchKnowledgeChunks(fake.client, userA, input.query, input.documentId))
+      .toEqual([{ documentId: canonical, fileName: "A.txt", chunkIndex: 0, snippet: "shared" }]);
+    expect(fake.filters).toContainEqual(["document_id", canonical]);
+  });
+
+  it("preserves lowercase documentId input and leaves an unscoped search unchanged", () => {
+    expect(validateSearchInput({ query: "shared", documentId: documentA }))
+      .toEqual({ query: "shared", documentId: documentA });
+    expect(validateSearchInput({ query: "shared" })).toEqual({ query: "shared" });
+    expect(() => validateSearchInput({ query: "shared", documentId: "INVALID-UUID" }))
+      .toThrowError(expect.objectContaining({ code: "INVALID_REQUEST" }));
+  });
+
   it("pushes documentId into the database query while retaining ownership and ready filters", async () => {
     const rows = [row(userA, documentA, "shared"), row(userA, documentB, "shared"),
       row(userB, documentB, "shared")];
