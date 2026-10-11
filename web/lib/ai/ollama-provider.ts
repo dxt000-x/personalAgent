@@ -1,5 +1,5 @@
 import "server-only";
-import { AIGatewayError } from "./errors";
+import { AIGatewayError, providerFailure } from "./errors";
 import { MAX_OUTPUT_CHARACTERS, MAX_OUTPUT_TOKENS } from "./limits";
 import type { AIProvider } from "./types";
 
@@ -37,8 +37,7 @@ export function createOllamaProvider(baseUrl: string, model: string): AIProvider
       }
 
       if (!response.ok) {
-        if (response.status === 429) throw new AIGatewayError("RATE_LIMITED");
-        throw new AIGatewayError("PROVIDER_ERROR");
+        throw providerFailure({ status: response.status }, signal);
       }
 
       let result: OllamaChatResponse;

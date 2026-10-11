@@ -10,6 +10,8 @@ describe("public AI errors", () => {
     ["PROVIDER_NOT_CONFIGURED", 503],
     ["PRIVACY_PROVIDER_UNAVAILABLE", 503],
     ["INVALID_REQUEST", 400],
+    ["PROVIDER_AUTH_FAILED", 502],
+    ["PROVIDER_REQUEST_REJECTED", 502],
     ["PROVIDER_ERROR", 502],
     ["RATE_LIMITED", 429],
     ["CLOUD_QUOTA_EXCEEDED", 429],
@@ -51,5 +53,23 @@ describe("public AI errors", () => {
     expect(providerFailure({ name: "AbortError", message: "fake secret" }, signal).code).toBe("TIMEOUT");
     expect(providerFailure(new Error("fake secret"), signal).code).toBe("PROVIDER_ERROR");
     expect(providerFailure(new Error("fake secret"), AbortSignal.abort()).code).toBe("TIMEOUT");
+  });
+
+  it.each([400, 402, 404, 405, 409, 413, 415, 422])("classifies upstream HTTP %i as a safe non-fallback request rejection", (status) => {
+    expect(providerFailure({ status, message: "sk-test-secret-do-not-leak" }, new AbortController().signal).code)
+      .toBe("PROVIDER_REQUEST_REJECTED");
+  });
+
+  it.each([401, 403])("does not confuse upstream HTTP %i with the current user's authentication", (status) => {
+    expect(providerFailure({ status, message: "sk-test-secret-do-not-leak" }, new AbortController().signal).code)
+      .toBe("PROVIDER_AUTH_FAILED");
+  });
+
+  it("keeps upstream 429, 5xx, network failures and timeouts distinct", () => {
+    const signal = new AbortController().signal;
+    expect(providerFailure({ status: 429 }, signal).code).toBe("RATE_LIMITED");
+    expect(providerFailure({ status: 503 }, signal).code).toBe("PROVIDER_ERROR");
+    expect(providerFailure(new Error("network failed"), signal).code).toBe("PROVIDER_ERROR");
+    expect(providerFailure({ status: 408 }, signal).code).toBe("TIMEOUT");
   });
 });

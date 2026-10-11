@@ -21,6 +21,8 @@ type GatewayErrorCode =
   | "PROVIDER_NOT_CONFIGURED"
   | "PRIVACY_PROVIDER_UNAVAILABLE"
   | "INVALID_REQUEST"
+  | "PROVIDER_AUTH_FAILED"
+  | "PROVIDER_REQUEST_REJECTED"
   | "PROVIDER_ERROR"
   | "RATE_LIMITED"
   | "CLOUD_QUOTA_EXCEEDED"
@@ -45,6 +47,8 @@ const errorMessages: Record<GatewayErrorCode, string> = {
   PROVIDER_NOT_CONFIGURED: "所选 Provider 尚未配置，请选择已配置的 Provider。",
   PRIVACY_PROVIDER_UNAVAILABLE: "没有可用的本地模型。Privacy 模式不会将消息发送到云端。",
   INVALID_REQUEST: "消息超出当前对话限制，请缩短内容或清空会话后重试。",
+  PROVIDER_AUTH_FAILED: "模型服务认证或权限校验失败，请检查服务配置。",
+  PROVIDER_REQUEST_REJECTED: "模型服务拒绝了本次请求，请检查模型配置后重试。",
   PROVIDER_ERROR: "模型服务暂时不可用。请检查 Provider 服务状态后重试。",
   RATE_LIMITED: "请求过于频繁，请稍后重试。",
   CLOUD_QUOTA_EXCEEDED: "今日云端 AI 使用次数已达到上限，请于下一个 UTC 日期重置后再试。",
@@ -57,6 +61,8 @@ const gatewayErrorCodes = new Set<GatewayErrorCode>([
   "PROVIDER_NOT_CONFIGURED",
   "PRIVACY_PROVIDER_UNAVAILABLE",
   "INVALID_REQUEST",
+  "PROVIDER_AUTH_FAILED",
+  "PROVIDER_REQUEST_REJECTED",
   "PROVIDER_ERROR",
   "RATE_LIMITED",
   "CLOUD_QUOTA_EXCEEDED",
