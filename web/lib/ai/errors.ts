@@ -9,7 +9,9 @@ export type AIErrorCode =
   | "RATE_LIMITED"
   | "CLOUD_QUOTA_EXCEEDED"
   | "QUOTA_UNAVAILABLE"
-  | "TIMEOUT";
+  | "TIMEOUT"
+  | "KNOWLEDGE_UNAVAILABLE"
+  | "KNOWLEDGE_CONTEXT_LIMIT";
 
 const errorDetails: Record<AIErrorCode, { status: number; message: string }> = {
   AUTH_REQUIRED: { status: 401, message: "请先登录。" },
@@ -23,6 +25,8 @@ const errorDetails: Record<AIErrorCode, { status: number; message: string }> = {
   CLOUD_QUOTA_EXCEEDED: { status: 429, message: "今日云端 AI 使用次数已达到上限，请于下一个 UTC 日期重置后再试。" },
   QUOTA_UNAVAILABLE: { status: 503, message: "云端 AI 使用额度暂时无法核验，请稍后重试。" },
   TIMEOUT: { status: 504, message: "模型服务响应超时，请稍后重试。" },
+  KNOWLEDGE_UNAVAILABLE: { status: 503, message: "知识库检索暂时不可用，请稍后重试。" },
+  KNOWLEDGE_CONTEXT_LIMIT: { status: 400, message: "本次对话已没有足够空间加入知识库资料，请清空会话或缩短消息。" },
 };
 
 export class AIGatewayError extends Error {

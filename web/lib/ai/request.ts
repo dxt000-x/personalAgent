@@ -6,11 +6,13 @@ import {
   MAX_REQUEST_BYTES,
 } from "./limits";
 import type { ChatMessage, ProviderId, ProviderSelection, RoutingPreference } from "./types";
+import { validateSearchInput } from "@/lib/knowledge/search";
 
 export type ChatRequest = {
   provider: ProviderSelection;
   routingPreference: RoutingPreference;
   messages: ChatMessage[];
+  knowledge?: { enabled: true; query: string };
 };
 
 export async function readJsonBody(request: Request, signal?: AbortSignal): Promise<unknown> {
@@ -61,6 +63,9 @@ export function validateChatRequest(value: unknown): ChatRequest {
     throw new AIGatewayError("INVALID_REQUEST");
   }
   const input = value as Record<string, unknown>;
+  if (Object.keys(input).some((key) => !["provider", "routingPreference", "messages", "knowledge"].includes(key))) {
+    throw new AIGatewayError("INVALID_REQUEST");
+  }
   if (!["auto", "openai", "deepseek", "gemini", "ollama", "openrouter"].includes(String(input.provider))) {
     throw new AIGatewayError("INVALID_REQUEST");
   }
@@ -95,5 +100,15 @@ export function validateChatRequest(value: unknown): ChatRequest {
   if (messages.at(-1)?.role !== "user") {
     throw new AIGatewayError("INVALID_REQUEST");
   }
-  return { provider: input.provider as ProviderId | "auto", routingPreference, messages };
+  let knowledge: ChatRequest["knowledge"];
+  if ("knowledge" in input) {
+    if (typeof input.knowledge !== "object" || input.knowledge === null || Array.isArray(input.knowledge)) {
+      throw new AIGatewayError("INVALID_REQUEST");
+    }
+    const selection = input.knowledge as Record<string, unknown>;
+    if (Object.keys(selection).length !== 2 || selection.enabled !== true) throw new AIGatewayError("INVALID_REQUEST");
+    try { knowledge = { enabled: true, query: validateSearchInput({ query: selection.query }).query }; }
+    catch { throw new AIGatewayError("INVALID_REQUEST"); }
+  }
+  return { provider: input.provider as ProviderId | "auto", routingPreference, messages, ...(knowledge ? { knowledge } : {}) };
 }
