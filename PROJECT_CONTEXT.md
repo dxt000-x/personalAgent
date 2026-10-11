@@ -62,7 +62,7 @@ Browser / Agent Workspace
 - 恢复：移除测试进程覆盖，Ollama `/api/tags` HTTP 200，`qwen3:8b` 仍存在；正常 Auto 再次选择 Ollama 并回复 `Auto Local 联调成功`。
 - 匿名 AI 接口：上一轮真实请求中 GET providers 与 POST chat 均返回 401 `AUTH_REQUIRED`。
 - 云端配额代码已添加，但 SQL 尚未执行；当前没有真实数据库并发或部署后的云调用验收，不将自动测试描述为已完成数据库原子性验收。
-- Dashboard 仍含明确的演示数据。Knowledge Base 上传、解析、列表和删除已在生产运行；独立测试项目已完成迁移、文件、隔离、并发和限额真实验收。生产已完成迁移、受限 Writer、三种格式文件，以及 A/B 直接读取片段与原件的只读隔离验收；跨账号处理、删除拒绝及异常恢复仍待验收。知识检索未接入；Settings 部分为 UI 设置或占位。
+- Dashboard 仍含明确的演示数据。Knowledge Base 上传、解析、列表和删除已在生产运行；独立测试项目已完成迁移、文件、隔离、并发和限额真实验收。生产已完成迁移、受限 Writer、三种格式文件，以及 A/B 直接读取片段与原件的只读隔离验收；跨账号处理、删除拒绝及异常恢复仍待验收。B1 基础关键词检索已在本地分支实现，并完成独立测试项目的指定文档 A/B 双向隔离及 ready/deleting 对照验收；生产 B1 尚未部署或验收。Settings 部分为 UI 设置或占位。
 
 ## 各 Provider 状态
 
@@ -212,6 +212,13 @@ Agent 输入交互任务：只修改 `web/components/agent-workspace.tsx` 的输
 - C/D 专用空白账号的 PostgreSQL 只读预检全部 PASS；真实双连接争领、过期 generation、处理与删除竞态、原件缺失拒绝领取通过。每用户 100 文档、100 MiB 声明容量、每 UTC 小时 20 次上传初始化及 60 次处理领取限制通过。100 MiB 测试只验证数据库声明容量，并未实际上传 100 MiB 文件。
 - Run ID `ad0ef8cd-f98e-4a79-9f85-3b53816f9788` 的登记文档及 Storage 对象已清理并经 `--inspect-run` 只读复核；上传与处理事件行保留供审计。此前 `UNKNOWN_FAILURE` 和“并发未运行”是历史状态，不代表当前验收失败。
 - 当时生产 Supabase 知识库迁移、受限连接及 Vercel 联调、PR Merge 尚未完成；这是合并前的历史状态，不代表当前部署状态。知识库目前只实现文件接入与片段保存，未实现 Embedding、向量检索或 RAG。
+
+### 2026-10-10 Knowledge Base 基础关键词检索（本地开发）
+
+- `feat/knowledge-search-mvp` 基于已核实的 `main` 提供只读基础关键词检索与 Knowledge 页面来源摘录；正式 `POST /api/knowledge/search` 支持可选 `documentId` UUID 精确过滤，不提供时检索当前用户全部 ready 文档。接口使用当前 SSR authenticated Client、现有 RLS 和 ready 文档过滤；输入最多 100 字、请求体最多 512 字节，最多 5 条结果、每条摘录 600 字、摘录合计不超过 4000 字，查询限时 3 秒。不需要新 Migration，不调用 AI 或 Storage。
+- 独立测试项目 `personal-agent-quota-test` 使用普通 A/B 身份，对已授权的指定文档完成双向搜索隔离 PASS；ready 精确搜索命中 PASS；唯一合成 TXT 文档在片段仍存在的 deleting 状态下，同一 A 会话以相同关键词和 `documentId` 搜索得到 HTTP 200、空结果 PASS；该 Run ID 登记的文档、片段及 Storage 对象精确清理 PASS。这些实测只覆盖指定文档及会话，不代表生产验收。
+- uploading、processing、failed 其他非 ready 状态的真实过滤均 NOT RUN；不带 `documentId` 的真实宽范围搜索 NOT RUN；生产 B1 未部署、未验收。独立测试 Worktree 的 B1 定向测试 38/38 通过，Lint、TypeScript 和 Production Build 通过；全量 Vitest 实际为 306/309，3 项数据库验收入口环境守卫测试在授权测试 Worktree 中得到 WRONG_PROJECT_KIND，而旧断言预期 WRONG_WORKTREE，不得写为全量通过。主开发仓库本轮验证以实际运行结果另行记录。
+- 同一测试文档在验收过程观察到两次 DELETE，分别返回 204 与 503；第二次 503 的具体失败分支仍 UNKNOWN，最终对象清理复核为零不代表此异常已定位。历史 localhost/127.0.0.1 Origin 故障根因仅为 LIKELY。上述独立项目验收本身不代表 B1 已部署；后续 Git 与发布状态以仓库和部署记录为准。
 
 ### 2026-10-10 Knowledge Base 生产上线与验收状态（当前里程碑）
 

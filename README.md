@@ -24,7 +24,7 @@ https://personal-agent-seven-mu.vercel.app
 - ✅ 服务端身份认证与受保护路由
 - ✅ Vercel 公网部署
 
-> OpenRouter 在本地及 Vercel 的真实调用已有阶段性人工验收记录；线上部署内容仍应按实际发布版本核对。智能记忆候选提取已实现，仍待人工联调；知识库文件接入已通过独立测试项目及部分生产验收，生产安全与失败恢复验收仍有待办。知识检索、Agent Planning 与工具能力仍在开发中。
+> OpenRouter 在本地及 Vercel 的真实调用已有阶段性人工验收记录；线上部署内容仍应按实际发布版本核对。智能记忆候选提取已实现，仍待人工联调；知识库文件接入已通过独立测试项目及部分生产验收，生产安全与失败恢复验收仍有待办。基础关键词检索已在本地开发，并通过独立测试项目的指定文档 A/B 隔离及 ready/deleting 对照验收；B1 尚未部署生产。Agent Planning 与工具能力仍在开发中。
 
 ## 比赛项目目标
 
@@ -32,7 +32,7 @@ https://personal-agent-seven-mu.vercel.app
 
 ## 当前开发阶段
 
-**Memory-aware Agent。** `/memory` 使用 Supabase Postgres 与 authenticated Session 实现手动 CRUD；`/agent` 在服务端按当前登录用户检索有限的 Personal Memory，并作为不可信背景数据注入模型上下文。数据库 RLS 仍是最终行级边界。Agent 的智能记忆建议默认关闭，启用后仅生成候选，用户确认后才保存。Embedding、Semantic Search、Vector RAG 与 Knowledge Base 检索仍未实现。
+**Memory-aware Agent。** `/memory` 使用 Supabase Postgres 与 authenticated Session 实现手动 CRUD；`/agent` 在服务端按当前登录用户检索有限的 Personal Memory，并作为不可信背景数据注入模型上下文。数据库 RLS 仍是最终行级边界。Agent 的智能记忆建议默认关闭，启用后仅生成候选，用户确认后才保存。知识库基础关键词检索已在本地开发，不参与 Agent 对话；Embedding、Semantic Search 与 Vector RAG 未实现。
 
 ## 技术架构概览
 
@@ -110,7 +110,7 @@ npm run start
 - Agent 可选择开启智能记忆建议：聊天成功后单独分析本轮用户消息，展示最多 3 条候选；点击确认后复用 `POST /api/memories` 保存，忽略则不写入。
 - Agent Timeline 显示 Received、Validating、Retrieving Memory、Routing、Generating、Completed；Memory 仅作为当前用户的安全上下文，不模拟 Planning、RAG 或工具调用。
 - `/memory`：通过 `GET/POST /api/memories` 与 `GET/PATCH/DELETE /api/memories/[id]` 访问当前用户的 Personal Memory，支持新增、编辑、删除、加载/空/错误状态；服务端从已验证 Session 获取 `user_id`，不接受客户端指定所有权字段。
-- `/knowledge`：当前账号的 PDF、TXT、Markdown 文件列表、直传、服务端正文解析与有序片段、处理状态和删除。生产 Migration 和受限 Writer 已部署，三种格式的生产上传、解析与删除已验收；跨账号直接读取片段和原件等安全验收仍待完成，检索未实现。
+- `/knowledge`：当前账号的 PDF、TXT、Markdown 文件列表、直传、服务端正文解析与有序片段、处理状态和删除。生产 Migration 和受限 Writer 已部署，三种格式的生产上传、解析与删除已验收；指定测试文档的生产 A/B 直接读取片段和原件隔离已通过。B1 分支已实现 `POST /api/knowledge/search` 基础关键词搜索，可选 `documentId` 精确过滤；独立测试项目的指定文档 A/B 双向搜索隔离、ready 命中及 deleting 排除已实测，生产 B1 尚未部署或验收。
 - `/settings`：模型、自主程度的本地 UI 选择，以及服务商/连接器占位。
 - `POST /api/ai/chat`：认证后支持 Auto 或显式选择 OpenRouter、OpenAI、DeepSeek、Gemini、Ollama；验证输入并返回统一的非流式文本结果。Auto 按规则路由并最多尝试两个候选；显式选择不回退。
 - 云端 AI 每用户每日 30 次预占限制已在 Gateway 与迁移文件中实现；数据库迁移须经人工审查并部署后才可用于真实云端调用。
@@ -174,7 +174,7 @@ OLLAMA_MODEL=qwen3:8b
 
 支持 PDF、UTF-8 TXT 和 Markdown，单文件上限 4 MiB。浏览器使用当前 Supabase 登录态将文件直接上传到按用户/文档生成的私有 Storage 路径；Next.js 仅接收小型元数据 JSON。服务端随后重新下载原件，验证实际字节数、PDF 头与解析结果或文本 UTF-8/二进制特征，再拆成有序片段。这样文件请求不经过 Vercel Function 的 [4.5 MB 请求体限制](https://vercel.com/docs/functions/limitations)；Supabase [标准直传](https://supabase.com/docs/guides/storage/uploads/standard-uploads)适用于当前 4 MiB 上限。
 
-删除先标记 `deleting` 并使处理代次失效，再通过 Storage API 移除原件，最后删除文档并级联删除片段；Storage 失败时保留可重试状态。确定性的格式/解析失败标记 `failed` 并尝试清理原件；临时错误尽量标记可重试的 `failed` 并保留原件，数据库不可用导致标记失败时可在处理超时后重领。单用户最多 100 个文档、累计声明容量 100 MiB，每 UTC 小时最多初始化 20 次、领取处理 60 次；单文件仍限 4 MiB。未完成的上传可在页面继续处理或删除；长时间卡住的处理在 10 分钟后可重新认领，旧代次不能提交。扫描版、加密版或无文字 PDF 无法提取；本阶段不提供 OCR、Embedding 或 RAG。自动测试使用假 Supabase/Storage；独立测试项目已通过 TXT/Markdown/PDF 真实上传、A/B 隔离及数据库并发与限额验收。100 MiB 验证的是数据库声明容量，并非实际上传 100 MiB。生产仍待普通用户直接跨账号读取片段与原件、跨账号处理/删除拒绝、Storage 删除失败及损坏文件残留恢复、完整数据库恢复演练。步骤见 [开发文档](docs/development.md)。
+删除先标记 `deleting` 并使处理代次失效，再通过 Storage API 移除原件，最后删除文档并级联删除片段；Storage 失败时保留可重试状态。确定性的格式/解析失败标记 `failed` 并尝试清理原件；临时错误尽量标记可重试的 `failed` 并保留原件，数据库不可用导致标记失败时可在处理超时后重领。单用户最多 100 个文档、累计声明容量 100 MiB，每 UTC 小时最多初始化 20 次、领取处理 60 次；单文件仍限 4 MiB。未完成的上传可在页面继续处理或删除；长时间卡住的处理在 10 分钟后可重新认领，旧代次不能提交。扫描版、加密版或无文字 PDF 无法提取；本阶段不提供 OCR、Embedding 或 RAG。自动测试使用假 Supabase/Storage；独立测试项目已通过 TXT/Markdown/PDF 真实上传、A/B 隔离及数据库并发与限额验收。100 MiB 验证的是数据库声明容量，并非实际上传 100 MiB。生产已通过指定测试文档的普通用户直接跨账号片段与原件只读隔离；跨账号处理/删除拒绝、Storage 删除失败及损坏文件残留恢复、完整数据库恢复演练仍待完成。步骤见 [开发文档](docs/development.md)。
 
 ### 智能记忆建议（已实现，待人工联调）
 
