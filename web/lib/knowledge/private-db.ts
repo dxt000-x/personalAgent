@@ -1,5 +1,5 @@
 import "server-only";
-import { Pool } from "pg";
+import { Pool, type PoolClient } from "pg";
 import { KnowledgeError } from "./errors";
 
 // Only the dedicated LOGIN role may be used here. A postgres or service_role
@@ -10,7 +10,10 @@ function knowledgePool(): Pool {
   if (pool) return pool;
   const raw = process.env.KNOWLEDGE_DB_URL;
   const certificate = process.env.KNOWLEDGE_DB_CA_CERT_BASE64;
-  if (!raw || !certificate) throw new KnowledgeError("KNOWLEDGE_UNAVAILABLE");
+  if (!raw || !certificate) {
+    console.error("WRITER_CONFIG_FAIL");
+    throw new KnowledgeError("KNOWLEDGE_UNAVAILABLE");
+  }
   try {
     const url = new URL(raw);
     const username = decodeURIComponent(url.username);
@@ -34,6 +37,7 @@ function knowledgePool(): Pool {
     pool = nextPool;
     return pool;
   } catch {
+    console.error("WRITER_CONFIG_FAIL");
     throw new KnowledgeError("KNOWLEDGE_UNAVAILABLE");
   }
 }
@@ -65,7 +69,24 @@ export async function callKnowledgeTransition<T extends boolean | number>(
 }
 
 export async function assertKnowledgeWriterReady(): Promise<void> {
-  if (!await callKnowledgeTransition<boolean>("ready", [])) {
+  let client: PoolClient;
+  try {
+    client = await knowledgePool().connect();
+  } catch (error) {
+    if (!(error instanceof KnowledgeError)) console.error("WRITER_CONNECT_FAIL");
     throw new KnowledgeError("KNOWLEDGE_UNAVAILABLE");
+  }
+  try {
+    const result = await client.query(sql.ready);
+    if (result.rows[0]?.value !== true) {
+      console.error("WRITER_PRIVILEGE_FAIL");
+      throw new KnowledgeError("KNOWLEDGE_UNAVAILABLE");
+    }
+    console.info("WRITER_READY_OK");
+  } catch (error) {
+    if (!(error instanceof KnowledgeError)) console.error("WRITER_PRIVILEGE_FAIL");
+    throw new KnowledgeError("KNOWLEDGE_UNAVAILABLE");
+  } finally {
+    client.release();
   }
 }

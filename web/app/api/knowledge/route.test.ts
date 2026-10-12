@@ -55,6 +55,21 @@ function request(path: string, method: string, body?: unknown, origin?: string) 
 beforeEach(() => { vi.resetAllMocks(); });
 
 describe("knowledge API security and upload lifecycle", () => {
+  it("logs only fixed failure metadata and keeps the response safe", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const repository = fakeRepository();
+      repository.create.mockRejectedValueOnce(new Error("password=secret-never-log"));
+      vi.mocked(requireKnowledgeContext).mockResolvedValue({ userId: userA, repository });
+      const response = await POST(request("/api/knowledge", "POST", { fileName: "notes.txt", size: 10 }));
+      expect(response.status).toBe(503);
+      expect(log).toHaveBeenCalledWith("KNOWLEDGE_API_FAIL", {
+        stage: "KNOWLEDGE_API_FAIL", error_class: "UNEXPECTED_ERROR",
+      });
+      expect(JSON.stringify(log.mock.calls)).not.toContain("secret-never-log");
+      expect(JSON.stringify(await response.json())).not.toContain("secret-never-log");
+    } finally { log.mockRestore(); }
+  });
   it("requires authentication for list, upload, processing, and delete", async () => {
     vi.mocked(requireKnowledgeContext).mockRejectedValue(new KnowledgeError("AUTH_REQUIRED"));
     const context = { params: Promise.resolve({ id: documentId }) };

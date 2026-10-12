@@ -18,6 +18,25 @@ function repositoryWithInsertError(message: string) {
 }
 
 describe("Knowledge repository database boundaries", () => {
+  it("logs fixed create stages without including input or database errors", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const row = { id: documentId };
+      const single = vi.fn(async () => ({ data: row, error: null }));
+      const from = vi.fn(() => ({ insert: vi.fn(() => ({ select: vi.fn(() => ({ single })) })) }));
+      const repo = new SupabaseKnowledgeRepository({ from } as never);
+      await repo.create(userId, { ...input, fileName: "private-secret-name.txt" });
+      expect(info.mock.calls.map(([code]) => code)).toEqual([
+        "DOCUMENT_CREATE_START", "WRITER_CHECK_START", "WRITER_CHECK_OK",
+        "DOCUMENT_INSERT_START", "DOCUMENT_CREATE_OK",
+      ]);
+      single.mockRejectedValueOnce(new Error("password=secret-never-log"));
+      await expect(repo.create(userId, input)).rejects.toMatchObject({ code: "KNOWLEDGE_UNAVAILABLE" });
+      expect(log).toHaveBeenCalledWith("DOCUMENT_INSERT_FAIL");
+      expect(JSON.stringify([...info.mock.calls, ...log.mock.calls])).not.toMatch(/private-secret-name|secret-never-log/);
+    } finally { info.mockRestore(); log.mockRestore(); }
+  });
   it("returns a safe document/byte limit error from the database trigger", async () => {
     const repo = repositoryWithInsertError("KNOWLEDGE_LIMIT_REACHED");
     await expect(repo.create(userId, input)).rejects.toMatchObject({ code: "KNOWLEDGE_LIMIT_REACHED", status: 409 });
