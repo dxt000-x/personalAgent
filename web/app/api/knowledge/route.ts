@@ -5,30 +5,12 @@ import { readSmallJson, validateUploadInput } from "@/lib/knowledge/validation";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// Temporary Preview diagnostic: log only bounded project references, never URLs or credentials.
-function publicProjectRef(): string {
-  try {
-    const host = new URL(process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").hostname;
-    return /^([a-z0-9]{20})\.supabase\.co$/u.exec(host)?.[1] ?? "UNKNOWN";
-  } catch { return "UNKNOWN"; }
-}
-
-function writerProjectRef(): string {
-  try {
-    const username = decodeURIComponent(new URL(process.env.KNOWLEDGE_DB_URL ?? "").username);
-    return /^knowledge_writer_login\.([a-z0-9]{20})$/u.exec(username)?.[1] ?? "UNKNOWN";
-  } catch { return "UNKNOWN"; }
-}
-
 export async function GET(request: Request): Promise<Response> {
   try {
     const { userId, repository } = await requireKnowledgeContext();
     const rawOffset = new URL(request.url).searchParams.get("offset") ?? "0";
     if (!/^(0|[1-9][0-9]{0,5})$/u.test(rawOffset)) throw new KnowledgeError("INVALID_REQUEST");
     const offset = Number(rawOffset);
-    console.info("KNOWLEDGE_PROJECT_REFS", {
-      public_ref: publicProjectRef(), writer_ref: writerProjectRef(),
-    });
     return privateKnowledgeJson({ documents: await repository.list(userId, offset) });
   } catch (error) { return knowledgeErrorResponse(error); }
 }

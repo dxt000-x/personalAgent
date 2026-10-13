@@ -55,42 +55,30 @@ function request(path: string, method: string, body?: unknown, origin?: string) 
 beforeEach(() => { vi.resetAllMocks(); });
 
 describe("knowledge API security and upload lifecycle", () => {
-  it("logs only the two project refs on an authenticated read", async () => {
+  it("does not expose project configuration in an authenticated list response or logs", async () => {
     const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
-    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://pxfaqcepztzqyqtmbdrf.supabase.co");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://abcdefghijklmnopqrst.supabase.co");
     vi.stubEnv("KNOWLEDGE_DB_URL",
-      "postgresql://knowledge_writer_login.pxfaqcepztzqyqtmbdrf:fake-secret-never-log@aws-0-test.pooler.supabase.com:6543/postgres");
+      "postgresql://knowledge_writer_login.abcdefghijklmnopqrst:fixture-password-never-log@aws-0-test.pooler.supabase.com:6543/postgres");
     try {
       const repository = fakeRepository();
       vi.mocked(requireKnowledgeContext).mockResolvedValue({ userId: userA, repository });
       const response = await GET(request("/api/knowledge", "GET"));
       expect(response.status).toBe(200);
-      expect(info).toHaveBeenCalledWith("KNOWLEDGE_PROJECT_REFS", {
-        public_ref: "pxfaqcepztzqyqtmbdrf", writer_ref: "pxfaqcepztzqyqtmbdrf",
+      expect(repository.list).toHaveBeenCalledWith(userA, 0);
+      const observed = JSON.stringify({
+        response: await response.json(),
+        logs: [...info.mock.calls, ...warn.mock.calls, ...error.mock.calls],
       });
-      expect(JSON.stringify(info.mock.calls)).not.toMatch(/fake-secret-never-log|postgresql:\/\/|https:\/\//u);
+      expect(observed).not.toMatch(/abcdefghijklmnopqrst|fixture-password-never-log|postgresql:\/\/|KNOWLEDGE_PROJECT_REFS/u);
+      expect(info).not.toHaveBeenCalled();
     } finally {
       vi.unstubAllEnvs();
       info.mockRestore();
-    }
-  });
-
-  it("redacts malformed project URLs rather than logging their contents", async () => {
-    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
-    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://not-a-project.invalid/token-never-log");
-    vi.stubEnv("KNOWLEDGE_DB_URL", "postgresql://postgres:password-never-log@db.invalid/postgres");
-    try {
-      const repository = fakeRepository();
-      vi.mocked(requireKnowledgeContext).mockResolvedValue({ userId: userA, repository });
-      const response = await GET(request("/api/knowledge", "GET"));
-      expect(response.status).toBe(200);
-      expect(info).toHaveBeenCalledWith("KNOWLEDGE_PROJECT_REFS", {
-        public_ref: "UNKNOWN", writer_ref: "UNKNOWN",
-      });
-      expect(JSON.stringify(info.mock.calls)).not.toMatch(/token-never-log|password-never-log|db\.invalid/u);
-    } finally {
-      vi.unstubAllEnvs();
-      info.mockRestore();
+      warn.mockRestore();
+      error.mockRestore();
     }
   });
 
