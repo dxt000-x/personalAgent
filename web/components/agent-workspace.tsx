@@ -13,6 +13,8 @@ import {
   MAX_MESSAGES,
 } from "@/lib/ai/limits";
 import type { MemoryCandidate } from "@/lib/ai/memory-candidates";
+import { MAX_SEARCH_QUERY_CHARS, MAX_SEARCH_RESULTS, MAX_SEARCH_SNIPPET_CHARS, MAX_SEARCH_TOTAL_CHARS,
+  type KnowledgeSearchResult } from "@/lib/knowledge/search-types";
 
 type CandidateEntry = MemoryCandidate & { id: string; status: "pending" | "saving" | "saved" | "error" };
 
@@ -27,9 +29,12 @@ type GatewayErrorCode =
   | "RATE_LIMITED"
   | "CLOUD_QUOTA_EXCEEDED"
   | "QUOTA_UNAVAILABLE"
-  | "TIMEOUT";
+  | "TIMEOUT"
+  | "KNOWLEDGE_UNAVAILABLE"
+  | "KNOWLEDGE_CONTEXT_LIMIT";
 
-type RetryRequest = { provider: ProviderSelection; routingPreference: RoutingPreference; messages: ChatMessage[] };
+type RetryRequest = { provider: ProviderSelection; routingPreference: RoutingPreference; messages: ChatMessage[];
+  knowledge?: { enabled: true; query: string } };
 type TimelineState =
   | { state: "idle" | "running" | "success"; resolvedProvider?: ProviderId; model?: string; reason?: RoutingReason; memory?: MemoryUsage }
   | { state: "error"; code: GatewayErrorCode };
@@ -54,6 +59,8 @@ const errorMessages: Record<GatewayErrorCode, string> = {
   CLOUD_QUOTA_EXCEEDED: "今日云端 AI 使用次数已达到上限，请于下一个 UTC 日期重置后再试。",
   QUOTA_UNAVAILABLE: "云端 AI 使用额度暂时无法核验，请稍后重试。",
   TIMEOUT: "模型响应超时，请稍后重试。",
+  KNOWLEDGE_UNAVAILABLE: "知识库检索暂时不可用，本次未生成知识库回答。请稍后重试。",
+  KNOWLEDGE_CONTEXT_LIMIT: "本次对话已没有足够空间加入知识库资料，请清空会话或缩短消息。",
 };
 
 const gatewayErrorCodes = new Set<GatewayErrorCode>([
@@ -68,6 +75,8 @@ const gatewayErrorCodes = new Set<GatewayErrorCode>([
   "CLOUD_QUOTA_EXCEEDED",
   "QUOTA_UNAVAILABLE",
   "TIMEOUT",
+  "KNOWLEDGE_UNAVAILABLE",
+  "KNOWLEDGE_CONTEXT_LIMIT",
 ]);
 
 function asGatewayErrorCode(value: unknown): GatewayErrorCode {
@@ -132,6 +141,28 @@ function readMemoryUsage(value: unknown): MemoryUsage {
   return { status: "unavailable", used: false, count: 0 };
 }
 
+function readKnowledgeUsage(value: unknown): { status: "used" | "no_match"; sources: KnowledgeSearchResult[] } | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const usage = value as { status?: unknown; sources?: unknown };
+  if ((usage.status !== "used" && usage.status !== "no_match") || !Array.isArray(usage.sources)
+    || usage.sources.length > MAX_SEARCH_RESULTS || (usage.status === "used" && usage.sources.length === 0)
+    || (usage.status === "no_match" && usage.sources.length !== 0)) return null;
+  let total = 0;
+  const sources: KnowledgeSearchResult[] = [];
+  for (const row of usage.sources) {
+    if (!row || typeof row !== "object") return null;
+    const source = row as Partial<KnowledgeSearchResult>;
+    if (typeof source.documentId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(source.documentId)
+      || typeof source.fileName !== "string" || source.fileName.length > 180
+      || typeof source.chunkIndex !== "number" || !Number.isInteger(source.chunkIndex) || source.chunkIndex < 0
+      || typeof source.snippet !== "string" || source.snippet.length > MAX_SEARCH_SNIPPET_CHARS) return null;
+    total += source.snippet.length;
+    if (total > MAX_SEARCH_TOTAL_CHARS) return null;
+    sources.push(source as KnowledgeSearchResult);
+  }
+  return { status: usage.status, sources };
+}
+
 export function AgentWorkspace({ sessionKey = "default" }: { sessionKey?: string }) {
   return <AgentWorkspaceSession key={sessionKey} sessionKey={sessionKey} />;
 }
@@ -146,6 +177,9 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
   const [providersError, setProvidersError] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [errorCode, setErrorCode] = useState<GatewayErrorCode | null>(null);
+  const [knowledgeEnabled, setKnowledgeEnabled] = useState(false);
+  const [knowledgeQuery, setKnowledgeQuery] = useState("");
+  const [knowledgeNoMatch, setKnowledgeNoMatch] = useState(false);
   const [retryRequest, setRetryRequest] = useState<RetryRequest | null>(null);
   const [timeline, setTimeline] = useState<TimelineState>({ state: "idle" });
   const sendingRef = useRef(false);
@@ -157,6 +191,9 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
   const candidateGeneration = useRef(0);
   const accountGeneration = useRef(0);
   const candidateSaving = useRef(new Set<string>());
+  const chatGeneration = useRef(0);
+  const chatController = useRef<AbortController | null>(null);
+  const mounted = useRef(true);
 
   const selectedStatus = useMemo(
     () => selectedProvider === "auto" ? undefined : providers.find(({ id }) => id === selectedProvider),
@@ -186,12 +223,20 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
     return () => { active = false; };
   }, [sessionKey]);
 
-  useEffect(() => () => {
-    candidateGeneration.current += 1;
-    accountGeneration.current += 1;
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      chatGeneration.current += 1;
+      chatController.current?.abort();
+      chatController.current = null;
+      candidateGeneration.current += 1;
+      accountGeneration.current += 1;
+    };
   }, []);
 
-  async function requestCandidates(request: RetryRequest) {
+  async function requestCandidates(request: RetryRequest, expectedChatGeneration: number) {
+    if (!mounted.current || expectedChatGeneration !== chatGeneration.current) return;
     const message = request.messages.at(-1);
     if (!message || message.role !== "user") return;
     const generation = ++candidateGeneration.current;
@@ -277,27 +322,46 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
   }
 
   async function sendRequest(request: RetryRequest) {
-    if (sendingRef.current) return;
+    if (sendingRef.current || !mounted.current) return;
     sendingRef.current = true;
+    const generation = ++chatGeneration.current;
+    const controller = new AbortController();
+    chatController.current = controller;
+    const stillCurrent = () => mounted.current && generation === chatGeneration.current && !controller.signal.aborted;
     setIsSending(true);
     setErrorCode(null);
+    setKnowledgeNoMatch(false);
     setTimeline({ state: "running" });
     try {
       const response = await fetch("/api/ai/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
         body: JSON.stringify({
           provider: request.provider,
           ...(request.provider === "auto" ? { routingPreference: request.routingPreference } : {}),
           messages: request.messages,
+          ...(request.knowledge ? { knowledge: request.knowledge } : {}),
         }),
       });
+      if (!stillCurrent()) return;
       const body: unknown = await response.json();
+      if (!stillCurrent()) return;
       if (!response.ok) {
         const error = typeof body === "object" && body !== null
           ? (body as { error?: { code?: unknown } }).error
           : undefined;
         throw new Error(asGatewayErrorCode(error?.code));
+      }
+
+      const knowledgeUsage = request.knowledge && typeof body === "object" && body !== null
+        ? readKnowledgeUsage((body as { knowledge?: unknown }).knowledge) : null;
+      if (request.knowledge && !knowledgeUsage) throw new Error("PROVIDER_ERROR");
+      if (knowledgeUsage?.status === "no_match") {
+        setKnowledgeNoMatch(true);
+        setRetryRequest(null);
+        setTimeline({ state: "idle" });
+        return;
       }
 
       const result = body as {
@@ -323,6 +387,7 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
         provider: actualProvider,
         model: result.model as string,
         memory: memoryUsage,
+        ...(knowledgeUsage?.status === "used" ? { sources: knowledgeUsage.sources } : {}),
       };
       setMessages((current) => [...current, assistantMessage].slice(-MAX_MESSAGES));
       setRetryRequest(null);
@@ -337,21 +402,27 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
           "privacy_local_only", "fallback_after_provider_error",
         ].includes(reason) ? { reason: reason as RoutingReason } : {}),
       });
-      if (suggestionsEnabledRef.current) void requestCandidates(request);
+      if (stillCurrent() && suggestionsEnabledRef.current) void requestCandidates(request, generation);
     } catch (error) {
+      if (!stillCurrent()) return;
       const code = asGatewayErrorCode(error instanceof Error ? error.message : undefined);
       setErrorCode(code);
       setRetryRequest(request);
       setTimeline({ state: "error", code });
     } finally {
-      sendingRef.current = false;
-      setIsSending(false);
+      if (generation === chatGeneration.current && mounted.current) {
+        chatController.current = null;
+        sendingRef.current = false;
+        setIsSending(false);
+      }
     }
   }
 
   function sendDraft() {
     const content = draft.trim();
+    const query = knowledgeQuery.trim();
     if (!content || content.length > MAX_MESSAGE_CHARACTERS
+      || (knowledgeEnabled && (!query || query.length > MAX_SEARCH_QUERY_CHARS || !/^[\p{L}\p{M}\p{N} ]+$/u.test(query)))
       || (selectedProvider !== "auto" && !selectedStatus?.configured)
       || providersLoading || providersError || isSending || sendingRef.current || retryRequest) return;
 
@@ -368,6 +439,7 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
       provider: selectedProvider,
       routingPreference,
       messages: providerRequestMessages(nextMessages),
+      ...(knowledgeEnabled ? { knowledge: { enabled: true as const, query } } : {}),
     };
     setMessages(nextMessages.slice(-MAX_MESSAGES));
     setDraft("");
@@ -396,13 +468,16 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
     setMessages([]);
     setDraft("");
     setErrorCode(null);
+    setKnowledgeNoMatch(false);
     setRetryRequest(null);
     setTimeline({ state: "idle" });
     resetCandidates();
   }
 
   const canSend = (selectedProvider === "auto" || !!selectedStatus?.configured) && !providersLoading && !providersError
-    && !isSending && !retryRequest && !!draft.trim() && draft.trim().length <= MAX_MESSAGE_CHARACTERS;
+    && !isSending && !retryRequest && !!draft.trim() && draft.trim().length <= MAX_MESSAGE_CHARACTERS
+    && (!knowledgeEnabled || (!!knowledgeQuery.trim() && knowledgeQuery.trim().length <= MAX_SEARCH_QUERY_CHARS
+      && /^[\p{L}\p{M}\p{N} ]+$/u.test(knowledgeQuery.trim())));
 
   return (
     <>
@@ -456,6 +531,22 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
             <p className="mt-1 text-xs leading-5 text-slate-500">默认关闭。开启后，每次成功回复会额外分析本轮消息；云端模型会多消耗一次云端使用额度。候选仅在你确认后保存。</p>
           </div>
 
+          <div className="border-b border-slate-100 px-5 py-4 sm:px-6">
+            <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
+              <input type="checkbox" checked={knowledgeEnabled} disabled={isSending || !!retryRequest}
+                onChange={(event) => { setKnowledgeEnabled(event.target.checked); setKnowledgeNoMatch(false); }} />
+              使用我的知识库
+            </label>
+            <p className="mt-1 text-xs leading-5 text-slate-500">仅检索当前账号已就绪的文档。Auto 可能将本次检索片段发给最终选中的云模型；Privacy 只使用本地 Ollama。</p>
+            {knowledgeEnabled && (
+              <label className="mt-3 block text-xs text-slate-600">检索关键词
+                <input type="text" value={knowledgeQuery} maxLength={MAX_SEARCH_QUERY_CHARS}
+                  disabled={isSending || !!retryRequest} onChange={(event) => setKnowledgeQuery(event.target.value)}
+                  className="mt-1 w-full rounded-lg border border-slate-200 p-2 text-sm" placeholder="输入关键词" />
+              </label>
+            )}
+          </div>
+
           <div
             className="flex min-h-[360px] max-h-[65vh] flex-col gap-5 overflow-y-auto p-5 sm:min-h-[440px] sm:p-6"
             aria-label="对话消息"
@@ -469,7 +560,7 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
                   输入问题后，消息会通过已登录的 AI Gateway 发送给当前选择的模型。
                 </p>
                 <p className="mt-3 text-xs leading-5 text-slate-400">
-                  可在服务端安全使用当前账号的 Personal Memory 作为回答上下文，不会自动读取知识库或执行工具。
+                  可在服务端安全使用当前账号的 Personal Memory；仅在主动开启知识库后检索文档，不执行工具。
                 </p>
               </div>
             ) : messages.map((message) => (
@@ -502,6 +593,7 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
                 </div>
               </div>
             )}
+            {knowledgeNoMatch && <p role="status" className="rounded-xl bg-amber-50 p-4 text-sm text-amber-800">没有找到相关知识库片段，请修改关键词。本次没有调用 AI 模型。</p>}
           </div>
 
           {(extractingCandidates || candidateError || candidates.length > 0) && (
@@ -578,7 +670,8 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
               <li>✓ 通过 AI Gateway 调用所选 Provider</li>
               <li>✓ 当前页面内存中的多轮对话</li>
               <li>✓ Memory Context 在服务端按账号隔离并限制注入数量</li>
-              <li>○ RAG 与工具执行尚未接入</li>
+              <li>✓ 可主动开启知识库关键词辅助回答，并显示实际来源</li>
+              <li>○ 语义 RAG 与工具执行尚未接入</li>
               <li>○ Local Connector 尚未实现</li>
             </ul>
           </section>

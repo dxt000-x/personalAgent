@@ -55,6 +55,48 @@ function request(path: string, method: string, body?: unknown, origin?: string) 
 beforeEach(() => { vi.resetAllMocks(); });
 
 describe("knowledge API security and upload lifecycle", () => {
+  it("does not expose project configuration in an authenticated list response or logs", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://abcdefghijklmnopqrst.supabase.co");
+    vi.stubEnv("KNOWLEDGE_DB_URL",
+      "postgresql://knowledge_writer_login.abcdefghijklmnopqrst:fixture-password-never-log@aws-0-test.pooler.supabase.com:6543/postgres");
+    try {
+      const repository = fakeRepository();
+      vi.mocked(requireKnowledgeContext).mockResolvedValue({ userId: userA, repository });
+      const response = await GET(request("/api/knowledge", "GET"));
+      expect(response.status).toBe(200);
+      expect(repository.list).toHaveBeenCalledWith(userA, 0);
+      const observed = JSON.stringify({
+        response: await response.json(),
+        logs: [...info.mock.calls, ...warn.mock.calls, ...error.mock.calls],
+      });
+      expect(observed).not.toMatch(/abcdefghijklmnopqrst|fixture-password-never-log|postgresql:\/\/|KNOWLEDGE_PROJECT_REFS/u);
+      expect(info).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+      info.mockRestore();
+      warn.mockRestore();
+      error.mockRestore();
+    }
+  });
+
+  it("logs only fixed failure metadata and keeps the response safe", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const repository = fakeRepository();
+      repository.create.mockRejectedValueOnce(new Error("password=secret-never-log"));
+      vi.mocked(requireKnowledgeContext).mockResolvedValue({ userId: userA, repository });
+      const response = await POST(request("/api/knowledge", "POST", { fileName: "notes.txt", size: 10 }));
+      expect(response.status).toBe(503);
+      expect(log).toHaveBeenCalledWith("KNOWLEDGE_API_FAIL", {
+        stage: "KNOWLEDGE_API_FAIL", error_class: "UNEXPECTED_ERROR",
+      });
+      expect(JSON.stringify(log.mock.calls)).not.toContain("secret-never-log");
+      expect(JSON.stringify(await response.json())).not.toContain("secret-never-log");
+    } finally { log.mockRestore(); }
+  });
   it("requires authentication for list, upload, processing, and delete", async () => {
     vi.mocked(requireKnowledgeContext).mockRejectedValue(new KnowledgeError("AUTH_REQUIRED"));
     const context = { params: Promise.resolve({ id: documentId }) };

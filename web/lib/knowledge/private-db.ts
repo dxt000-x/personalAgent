@@ -1,16 +1,57 @@
 import "server-only";
-import { Pool } from "pg";
+import { Pool, type PoolClient } from "pg";
 import { KnowledgeError } from "./errors";
 
 // Only the dedicated LOGIN role may be used here. A postgres or service_role
 // connection string must never silently acquire these privileges.
 let pool: Pool | undefined;
 
+const safeConnectionCodes = new Set([
+  "28P01", "28000", "08001", "08004", "08006", "53300",
+  "ENOTFOUND", "ECONNREFUSED", "ECONNRESET", "ETIMEDOUT",
+  "ERR_TLS_CERT_ALTNAME_INVALID", "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  "SELF_SIGNED_CERT_IN_CHAIN", "DEPTH_ZERO_SELF_SIGNED_CERT",
+]);
+
+function writerConnectionDiagnostics(error: unknown) {
+  // pg/Node error messages can contain connection details. Log only canonical
+  // descriptions and allowlisted codes, never the original Error object.
+  const message = error instanceof Error ? error.message : "";
+  const rawCode = error !== null && typeof error === "object" && "code" in error
+    ? error.code : undefined;
+  const errorCode = typeof rawCode === "string" && safeConnectionCodes.has(rawCode)
+    ? rawCode : "UNKNOWN";
+  const passwordAuthFailed = /password authentication failed/iu.test(message);
+  const tlsCertificateError = /(?:certificate|self.signed|unable to verify|tls|ssl)/iu.test(message) ||
+    errorCode.startsWith("ERR_TLS_") || errorCode.includes("CERT") ||
+    errorCode === "UNABLE_TO_VERIFY_LEAF_SIGNATURE";
+  const errorMessage = passwordAuthFailed ? "password authentication failed"
+    : tlsCertificateError ? "TLS or certificate validation failed"
+      : errorCode === "ENOTFOUND" ? "DNS lookup failed"
+        : errorCode === "ECONNREFUSED" ? "connection refused"
+          : errorCode === "ECONNRESET" ? "connection reset"
+            : errorCode === "ETIMEDOUT" ? "connection timed out" : "connection failed";
+  return {
+    error_name: error instanceof Error && ["Error", "TypeError", "DatabaseError", "AggregateError"].includes(error.name)
+      ? error.name : "UnknownError",
+    error_message: errorMessage,
+    error_code: errorCode,
+    password_authentication_failed: passwordAuthFailed,
+    tls_certificate_error: tlsCertificateError,
+    hostname: "***.pooler.supabase.com",
+    port: 6543,
+    database_name: "postgres",
+  };
+}
+
 function knowledgePool(): Pool {
   if (pool) return pool;
   const raw = process.env.KNOWLEDGE_DB_URL;
   const certificate = process.env.KNOWLEDGE_DB_CA_CERT_BASE64;
-  if (!raw || !certificate) throw new KnowledgeError("KNOWLEDGE_UNAVAILABLE");
+  if (!raw || !certificate) {
+    console.error("WRITER_CONFIG_FAIL");
+    throw new KnowledgeError("KNOWLEDGE_UNAVAILABLE");
+  }
   try {
     const url = new URL(raw);
     const username = decodeURIComponent(url.username);
@@ -34,6 +75,7 @@ function knowledgePool(): Pool {
     pool = nextPool;
     return pool;
   } catch {
+    console.error("WRITER_CONFIG_FAIL");
     throw new KnowledgeError("KNOWLEDGE_UNAVAILABLE");
   }
 }
@@ -65,7 +107,26 @@ export async function callKnowledgeTransition<T extends boolean | number>(
 }
 
 export async function assertKnowledgeWriterReady(): Promise<void> {
-  if (!await callKnowledgeTransition<boolean>("ready", [])) {
+  let client: PoolClient;
+  try {
+    client = await knowledgePool().connect();
+  } catch (error) {
+    if (!(error instanceof KnowledgeError)) {
+      console.error("WRITER_CONNECT_FAIL", writerConnectionDiagnostics(error));
+    }
     throw new KnowledgeError("KNOWLEDGE_UNAVAILABLE");
+  }
+  try {
+    const result = await client.query(sql.ready);
+    if (result.rows[0]?.value !== true) {
+      console.error("WRITER_PRIVILEGE_FAIL");
+      throw new KnowledgeError("KNOWLEDGE_UNAVAILABLE");
+    }
+    console.info("WRITER_READY_OK");
+  } catch (error) {
+    if (!(error instanceof KnowledgeError)) console.error("WRITER_PRIVILEGE_FAIL");
+    throw new KnowledgeError("KNOWLEDGE_UNAVAILABLE");
+  } finally {
+    client.release();
   }
 }

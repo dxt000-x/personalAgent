@@ -1,4 +1,5 @@
 import type { MemoryUsage, ProviderId } from "@/lib/ai/types";
+import type { KnowledgeSearchResult } from "@/lib/knowledge/search-types";
 
 export type AgentChatMessage = {
   id: string;
@@ -7,6 +8,7 @@ export type AgentChatMessage = {
   provider?: ProviderId;
   model?: string;
   memory?: MemoryUsage;
+  sources?: KnowledgeSearchResult[];
 };
 
 const providerNames: Record<ProviderId, string> = {
@@ -51,6 +53,19 @@ export function AgentMessage({ message }: { message: AgentChatMessage }) {
           )}
         </div>
         <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-7 text-slate-700">{message.content}</p>
+        {message.sources && message.sources.length > 0 && (
+          <section className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3" aria-label="知识库来源">
+            <p className="text-xs font-semibold text-slate-700">本次使用的知识库来源</p>
+            <ul className="mt-2 space-y-2">
+              {message.sources.map((source) => (
+                <li key={`${source.documentId}:${source.chunkIndex}`} className="text-xs text-slate-600">
+                  <p className="font-medium break-all">{source.fileName} · 片段 {source.chunkIndex + 1}</p>
+                  <p className="mt-1 whitespace-pre-wrap break-words">{source.snippet}</p>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
       </div>
     </div>
   );

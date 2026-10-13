@@ -39,6 +39,7 @@ export type AIChatResult = {
     mode: "auto";
     reason: RoutingReason;
   };
+  knowledge?: { status: "used" | "no_match"; sources: import("@/lib/knowledge/search-types").KnowledgeSearchResult[] };
 };
 
 export type ProviderStatus = {

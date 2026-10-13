@@ -64,6 +64,34 @@ beforeEach(() => {
 });
 
 describe("opt-in memory candidate workflow", () => {
+  it("does not start candidate extraction when an old chat resolves after an account switch", async () => {
+    let resolveChat!: (response: Response) => void;
+    chatResponse = new Promise((resolve) => { resolveChat = resolve; });
+    const view = render(<AgentWorkspace sessionKey="user-a" />);
+    const input = screen.getByRole("textbox", { name: "发送消息" }) as HTMLTextAreaElement;
+    await waitFor(() => expect(input.disabled).toBe(false));
+    fireEvent.click(screen.getByRole("checkbox", { name: "智能记忆建议" }));
+    await sendMessage(input, "账号 A 的问题");
+    view.rerender(<AgentWorkspace sessionKey="user-b" />);
+    expect(chatCalls()[0][1]?.signal?.aborted).toBe(true);
+    await act(async () => { resolveChat(fakeResponse({ text: "账号 A 的回答", provider: "ollama", model: "fake-ollama" })); });
+    expect(candidateCalls()).toHaveLength(0);
+    expect(screen.queryByText("账号 A 的回答")).toBeNull();
+  });
+
+  it("does not start follow-up network requests after an in-flight chat component unmounts", async () => {
+    let resolveChat!: (response: Response) => void;
+    chatResponse = new Promise((resolve) => { resolveChat = resolve; });
+    const view = render(<AgentWorkspace sessionKey="user-a" />);
+    const input = screen.getByRole("textbox", { name: "发送消息" }) as HTMLTextAreaElement;
+    await waitFor(() => expect(input.disabled).toBe(false));
+    fireEvent.click(screen.getByRole("checkbox", { name: "智能记忆建议" }));
+    await sendMessage(input, "待完成的问题");
+    view.unmount();
+    expect(chatCalls()[0][1]?.signal?.aborted).toBe(true);
+    await act(async () => { resolveChat(fakeResponse({ text: "迟到的回答", provider: "ollama", model: "fake-ollama" })); });
+    expect(candidateCalls()).toHaveLength(0);
+  });
   it("invalidates the old extraction immediately when a new chat starts", async () => {
     let resolveOld!: (response: Response) => void;
     candidateResponse = new Promise((resolve) => { resolveOld = resolve; });
@@ -303,6 +331,73 @@ afterEach(() => {
 });
 
 describe("Agent chat composer", () => {
+  const source = { documentId: "11111111-1111-4111-8111-111111111111", fileName: "guide.txt",
+    chunkIndex: 0, snippet: "TCP 安全摘录" };
+
+  it("snapshots the optional knowledge keyword and renders server sources as plain text", async () => {
+    chatResponse = Promise.resolve(fakeResponse({ text: "fake reply", provider: "ollama", model: "fake-ollama",
+      knowledge: { status: "used", sources: [source] } }));
+    const input = await setup();
+    fireEvent.click(screen.getByRole("checkbox", { name: "使用我的知识库" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "检索关键词" }), { target: { value: " TCP " } });
+    await sendMessage(input, "解释 TCP");
+    expect(JSON.parse(String(chatCalls()[0][1]?.body)).knowledge).toEqual({ enabled: true, query: "TCP" });
+    expect(await screen.findByRole("region", { name: "知识库来源" })).toBeTruthy();
+    expect(screen.getByText(source.snippet)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "清空对话" }));
+    expect(screen.queryByRole("region", { name: "知识库来源" })).toBeNull();
+  });
+
+  it("does not send invalid knowledge keywords", async () => {
+    const input = await setup();
+    fireEvent.click(screen.getByRole("checkbox", { name: "使用我的知识库" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "检索关键词" }), { target: { value: "%" } });
+    fireEvent.change(input, { target: { value: "hello" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(chatCalls()).toHaveLength(0);
+  });
+
+  it("shows no-match separately and does not invent a reply or source", async () => {
+    chatResponse = Promise.resolve(fakeResponse({ knowledge: { status: "no_match", sources: [] },
+      memory: { status: "none", used: false, count: 0 } }));
+    const input = await setup();
+    fireEvent.click(screen.getByRole("checkbox", { name: "使用我的知识库" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "检索关键词" }), { target: { value: "TCP" } });
+    await sendMessage(input, "hello");
+    expect(await screen.findByText(/没有找到相关知识库片段/)).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "知识库来源" })).toBeNull();
+    expect(candidateCalls()).toHaveLength(0);
+  });
+
+  it("drops old sources when the account session changes", async () => {
+    chatResponse = Promise.resolve(fakeResponse({ text: "fake reply", provider: "ollama", model: "fake-ollama",
+      knowledge: { status: "used", sources: [source] } }));
+    const view = render(<AgentWorkspace sessionKey="user-a" />);
+    const input = screen.getByRole("textbox", { name: "发送消息" }) as HTMLTextAreaElement;
+    await waitFor(() => expect(input.disabled).toBe(false));
+    fireEvent.click(screen.getByRole("checkbox", { name: "使用我的知识库" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "检索关键词" }), { target: { value: "TCP" } });
+    await sendMessage(input, "hello");
+    expect(await screen.findByRole("region", { name: "知识库来源" })).toBeTruthy();
+    view.rerender(<AgentWorkspace sessionKey="user-b" />);
+    expect(screen.queryByRole("region", { name: "知识库来源" })).toBeNull();
+    expect((screen.getByRole("checkbox", { name: "使用我的知识库" }) as HTMLInputElement).checked).toBe(false);
+  });
+
+  it("retries with the original knowledge query snapshot", async () => {
+    chatResponse = Promise.resolve({ ok: false, json: async () => ({ error: { code: "KNOWLEDGE_UNAVAILABLE" } }) } as Response);
+    const input = await setup();
+    fireEvent.click(screen.getByRole("checkbox", { name: "使用我的知识库" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "检索关键词" }), { target: { value: "TCP" } });
+    await sendMessage(input, "hello");
+    expect(await screen.findByText(/知识库检索暂时不可用/)).toBeTruthy();
+    chatResponse = Promise.resolve(fakeResponse({ text: "fake reply", provider: "ollama", model: "fake-ollama",
+      knowledge: { status: "used", sources: [source] } }));
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    await waitFor(() => expect(chatCalls()).toHaveLength(2));
+    expect(JSON.parse(String(chatCalls()[1][1]?.body)).knowledge).toEqual({ enabled: true, query: "TCP" });
+  });
+
   it("sends once on Enter through the existing chat request path and prevents a newline", async () => {
     const input = await setup();
     fireEvent.change(input, { target: { value: "你好" } });

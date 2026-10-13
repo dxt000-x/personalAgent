@@ -5,12 +5,16 @@ import { getProvider, getProviderStatuses } from "@/lib/ai/provider-registry";
 import { reserveCloudAiQuota } from "@/lib/ai/quota";
 import { retrievePersonalMemoryContext } from "@/lib/memories/context";
 import { createClient } from "@/lib/supabase/server";
+import { searchKnowledgeChunks } from "@/lib/knowledge/search";
 import type { ProviderId, ProviderStatus } from "@/lib/ai/types";
 
 vi.mock("@/lib/ai/provider-registry", () => ({ getProvider: vi.fn(), getProviderStatuses: vi.fn() }));
 vi.mock("@/lib/ai/quota", () => ({ reserveCloudAiQuota: vi.fn() }));
 vi.mock("@/lib/memories/context", () => ({ retrievePersonalMemoryContext: vi.fn() }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
+vi.mock("@/lib/knowledge/search", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/knowledge/search")>()), searchKnowledgeChunks: vi.fn(),
+}));
 
 const ids: ProviderId[] = ["ollama", "openrouter", "openai", "deepseek", "gemini"];
 const cloudIds: ProviderId[] = ["openrouter", "openai", "deepseek", "gemini"];
@@ -56,11 +60,113 @@ beforeEach(() => {
   vi.mocked(getProviderStatuses).mockResolvedValue(statuses());
   vi.mocked(reserveCloudAiQuota).mockResolvedValue({ remainingCount: 29 });
   vi.mocked(retrievePersonalMemoryContext).mockResolvedValue({ metadata: { status: "none", used: false, count: 0 } });
+  vi.mocked(searchKnowledgeChunks).mockResolvedValue([]);
   for (const id of ids) calls[id].mockResolvedValue({ text: "fake reply", provider: id, model: `fake-${id}` });
   vi.mocked(getProvider).mockImplementation((id) => ({ generate: calls[id] }));
 });
 
 describe("POST /api/ai/chat with fake providers", () => {
+  const source = { documentId: "11111111-1111-4111-8111-111111111111", fileName: "notes.txt",
+    chunkIndex: 0, snippet: "TCP 是传输协议" };
+  const knowledgeRequest = (knowledge: unknown, provider: ProviderId | "auto" = "ollama",
+    routingPreference: "auto" | "privacy" = "auto") => new Request("http://localhost:3000/api/ai/chat", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ provider, routingPreference, messages: [{ role: "user", content: "请解释 TCP" }], knowledge }),
+  });
+
+  it("does not query knowledge when the opt-in field is absent", async () => {
+    await responseFor();
+    expect(searchKnowledgeChunks).not.toHaveBeenCalled();
+  });
+
+  it("uses only server-retrieved ready snippets and reports the injected sources", async () => {
+    vi.mocked(searchKnowledgeChunks).mockResolvedValue([source]);
+    const response = await POST(knowledgeRequest({ enabled: true, query: "TCP" }));
+    const body = await response.json();
+    expect(response.status).toBe(200);
+    expect(searchKnowledgeChunks).toHaveBeenCalledWith(expect.anything(), "fake-user", "TCP", undefined, expect.any(AbortSignal));
+    expect(calls.ollama.mock.calls[0][2]).toContain("不可信引用资料");
+    expect(calls.ollama.mock.calls[0][2]).toContain(source.snippet);
+    expect(body.knowledge).toEqual({ status: "used", sources: [source] });
+    expect(reserveCloudAiQuota).not.toHaveBeenCalled();
+  });
+
+  it("returns only the exact sources that fit into the provider context", async () => {
+    const excluded = { ...source, documentId: "22222222-2222-4222-8222-222222222222", snippet: "第二条未注入的资料" };
+    vi.mocked(searchKnowledgeChunks).mockResolvedValue([source, excluded]);
+    vi.mocked(retrievePersonalMemoryContext).mockResolvedValue({
+      systemInstruction: "m".repeat(15_780), metadata: { status: "used", used: true, count: 1 },
+    });
+    const response = await POST(knowledgeRequest({ enabled: true, query: "TCP" }));
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.knowledge.sources).toEqual([source]);
+    const injected = String(calls.ollama.mock.calls[0][2]);
+    expect(injected).toContain(source.snippet);
+    expect(injected).not.toContain(excluded.snippet);
+  });
+
+  it("returns no_match before model invocation or cloud quota reservation", async () => {
+    vi.mocked(retrievePersonalMemoryContext).mockResolvedValue({
+      systemInstruction: "private memory", metadata: { status: "used", used: true, count: 1 },
+    });
+    const response = await POST(knowledgeRequest({ enabled: true, query: "TCP" }, "openrouter"));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      knowledge: { status: "no_match", sources: [] }, memory: { status: "omitted", used: false, count: 0 },
+    });
+    expect(retrievePersonalMemoryContext).not.toHaveBeenCalled();
+    expect(getProvider).not.toHaveBeenCalled();
+    expect(reserveCloudAiQuota).not.toHaveBeenCalled();
+  });
+
+  it.each([{}, { enabled: true, query: "%" }, { enabled: true, query: "TCP", userId: "other" },
+    { enabled: true, query: "TCP", sources: [source] }])("rejects untrusted knowledge input %#", async (knowledge) => {
+    const response = await POST(knowledgeRequest(knowledge));
+    expect(response.status).toBe(400);
+    expect(searchKnowledgeChunks).not.toHaveBeenCalled();
+    expect(getProvider).not.toHaveBeenCalled();
+  });
+
+  it("fails closed with a fixed error when knowledge retrieval fails", async () => {
+    vi.mocked(searchKnowledgeChunks).mockRejectedValue(new Error("private SQL and content"));
+    const response = await POST(knowledgeRequest({ enabled: true, query: "TCP" }));
+    const body = await response.json();
+    expect(response.status).toBe(503);
+    expect(body.error.code).toBe("KNOWLEDGE_UNAVAILABLE");
+    expect(JSON.stringify(body)).not.toContain("private SQL");
+    expect(getProvider).not.toHaveBeenCalled();
+  });
+
+  it("keeps Privacy local with knowledge and never reserves cloud quota", async () => {
+    vi.mocked(searchKnowledgeChunks).mockResolvedValue([source]);
+    const response = await POST(knowledgeRequest({ enabled: true, query: "TCP" }, "auto", "privacy"));
+    expect(response.status).toBe(200);
+    expect(calls.ollama).toHaveBeenCalledTimes(1);
+    expectNoCloudCalls();
+    expect(reserveCloudAiQuota).not.toHaveBeenCalled();
+  });
+
+  it("preserves Auto fallback and a single cloud reservation after knowledge retrieval", async () => {
+    vi.mocked(searchKnowledgeChunks).mockResolvedValue([source]);
+    vi.mocked(getProviderStatuses).mockResolvedValue(statuses(false));
+    calls.openrouter.mockRejectedValue(new AIGatewayError("PROVIDER_ERROR"));
+    const response = await POST(knowledgeRequest({ enabled: true, query: "TCP" }, "auto"));
+    expect(response.status).toBe(200);
+    expect((await response.json()).knowledge.sources).toEqual([source]);
+    expect(calls.openai).toHaveBeenCalledTimes(1);
+    expect(reserveCloudAiQuota).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fallback after an upstream 401 with knowledge enabled", async () => {
+    vi.mocked(searchKnowledgeChunks).mockResolvedValue([source]);
+    vi.mocked(getProviderStatuses).mockResolvedValue(statuses(false));
+    calls.openrouter.mockRejectedValue({ status: 401, message: "private token" });
+    const response = await POST(knowledgeRequest({ enabled: true, query: "TCP" }, "auto"));
+    expect((await response.json()).error.code).toBe("PROVIDER_AUTH_FAILED");
+    expect(calls.openai).not.toHaveBeenCalled();
+    expect(reserveCloudAiQuota).toHaveBeenCalledTimes(1);
+  });
   it("rejects unauthenticated requests before reading Memory or routing", async () => {
     vi.mocked(createClient).mockResolvedValue(null);
     const { response, body } = await responseFor();

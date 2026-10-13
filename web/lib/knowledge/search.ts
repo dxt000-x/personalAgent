@@ -38,7 +38,7 @@ function snippetFor(content: string, query: string): string {
 }
 
 export async function searchKnowledgeChunks(client: Client, userId: string, query: string,
-  documentId?: string): Promise<KnowledgeSearchResult[]> {
+  documentId?: string, signal?: AbortSignal): Promise<KnowledgeSearchResult[]> {
   try {
     let builder = client.from("knowledge_chunks")
       .select("document_id,chunk_index,content,knowledge_documents!inner(file_name,status,user_id)")
@@ -51,7 +51,7 @@ export async function searchKnowledgeChunks(client: Client, userId: string, quer
       .order("document_id", { ascending: true })
       .order("chunk_index", { ascending: true })
       .limit(MAX_SEARCH_RESULTS)
-      .abortSignal(AbortSignal.timeout(SEARCH_TIMEOUT_MS));
+      .abortSignal(signal ? AbortSignal.any([signal, AbortSignal.timeout(SEARCH_TIMEOUT_MS)]) : AbortSignal.timeout(SEARCH_TIMEOUT_MS));
     if (error || !Array.isArray(data) || data.length > MAX_SEARCH_RESULTS) throw new KnowledgeError("KNOWLEDGE_UNAVAILABLE");
     let total = 0;
     return data.map((value) => {
