@@ -2,6 +2,7 @@ export type MemoryApiErrorCode =
   | "AUTH_REQUIRED"
   | "INVALID_REQUEST"
   | "NOT_FOUND"
+  | "MEMORY_LIMIT_REACHED"
   | "MEMORY_ACCESS_DENIED"
   | "MEMORY_SERVICE_ERROR";
 
@@ -9,6 +10,7 @@ const errorDetails: Record<MemoryApiErrorCode, { status: number; message: string
   AUTH_REQUIRED: { status: 401, message: "请先登录。" },
   INVALID_REQUEST: { status: 400, message: "记忆内容或请求格式不符合要求。" },
   NOT_FOUND: { status: 404, message: "未找到这条个人记忆。" },
+  MEMORY_LIMIT_REACHED: { status: 409, message: "个人记忆已达到 200 条上限，请先删除不再需要的记忆。" },
   MEMORY_ACCESS_DENIED: { status: 403, message: "当前会话暂无个人记忆数据权限。" },
   MEMORY_SERVICE_ERROR: { status: 503, message: "个人记忆服务暂时不可用。" },
 };
