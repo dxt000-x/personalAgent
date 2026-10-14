@@ -3,6 +3,8 @@ import { MAX_MESSAGE_CHARACTERS } from "./limits";
 import { validateChatRequest } from "./request";
 import type { ProviderSelection, RoutingPreference } from "./types";
 import { memoryCategories, type MemoryCategory, type MemoryImportance } from "@/lib/memories/types";
+import { normalizeMemoryContent } from "@/lib/memories/normalize";
+export { normalizeMemoryContent } from "@/lib/memories/normalize";
 
 export type MemoryCandidate = {
   content: string;
@@ -41,10 +43,6 @@ export function validateCandidateRequest(value: unknown): {
 
 export function containsSensitiveMaterial(text: string): boolean {
   return sensitivePattern.test(text);
-}
-
-export function normalizeMemoryContent(text: string): string {
-  return text.normalize("NFKC").toLocaleLowerCase().replace(/[\s\p{P}\p{S}]+/gu, "");
 }
 
 /** Strict model-output boundary. A malformed item invalidates the whole response. */

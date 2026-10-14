@@ -104,6 +104,7 @@ describe("opt-in memory candidate workflow", () => {
     fireEvent.change(input, { target: { value: "第二轮消息" } });
     fireEvent.keyDown(input, { key: "Enter" });
     await waitFor(() => expect(chatCalls()).toHaveLength(2));
+    expect(candidateCalls()[0][1]?.signal?.aborted).toBe(true);
     expect(screen.queryByRole("region", { name: "智能记忆候选" })).toBeNull();
 
     await act(async () => { resolveOld(fakeResponse({ candidates: [{ ...candidate, content: "旧候选" }] })); });
@@ -143,6 +144,7 @@ describe("opt-in memory candidate workflow", () => {
     await sendMessage(input);
     await waitFor(() => expect(candidateCalls()).toHaveLength(1));
     fireEvent.click(screen.getByRole("checkbox", { name: "智能记忆建议" }));
+    expect(candidateCalls()[0][1]?.signal?.aborted).toBe(true);
     await act(async () => { resolveCandidate(fakeResponse({ candidates: [candidate] })); });
     expect(screen.queryByRole("region", { name: "智能记忆候选" })).toBeNull();
     expect(memoryWrites()).toHaveLength(0);
@@ -263,8 +265,41 @@ describe("opt-in memory candidate workflow", () => {
     await sendMessage(input);
     expect(await within(await screen.findByRole("region", { name: "智能记忆候选" })).findByText(candidate.content)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "确认保存" }));
-    expect(await screen.findByText("已保存到 Personal Memory")).toBeTruthy();
+    expect(await screen.findByText("已有相同记忆，未重复保存。")).toBeTruthy();
     expect(memoryWrites()).toHaveLength(0);
+  });
+
+  it("asks before saving a likely near duplicate and respects cancellation", async () => {
+    memoryGetResponse = Promise.resolve(fakeResponse({ memories: [{ content: "我长期使用 TypeScript 开发项目" }] }));
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const input = await enableSuggestions();
+    await sendMessage(input);
+    fireEvent.click(await screen.findByRole("button", { name: "确认保存" }));
+    await waitFor(() => expect(confirm).toHaveBeenCalledOnce());
+    expect(memoryWrites()).toHaveLength(0);
+    expect(screen.getByRole("button", { name: "确认保存" })).toBeTruthy();
+    confirm.mockRestore();
+  });
+
+  it("saves a likely near duplicate only after explicit confirmation", async () => {
+    memoryGetResponse = Promise.resolve(fakeResponse({ memories: [{ content: "我长期使用 TypeScript 开发项目" }] }));
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const input = await enableSuggestions();
+    await sendMessage(input);
+    fireEvent.click(await screen.findByRole("button", { name: "确认保存" }));
+    expect(await screen.findByText("已保存到 Personal Memory")).toBeTruthy();
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(memoryWrites()).toHaveLength(1);
+    confirm.mockRestore();
+  });
+
+  it("treats a server duplicate race as already present", async () => {
+    memoryPostResponse = Promise.resolve({ ok: false, status: 409, json: async () => ({ error: { code: "MEMORY_DUPLICATE" } }) } as Response);
+    const input = await enableSuggestions();
+    await sendMessage(input);
+    fireEvent.click(await screen.findByRole("button", { name: "确认保存" }));
+    expect(await screen.findByText("已有相同记忆，未重复保存。")).toBeTruthy();
+    expect(memoryWrites()).toHaveLength(1);
   });
 
   it("does not block a successful reply when extraction times out or rerenders", async () => {

@@ -13,10 +13,11 @@ import {
   MAX_MESSAGES,
 } from "@/lib/ai/limits";
 import type { MemoryCandidate } from "@/lib/ai/memory-candidates";
+import { isPossibleMemoryDuplicate, normalizeMemoryContent } from "@/lib/memories/normalize";
 import { MAX_SEARCH_QUERY_CHARS, MAX_SEARCH_RESULTS, MAX_SEARCH_SNIPPET_CHARS, MAX_SEARCH_TOTAL_CHARS,
   type KnowledgeSearchResult } from "@/lib/knowledge/search-types";
 
-type CandidateEntry = MemoryCandidate & { id: string; status: "pending" | "saving" | "saved" | "error" };
+type CandidateEntry = MemoryCandidate & { id: string; status: "pending" | "saving" | "saved" | "duplicate" | "error" };
 
 type GatewayErrorCode =
   | "AUTH_REQUIRED"
@@ -189,6 +190,7 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
   const [extractingCandidates, setExtractingCandidates] = useState(false);
   const [candidateError, setCandidateError] = useState(false);
   const candidateGeneration = useRef(0);
+  const candidateController = useRef<AbortController | null>(null);
   const accountGeneration = useRef(0);
   const candidateSaving = useRef(new Set<string>());
   const chatGeneration = useRef(0);
@@ -231,6 +233,8 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
       chatController.current?.abort();
       chatController.current = null;
       candidateGeneration.current += 1;
+      candidateController.current?.abort();
+      candidateController.current = null;
       accountGeneration.current += 1;
     };
   }, []);
@@ -240,12 +244,16 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
     const message = request.messages.at(-1);
     if (!message || message.role !== "user") return;
     const generation = ++candidateGeneration.current;
+    candidateController.current?.abort();
+    const controller = new AbortController();
+    candidateController.current = controller;
     setCandidates([]);
     setCandidateError(false);
     setExtractingCandidates(true);
     try {
       const response = await fetch("/api/ai/memory-candidates", {
         method: "POST",
+        signal: controller.signal,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           provider: request.provider,
@@ -257,7 +265,7 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
       if (!response.ok || typeof body !== "object" || body === null || !Array.isArray((body as { candidates?: unknown }).candidates)) {
         throw new Error("candidate extraction failed");
       }
-      if (generation !== candidateGeneration.current) return;
+      if (!mounted.current || controller.signal.aborted || generation !== candidateGeneration.current) return;
       const rows = (body as { candidates: unknown[] }).candidates;
       const valid = rows.slice(0, 3).filter((row): row is MemoryCandidate => {
         if (typeof row !== "object" || row === null) return false;
@@ -269,14 +277,15 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
       });
       setCandidates(valid.map((candidate) => ({ ...candidate, id: crypto.randomUUID(), status: "pending" })));
     } catch {
-      if (generation === candidateGeneration.current) setCandidateError(true);
+      if (mounted.current && !controller.signal.aborted && generation === candidateGeneration.current) setCandidateError(true);
     } finally {
-      if (generation === candidateGeneration.current) setExtractingCandidates(false);
+      if (candidateController.current === controller) candidateController.current = null;
+      if (mounted.current && generation === candidateGeneration.current) setExtractingCandidates(false);
     }
   }
 
   async function saveCandidate(candidate: CandidateEntry) {
-    if (candidate.status === "saved" || candidateSaving.current.has(candidate.id)) return;
+    if (candidate.status === "saved" || candidate.status === "duplicate" || candidateSaving.current.has(candidate.id)) return;
     candidateSaving.current.add(candidate.id);
     // A new conversation invalidates suggestions, but must not cancel a save the user confirmed.
     // Only leaving this account/session prevents a not-yet-started Memory POST.
@@ -290,19 +299,35 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
       const existing = typeof existingBody === "object" && existingBody !== null
         ? (existingBody as { memories?: unknown }).memories : undefined;
       if (!Array.isArray(existing)) throw new Error("memory lookup failed");
-      const normalize = (value: string) => value.normalize("NFKC").toLocaleLowerCase().replace(/[\s\p{P}\p{S}]+/gu, "");
-      const duplicate = existing.some((row) => typeof row === "object" && row !== null
-        && typeof (row as { content?: unknown }).content === "string"
-        && normalize((row as { content: string }).content) === normalize(candidate.content));
+      const contents = existing.flatMap((row) => typeof row === "object" && row !== null
+        && typeof (row as { content?: unknown }).content === "string" ? [(row as { content: string }).content] : []);
+      const duplicate = contents.some((content) => normalizeMemoryContent(content) === normalizeMemoryContent(candidate.content));
       if (generation !== accountGeneration.current) return;
-      if (!duplicate) {
-        const response = await fetch("/api/memories", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ content: candidate.content, category: candidate.category, importance: candidate.importance }),
-        });
-        if (!response.ok) throw new Error("memory save failed");
+      if (duplicate) {
+        setCandidates((current) => current.map((entry) => entry.id === candidate.id ? { ...entry, status: "duplicate" } : entry));
+        return;
       }
+      if (contents.some((content) => isPossibleMemoryDuplicate(content, candidate.content))
+        && !window.confirm("可能已有相近记忆，仍要保存这条候选吗？")) {
+        setCandidates((current) => current.map((entry) => entry.id === candidate.id ? { ...entry, status: "pending" } : entry));
+        return;
+      }
+      if (generation !== accountGeneration.current) return;
+      const response = await fetch("/api/memories", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: candidate.content, category: candidate.category, importance: candidate.importance }),
+      });
+      if (response.status === 409) {
+        const body: unknown = await response.json();
+        if (typeof body === "object" && body !== null && "error" in body
+          && typeof body.error === "object" && body.error !== null && "code" in body.error
+          && body.error.code === "MEMORY_DUPLICATE") {
+          if (generation === accountGeneration.current) setCandidates((current) => current.map((entry) => entry.id === candidate.id ? { ...entry, status: "duplicate" } : entry));
+          return;
+        }
+      }
+      if (!response.ok) throw new Error("memory save failed");
       if (generation !== accountGeneration.current) return;
       setCandidates((current) => current.map((entry) => entry.id === candidate.id ? { ...entry, status: "saved" } : entry));
     } catch {
@@ -316,6 +341,8 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
 
   function resetCandidates() {
     candidateGeneration.current += 1;
+    candidateController.current?.abort();
+    candidateController.current = null;
     setCandidates([]);
     setExtractingCandidates(false);
     setCandidateError(false);
@@ -610,7 +637,7 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
                     <p className="text-sm text-slate-800">{candidate.content}</p>
                     <p className="mt-1 text-xs text-slate-500">{candidate.reason}</p>
                     <div className="mt-3 flex gap-2">
-                      {candidate.status === "saved" ? <span className="text-xs text-teal-700">已保存到 Personal Memory</span> : (
+                      {candidate.status === "saved" ? <span className="text-xs text-teal-700">已保存到 Personal Memory</span> : candidate.status === "duplicate" ? <span className="text-xs text-amber-700">已有相同记忆，未重复保存。</span> : (
                         <>
                           <button type="button" className="button-primary" disabled={candidate.status === "saving"} onClick={() => void saveCandidate(candidate)}>
                             {candidate.status === "saving" ? "保存中…" : candidate.status === "error" ? "重试保存" : "确认保存"}

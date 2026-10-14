@@ -1,6 +1,7 @@
 import { MemoryApiError, memoryDatabaseError, memoryErrorResponse } from "@/lib/memories/errors";
 import { memorySelect, privateJson, requireMemoryContext, assertSameOrigin } from "@/lib/memories/server";
 import { readMemoryJson, validateCreateMemory } from "@/lib/memories/validation";
+import { normalizeMemoryContent } from "@/lib/memories/normalize";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -36,6 +37,17 @@ export async function POST(request: Request): Promise<Response> {
       throw new MemoryApiError("MEMORY_SERVICE_ERROR");
     }
     if (count >= maxMemoriesPerUser) throw new MemoryApiError("MEMORY_LIMIT_REACHED");
+    const { data: existing, error: lookupError } = await supabase
+      .from("memories")
+      .select("content")
+      .eq("user_id", userId)
+      .limit(maxMemoriesPerUser);
+    if (lookupError) throw memoryDatabaseError(lookupError);
+    if (!Array.isArray(existing)) throw new MemoryApiError("MEMORY_SERVICE_ERROR");
+    const normalized = normalizeMemoryContent(input.content);
+    if (existing.some((row) => typeof row.content === "string" && normalizeMemoryContent(row.content) === normalized)) {
+      throw new MemoryApiError("MEMORY_DUPLICATE");
+    }
     const { data, error } = await supabase
       .from("memories")
       .insert({ user_id: userId, ...input })

@@ -12,10 +12,12 @@ vi.mock("@/lib/memories/server", () => ({
 
 const input = { content: "我长期使用 TypeScript", category: "preference", importance: 3 };
 const countEq = vi.fn();
+const duplicateEq = vi.fn();
+const duplicateLimit = vi.fn();
 const insert = vi.fn();
 const single = vi.fn();
 const selectInserted = vi.fn().mockReturnValue({ single });
-const select = vi.fn().mockReturnValue({ eq: countEq });
+const select = vi.fn();
 const from = vi.fn().mockReturnValue({ select, insert });
 
 function request(body: unknown = input): Request {
@@ -36,10 +38,12 @@ beforeEach(() => {
   vi.clearAllMocks();
   signedInAs("user-a");
   countEq.mockResolvedValue({ count: 199, error: null });
+  duplicateEq.mockReturnValue({ limit: duplicateLimit });
+  duplicateLimit.mockResolvedValue({ data: [], error: null });
   selectInserted.mockReturnValue({ single });
   single.mockResolvedValue({ data: { id: "memory-a", user_id: "user-a", ...input, source: "manual" }, error: null });
   insert.mockReturnValue({ select: selectInserted });
-  select.mockReturnValue({ eq: countEq });
+  select.mockImplementation((_fields: string, options?: { head?: boolean }) => ({ eq: options?.head ? countEq : duplicateEq }));
   from.mockReturnValue({ select, insert });
 });
 
@@ -50,6 +54,7 @@ describe("POST /api/memories capacity", () => {
     expect((await response.json()).memory.source).toBe("manual");
     expect(select).toHaveBeenCalledWith("id", { count: "exact", head: true });
     expect(countEq).toHaveBeenCalledWith("user_id", "user-a");
+    expect(duplicateEq).toHaveBeenCalledWith("user_id", "user-a");
     expect(insert).toHaveBeenCalledWith({ user_id: "user-a", ...input });
   });
 
@@ -58,6 +63,29 @@ describe("POST /api/memories capacity", () => {
     const response = await POST(request());
     expect(response.status).toBe(409);
     expect((await response.json()).error.code).toBe("MEMORY_LIMIT_REACHED");
+    expect(insert).not.toHaveBeenCalled();
+  });
+
+  it("rejects the current user's exact or normalized duplicate without inserting", async () => {
+    duplicateLimit.mockResolvedValue({ data: [{ content: "我 长期使用 TypeScript。" }], error: null });
+    const response = await POST(request());
+    expect(response.status).toBe(409);
+    expect((await response.json()).error.code).toBe("MEMORY_DUPLICATE");
+    expect(insert).not.toHaveBeenCalled();
+  });
+
+  it("does not turn a similar but distinct memory into a server rejection", async () => {
+    duplicateLimit.mockResolvedValue({ data: [{ content: "我长期使用 TypeScript 开发项目" }], error: null });
+    const response = await POST(request());
+    expect(response.status).toBe(201);
+    expect(insert).toHaveBeenCalledOnce();
+  });
+
+  it("fails closed if duplicate lookup fails", async () => {
+    duplicateLimit.mockResolvedValue({ data: null, error: { code: "XX000" } });
+    const response = await POST(request());
+    expect(response.status).toBe(503);
+    expect((await response.json()).error.code).toBe("MEMORY_SERVICE_ERROR");
     expect(insert).not.toHaveBeenCalled();
   });
 
@@ -93,6 +121,7 @@ describe("POST /api/memories capacity", () => {
     expect(responseB.status).toBe(201);
     expect(countEq).toHaveBeenCalledWith("user_id", "user-a");
     expect(countEq).toHaveBeenCalledWith("user_id", "user-b");
+    expect(duplicateEq).toHaveBeenCalledWith("user_id", "user-b");
     expect(insert).toHaveBeenCalledWith({ user_id: "user-b", ...input });
   });
 

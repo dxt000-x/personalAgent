@@ -59,4 +59,12 @@ describe("memory candidate boundaries", () => {
   it("does not suppress a benign project fact just because it mentions a password manager", () => {
     expect(containsSensitiveMaterial("我长期开发密码管理器项目")).toBe(false);
   });
+
+  it("filters sensitive candidate reasons as well as content", () => {
+    expect(parseMemoryCandidates(output({ ...candidate("我长期使用 TypeScript"), reason: "验证码：123456" }), [])).toEqual([]);
+  });
+
+  it("does not claim complete sensitive detection for unlabelled data", () => {
+    expect(containsSensitiveMaterial("一段没有明确标签的私人信息")) .toBe(false);
+  });
 });
