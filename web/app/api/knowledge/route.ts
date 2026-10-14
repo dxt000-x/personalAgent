@@ -25,10 +25,6 @@ export async function POST(request: Request): Promise<Response> {
       bucket: "knowledge-files", path: document.storage_path, contentType: input.contentType,
     } }, 201);
   } catch (error) {
-    console.error("KNOWLEDGE_API_FAIL", {
-      stage: "KNOWLEDGE_API_FAIL",
-      error_class: error instanceof KnowledgeError ? error.code : "UNEXPECTED_ERROR",
-    });
     return knowledgeErrorResponse(error);
   }
 }

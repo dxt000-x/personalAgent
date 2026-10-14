@@ -82,7 +82,7 @@ describe("knowledge API security and upload lifecycle", () => {
     }
   });
 
-  it("logs only fixed failure metadata and keeps the response safe", async () => {
+  it("keeps unexpected failure responses safe without diagnostic logs", async () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
     try {
       const repository = fakeRepository();
@@ -90,10 +90,7 @@ describe("knowledge API security and upload lifecycle", () => {
       vi.mocked(requireKnowledgeContext).mockResolvedValue({ userId: userA, repository });
       const response = await POST(request("/api/knowledge", "POST", { fileName: "notes.txt", size: 10 }));
       expect(response.status).toBe(503);
-      expect(log).toHaveBeenCalledWith("KNOWLEDGE_API_FAIL", {
-        stage: "KNOWLEDGE_API_FAIL", error_class: "UNEXPECTED_ERROR",
-      });
-      expect(JSON.stringify(log.mock.calls)).not.toContain("secret-never-log");
+      expect(log).not.toHaveBeenCalled();
       expect(JSON.stringify(await response.json())).not.toContain("secret-never-log");
     } finally { log.mockRestore(); }
   });

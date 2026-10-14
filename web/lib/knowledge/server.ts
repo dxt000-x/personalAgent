@@ -51,13 +51,9 @@ export class SupabaseKnowledgeRepository implements KnowledgeRepository {
   }
 
   async create(userId: string, input: UploadInput): Promise<KnowledgeDocument> {
-    console.info("DOCUMENT_CREATE_START");
     // Avoid creating an upload row that cannot be processed or deleted because
     // the dedicated server role is missing or not yet granted EXECUTE.
-    console.info("WRITER_CHECK_START");
     await assertKnowledgeWriterReady();
-    console.info("WRITER_CHECK_OK");
-    console.info("DOCUMENT_INSERT_START");
     let result: Awaited<ReturnType<ReturnType<ReturnType<ReturnType<Client["from"]>["insert"]>["select"]>["single"]>>;
     try {
       result = await this.client.from("knowledge_documents")
@@ -65,11 +61,9 @@ export class SupabaseKnowledgeRepository implements KnowledgeRepository {
           file_type: input.fileType, byte_size: input.byteSize })
         .select(documentColumns).single();
     } catch {
-      console.error("DOCUMENT_INSERT_FAIL");
       throw new KnowledgeError("KNOWLEDGE_UNAVAILABLE");
     }
     const { data, error } = result;
-    if (error || !data) console.error("DOCUMENT_INSERT_FAIL");
     if (error?.code === "P0001" && error.message === "KNOWLEDGE_LIMIT_REACHED") {
       throw new KnowledgeError("KNOWLEDGE_LIMIT_REACHED");
     }
@@ -77,7 +71,6 @@ export class SupabaseKnowledgeRepository implements KnowledgeRepository {
       throw new KnowledgeError("UPLOAD_RATE_LIMITED");
     }
     if (error || !data) throw new KnowledgeError("KNOWLEDGE_UNAVAILABLE");
-    console.info("DOCUMENT_CREATE_OK");
     return data as KnowledgeDocument;
   }
 
