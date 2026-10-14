@@ -220,6 +220,7 @@ describe("opt-in memory candidate workflow", () => {
     await sendMessage(input);
     expect(await screen.findByText("fake reply")).toBeTruthy();
     expect(await within(await screen.findByRole("region", { name: "智能记忆候选" })).findByText(candidate.content)).toBeTruthy();
+    expect(screen.getByRole("link", { name: "管理个人记忆" }).getAttribute("href")).toBe("/memory");
     expect(candidateCalls()).toHaveLength(1);
     expect(JSON.parse(String(candidateCalls()[0][1]?.body))).toMatchObject({ message: "我长期使用 TypeScript", provider: "auto" });
     expect(memoryWrites()).toHaveLength(0);

@@ -598,7 +598,10 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
 
           {(extractingCandidates || candidateError || candidates.length > 0) && (
             <section className="border-t border-slate-100 p-5 sm:p-6" aria-label="智能记忆候选">
-              <h3 className="text-sm font-semibold">智能记忆建议</h3>
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="text-sm font-semibold">智能记忆建议</h3>
+                <Link href="/memory" className="text-xs font-medium text-teal-700 hover:text-teal-900">管理个人记忆</Link>
+              </div>
               {extractingCandidates && <p className="mt-2 text-xs text-slate-500" role="status">正在分析本轮消息…</p>}
               {candidateError && <p className="mt-2 text-xs text-amber-700">本次记忆建议未生成，聊天回复不受影响。</p>}
               <div className="mt-3 space-y-3">

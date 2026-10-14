@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import {
   memoryCategories,
   type Memory,
@@ -27,6 +27,7 @@ const categoryLabels: Record<MemoryCategory, string> = {
 };
 
 const emptyForm: MemoryForm = { content: "", category: "other", importance: 3 };
+const maxMemoriesPerUser = 200;
 
 export function MemoryWorkspace() {
   const [memories, setMemories] = useState<Memory[]>([]);
@@ -38,45 +39,57 @@ export function MemoryWorkspace() {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [actionError, setActionError] = useState("");
+  const active = useRef(false);
+  const loadGeneration = useRef(0);
+  const loadController = useRef<AbortController | null>(null);
+  const actionController = useRef<AbortController | null>(null);
+  const actionPending = useRef(false);
 
   const loadMemories = useCallback(async () => {
+    if (!active.current) return;
+    loadController.current?.abort();
+    const controller = new AbortController();
+    loadController.current = controller;
+    const generation = ++loadGeneration.current;
     setLoadState("loading");
     setLoadError("");
     try {
-      const response = await fetch("/api/memories", { cache: "no-store" });
-      const body = await response.json();
+      const response = await fetch("/api/memories", { cache: "no-store", signal: controller.signal });
+      const body: unknown = await response.json();
+      if (!active.current || generation !== loadGeneration.current) return;
       if (!response.ok) throw new Error(getApiMessage(body, response.status));
-      setMemories(Array.isArray(body.memories) ? body.memories : []);
+      const items = typeof body === "object" && body !== null ? (body as { memories?: unknown }).memories : undefined;
+      if (!Array.isArray(items)) throw new Error("暂时无法读取个人记忆。");
+      setMemories(items as Memory[]);
       setLoadState("ready");
     } catch (error) {
+      if (!active.current || generation !== loadGeneration.current) return;
       setLoadError(error instanceof Error ? error.message : "暂时无法读取个人记忆。");
       setLoadState("error");
+    } finally {
+      if (loadController.current === controller) loadController.current = null;
     }
   }, []);
 
   useEffect(() => {
-    let active = true;
-    fetch("/api/memories", { cache: "no-store" })
-      .then(async (response) => {
-        const body = await response.json();
-        if (!response.ok) throw new Error(getApiMessage(body, response.status));
-        return Array.isArray(body.memories) ? body.memories as Memory[] : [];
-      })
-      .then((items) => {
-        if (!active) return;
-        setMemories(items);
-        setLoadState("ready");
-      })
-      .catch((error: unknown) => {
-        if (!active) return;
-        setLoadError(error instanceof Error ? error.message : "暂时无法读取个人记忆。");
-        setLoadState("error");
-      });
-    return () => { active = false; };
-  }, []);
+    active.current = true;
+    let current = true;
+    void Promise.resolve().then(() => { if (current) void loadMemories(); });
+    return () => {
+      current = false;
+      active.current = false;
+      loadGeneration.current += 1;
+      loadController.current?.abort();
+      actionController.current?.abort();
+    };
+  }, [loadMemories]);
 
   async function addMemory(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!active.current || actionPending.current || loadState !== "ready" || memories.length >= maxMemoriesPerUser) return;
+    actionPending.current = true;
+    const controller = new AbortController();
+    actionController.current = controller;
     setBusy(true);
     setNotice("");
     setActionError("");
@@ -85,17 +98,21 @@ export function MemoryWorkspace() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(form),
+        signal: controller.signal,
       });
-      const body = await response.json();
+      const body: unknown = await response.json();
+      if (!active.current) return;
       if (!response.ok) throw new Error(getApiMessage(body, response.status));
-      const created = body.memory as Memory;
+      const created = (body as { memory: Memory }).memory;
       setMemories((current) => [created, ...current]);
       setForm(emptyForm);
       setNotice("个人记忆已添加。");
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : "添加失败，请稍后重试。");
+      if (active.current) setActionError(error instanceof Error ? error.message : "添加失败，请稍后重试。");
     } finally {
-      setBusy(false);
+      if (actionController.current === controller) actionController.current = null;
+      actionPending.current = false;
+      if (active.current) setBusy(false);
     }
   }
 
@@ -108,7 +125,10 @@ export function MemoryWorkspace() {
 
   async function saveEdit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!editingId) return;
+    if (!editingId || !active.current || actionPending.current) return;
+    actionPending.current = true;
+    const controller = new AbortController();
+    actionController.current = controller;
     setBusy(true);
     setNotice("");
     setActionError("");
@@ -117,38 +137,50 @@ export function MemoryWorkspace() {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(editForm),
+        signal: controller.signal,
       });
-      const body = await response.json();
+      const body: unknown = await response.json();
+      if (!active.current) return;
       if (!response.ok) throw new Error(getApiMessage(body, response.status));
-      const updated = body.memory as Memory;
+      const updated = (body as { memory: Memory }).memory;
       setMemories((current) => current.map((memory) => memory.id === updated.id ? updated : memory));
       setEditingId(null);
       setNotice("个人记忆已更新。");
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : "保存失败，请稍后重试。");
+      if (active.current) setActionError(error instanceof Error ? error.message : "保存失败，请稍后重试。");
     } finally {
-      setBusy(false);
+      if (actionController.current === controller) actionController.current = null;
+      actionPending.current = false;
+      if (active.current) setBusy(false);
     }
   }
 
   async function deleteMemory(memory: Memory) {
+    if (!active.current || actionPending.current) return;
     if (!window.confirm("确定删除这条个人记忆吗？此操作无法撤销。")) return;
+    actionPending.current = true;
+    const controller = new AbortController();
+    actionController.current = controller;
     setBusy(true);
     setNotice("");
     setActionError("");
     try {
-      const response = await fetch(`/api/memories/${memory.id}`, { method: "DELETE" });
+      const response = await fetch(`/api/memories/${memory.id}`, { method: "DELETE", signal: controller.signal });
+      if (!active.current) return;
       if (!response.ok) {
-        const body = await response.json();
+        const body: unknown = await response.json();
+        if (!active.current) return;
         throw new Error(getApiMessage(body, response.status));
       }
       setMemories((current) => current.filter((item) => item.id !== memory.id));
       if (editingId === memory.id) setEditingId(null);
       setNotice("个人记忆已删除。");
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : "删除失败，请稍后重试。");
+      if (active.current) setActionError(error instanceof Error ? error.message : "删除失败，请稍后重试。");
     } finally {
-      setBusy(false);
+      if (actionController.current === controller) actionController.current = null;
+      actionPending.current = false;
+      if (active.current) setBusy(false);
     }
   }
 
@@ -161,12 +193,13 @@ export function MemoryWorkspace() {
             <h2 id="add-memory-title" className="mt-2 text-lg font-semibold">添加个人记忆</h2>
             <p className="mt-1 text-sm text-slate-500">内容仅保存到当前登录账号的个人空间。</p>
           </div>
-          <span className="badge">手动记录</span>
+          <span className="badge">用户保存</span>
         </div>
         <form onSubmit={addMemory} className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_190px_140px_auto] lg:items-end">
           <label className="block text-sm font-medium text-slate-700">
             内容
             <textarea
+              aria-label="内容"
               required
               maxLength={2000}
               rows={3}
@@ -179,8 +212,11 @@ export function MemoryWorkspace() {
           </label>
           <CategorySelect value={form.category} onChange={(category) => setForm({ ...form, category })} />
           <ImportanceSelect value={form.importance} onChange={(importance) => setForm({ ...form, importance })} />
-          <button className="button-primary h-11" type="submit" disabled={busy}>＋ 添加记忆</button>
+          <button className="button-primary h-11" type="submit" disabled={busy || loadState !== "ready" || memories.length >= maxMemoriesPerUser}>＋ 添加记忆</button>
         </form>
+        {loadState === "ready" && memories.length >= maxMemoriesPerUser && (
+          <p className="mt-3 text-sm text-amber-700" role="status">已达到 200 条上限，请先删除不再需要的记忆。</p>
+        )}
       </section>
 
       <div aria-live="polite" className="space-y-3">
@@ -194,7 +230,7 @@ export function MemoryWorkspace() {
             <p className="text-xs font-semibold tracking-wide text-slate-400">YOUR PRIVATE MEMORY</p>
             <h2 id="memory-list-title" className="mt-2 text-xl font-semibold">个人记忆</h2>
           </div>
-          {loadState === "ready" && <span className="text-sm text-slate-500">{memories.length} 条</span>}
+          {loadState === "ready" && <span className="text-sm text-slate-500">{memories.length} / {maxMemoriesPerUser} 条</span>}
         </div>
 
         {loadState === "loading" && (
@@ -240,7 +276,7 @@ export function MemoryWorkspace() {
                     <dl className="mt-5 space-y-2 border-t border-slate-100 pt-4 text-xs text-slate-400">
                       <div className="flex justify-between gap-3"><dt>创建时间</dt><dd>{formatDate(memory.created_at, true)}</dd></div>
                       <div className="flex justify-between gap-3"><dt>更新时间</dt><dd>{formatDate(memory.updated_at, true)}</dd></div>
-                      <div className="flex justify-between gap-3"><dt>来源</dt><dd>{memory.source === "manual" ? "手动记录" : memory.source}</dd></div>
+                      <div className="flex justify-between gap-3"><dt>来源</dt><dd>{memory.source === "manual" ? "用户保存" : memory.source}</dd></div>
                     </dl>
                     <div className="mt-5 flex gap-2">
                       <button className="button-secondary" type="button" disabled={busy} onClick={() => beginEdit(memory)}>编辑</button>
@@ -279,9 +315,11 @@ function ImportanceSelect({ value, onChange }: { value: MemoryImportance; onChan
   );
 }
 
-function getApiMessage(body: ApiError, status: number): string {
-  if (body.error?.code === "AUTH_REQUIRED" || status === 401) return "登录状态已失效，请重新登录后继续。";
-  if (typeof body.error?.message === "string") return body.error.message;
+function getApiMessage(body: unknown, status: number): string {
+  const error = typeof body === "object" && body !== null ? (body as ApiError).error : undefined;
+  if (error?.code === "AUTH_REQUIRED" || status === 401) return "登录状态已失效，请重新登录后继续。";
+  if (error?.code === "MEMORY_LIMIT_REACHED") return "个人记忆已达到 200 条上限，请先删除不再需要的记忆。";
+  if (typeof error?.message === "string") return error.message;
   return "请求未能完成，请稍后重试。";
 }
 
