@@ -20,6 +20,7 @@ export async function processKnowledgeDocument(
   repository: KnowledgeRepository, userId: string, documentId: string,
 ): Promise<KnowledgeDocument> {
   const document = await repository.find(userId, documentId);
+  console.info("[knowledge-debug] process:find", { documentId, status: document?.status ?? "not_found" });
   if (!document) throw new KnowledgeError("DOCUMENT_NOT_FOUND");
   if (document.status === "ready") return document;
   if (document.status === "deleting" ||
@@ -27,6 +28,7 @@ export async function processKnowledgeDocument(
     throw new KnowledgeError("DOCUMENT_BUSY");
   }
   const generation = await repository.claim(userId, documentId);
+  console.info("[knowledge-debug] process:claim", { documentId, generation });
   if (generation === -2) throw new KnowledgeError("PROCESS_RATE_LIMITED");
   if (generation === -1) throw new KnowledgeError("FILE_NOT_UPLOADED");
   if (generation < 1) throw new KnowledgeError("DOCUMENT_BUSY");
@@ -34,8 +36,12 @@ export async function processKnowledgeDocument(
   try {
     const bytes = await repository.read(document.storage_path);
     if (bytes.byteLength !== document.byte_size) throw new KnowledgeError("INVALID_FILE_CONTENT");
+    console.info("[knowledge-debug] process:parse:start", { documentId });
     const chunks = await parseDocument(bytes, document.file_type);
-    if (!await repository.complete(userId, documentId, generation, chunks)) throw new KnowledgeError("DOCUMENT_BUSY");
+    console.info("[knowledge-debug] process:parse:result", { documentId, chunks: chunks.length });
+    const completed = await repository.complete(userId, documentId, generation, chunks);
+    console.info("[knowledge-debug] process:complete:result", { documentId, completed });
+    if (!completed) throw new KnowledgeError("DOCUMENT_BUSY");
     const ready = await repository.find(userId, documentId);
     if (!ready) throw new KnowledgeError("KNOWLEDGE_UNAVAILABLE");
     return ready;

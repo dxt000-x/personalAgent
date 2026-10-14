@@ -93,14 +93,18 @@ const sql: Record<Operation, string> = {
 export async function callKnowledgeTransition<T extends boolean | number>(
   operation: Operation, parameters: unknown[],
 ): Promise<T> {
+  const debugOperation = operation === "claim" || operation === "complete" || operation === "fail";
+  if (debugOperation) console.info(`[knowledge-debug] ${operation}:start`);
   try {
     const result = await knowledgePool().query(sql[operation], parameters);
     const value: unknown = result.rows[0]?.value;
     if (typeof value !== "boolean" && !(typeof value === "number" && Number.isSafeInteger(value))) {
       throw new Error("Unexpected transition result");
     }
+    if (debugOperation) console.info(`[knowledge-debug] ${operation}:result`, { value });
     return value as T;
   } catch {
+    if (debugOperation) console.error(`[knowledge-debug] ${operation}:error`);
     // Never return a database error or connection string to the browser.
     throw new KnowledgeError("KNOWLEDGE_UNAVAILABLE");
   }
