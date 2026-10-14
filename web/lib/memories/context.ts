@@ -3,11 +3,13 @@ import type { createClient } from "@/lib/supabase/server";
 import { MAX_INPUT_CHARACTERS, MAX_MESSAGES } from "@/lib/ai/limits";
 import type { ChatMessage, MemoryUsage } from "@/lib/ai/types";
 import { formatMemoryContext, MAX_MEMORY_CONTEXT_CHARACTERS, MAX_MEMORY_CONTEXT_ITEMS } from "./context-format";
+import { rankMemories, type RankableMemory } from "./rank";
 import { memoryCategories } from "./types";
 
 type SupabaseClient = NonNullable<Awaited<ReturnType<typeof createClient>>>;
 
 const memoryQueryTimeoutMs = 2_000;
+const maxMemoryCandidates = 200;
 type MemoryFailureKind = "timeout" | "database" | "network";
 
 export type RetrievedMemoryContext = {
@@ -42,11 +44,11 @@ export async function retrievePersonalMemoryContext(
     querySignal = activeSignal;
     const query = supabase
       .from("memories")
-      .select("content,category,importance")
+      .select("id,content,category,importance,created_at,updated_at")
       .eq("user_id", userId)
-      .order("importance", { ascending: false })
       .order("created_at", { ascending: false })
-      .limit(MAX_MEMORY_CONTEXT_ITEMS)
+      .order("id", { ascending: false })
+      .limit(maxMemoryCandidates)
       .abortSignal(activeSignal);
     // Bound this optional read even if a transport fails to settle after abort.
     const { data, error } = await new Promise<Awaited<typeof query>>((resolve, reject) => {
@@ -59,15 +61,20 @@ export async function retrievePersonalMemoryContext(
       if (activeSignal.aborted) onAbort();
     });
 
-    if (error || !Array.isArray(data)) {
+    if (error || !Array.isArray(data) || data.length > maxMemoryCandidates) {
       return { metadata: { status: "unavailable", used: false, count: 0 }, diagnostic: querySignal.aborted ? "timeout" : "database" };
     }
     if (data.length === 0) {
       return { metadata: { status: "none", used: false, count: 0 } };
     }
 
-    const records = data.flatMap((row) => {
-      if (typeof row.content !== "string"
+    const records: RankableMemory[] = data.flatMap((row) => {
+      if (typeof row.id !== "string"
+        || typeof row.created_at !== "string"
+        || typeof row.updated_at !== "string"
+        || !Number.isFinite(Date.parse(row.created_at))
+        || !Number.isFinite(Date.parse(row.updated_at))
+        || typeof row.content !== "string"
         || typeof row.category !== "string"
         || !memoryCategories.includes(row.category as (typeof memoryCategories)[number])
         || typeof row.importance !== "number"
@@ -76,9 +83,12 @@ export async function retrievePersonalMemoryContext(
         return [];
       }
       return [{
+        id: row.id,
         content: row.content,
         category: row.category as (typeof memoryCategories)[number],
         importance: row.importance,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
       }];
     });
 
@@ -86,7 +96,9 @@ export async function retrievePersonalMemoryContext(
       return { metadata: { status: "unavailable", used: false, count: 0 } };
     }
 
-    const formatted = formatMemoryContext(records, availableCharacters);
+    const latestUserMessage = messages.at(-1)?.content ?? "";
+    const ranked = rankMemories(records, latestUserMessage, Date.now());
+    const formatted = formatMemoryContext(ranked.slice(0, MAX_MEMORY_CONTEXT_ITEMS), availableCharacters);
     if (!formatted.systemInstruction) {
       return { metadata: { status: "omitted", used: false, count: 0 } };
     }

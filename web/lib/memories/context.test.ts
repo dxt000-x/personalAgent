@@ -3,6 +3,29 @@ import { retrievePersonalMemoryContext } from "./context";
 import type { createClient } from "@/lib/supabase/server";
 
 describe("optional Memory retrieval timeout", () => {
+  it("reads only the authenticated user's bounded candidates and formats at most eight ranked entries", async () => {
+    const rows = Array.from({ length: 12 }, (_, index) => ({
+      id: `memory-${index}`, content: `无关记忆 ${index}`, category: "other", importance: 5,
+      created_at: "2025-01-01T00:00:00Z", updated_at: "2025-01-01T00:00:00Z",
+    }));
+    rows.push({ id: "relevant", content: "长期使用 TypeScript", category: "other", importance: 1,
+      created_at: new Date().toISOString(), updated_at: new Date().toISOString() });
+    const chain = { select: vi.fn(), eq: vi.fn(), order: vi.fn(), limit: vi.fn(), abortSignal: vi.fn() };
+    chain.select.mockReturnValue(chain);
+    chain.eq.mockReturnValue(chain);
+    chain.order.mockReturnValue(chain);
+    chain.limit.mockReturnValue(chain);
+    chain.abortSignal.mockResolvedValue({ data: rows, error: null });
+    const client = { from: vi.fn().mockReturnValue(chain) } as unknown as NonNullable<Awaited<ReturnType<typeof createClient>>>;
+    const result = await retrievePersonalMemoryContext(client, "user-a", [{ role: "user", content: "TypeScript" }]);
+    expect(client.from).toHaveBeenCalledWith("memories");
+    expect(chain.eq).toHaveBeenCalledWith("user_id", "user-a");
+    expect(chain.limit).toHaveBeenCalledWith(200);
+    expect(result.metadata).toEqual({ status: "used", used: true, count: 8 });
+    expect(result.systemInstruction).toContain("长期使用 TypeScript");
+    expect(result.systemInstruction?.length).toBeLessThanOrEqual(4_000);
+  });
+
   it("fails soft after an abort even if a database transport never settles", async () => {
     const abortSignal = vi.fn().mockReturnValue(new Promise(() => {}));
     const chain = { select: vi.fn(), eq: vi.fn(), order: vi.fn(), limit: vi.fn(), abortSignal };
