@@ -13,6 +13,7 @@ function fakeResponse(data: unknown): Response {
 }
 
 let chatResponse: Promise<Response>;
+let planResponse: Promise<Response>;
 let candidateResponse: Promise<Response>;
 let memoryGetResponse: Promise<Response>;
 let memoryPostResponse: Promise<Response>;
@@ -21,6 +22,12 @@ let fetchMock: ReturnType<typeof vi.fn<(url: string, init?: RequestInit) => Prom
 function chatCalls() {
   return fetchMock.mock.calls.filter(([url]) => url === "/api/ai/chat");
 }
+function planCalls() { return fetchMock.mock.calls.filter(([url]) => url === "/api/agent/plan"); }
+const validPlan = {
+  version: 1, goal: "完成学习任务",
+  steps: [{ id: "step-1", title: "列出目标", description: "确认今天的学习目标。", status: "pending" }],
+  requiresConfirmation: true,
+};
 
 function candidateCalls() { return fetchMock.mock.calls.filter(([url]) => url === "/api/ai/memory-candidates"); }
 function memoryWrites() { return fetchMock.mock.calls.filter(([url, init]) => url === "/api/memories" && init?.method === "POST"); }
@@ -49,18 +56,127 @@ beforeEach(() => {
   let nextId = 0;
   vi.stubGlobal("crypto", { randomUUID: () => `fake-message-${++nextId}` });
   chatResponse = Promise.resolve(fakeResponse({ text: "fake reply", provider: "ollama", model: "fake-ollama" }));
+  planResponse = Promise.resolve(fakeResponse({ plan: validPlan }));
   candidateResponse = Promise.resolve(fakeResponse({ candidates: [candidate] }));
   memoryGetResponse = Promise.resolve(fakeResponse({ memories: [] }));
   memoryPostResponse = Promise.resolve(fakeResponse({ memory: { id: "fake" } }));
   fetchMock = vi.fn((url: string, init?: RequestInit) => {
     if (url === "/api/ai/providers") return Promise.resolve(fakeResponse(statuses));
     if (url === "/api/ai/chat" && init?.method === "POST") return chatResponse;
+    if (url === "/api/agent/plan" && init?.method === "POST") return planResponse;
     if (url === "/api/ai/memory-candidates" && init?.method === "POST") return candidateResponse;
     if (url === "/api/memories" && init?.method === "POST") return memoryPostResponse;
     if (url === "/api/memories") return memoryGetResponse;
     throw new Error(`Unexpected fetch: ${url}`);
   });
   vi.stubGlobal("fetch", fetchMock);
+});
+
+describe("explicit Agent Planning", () => {
+  it("does not request a plan for an empty or overlong task", async () => {
+    const input = await setup();
+    const button = screen.getByRole("button", { name: "制定计划" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    fireEvent.change(input, { target: { value: "   " } });
+    expect(button.disabled).toBe(true);
+    fireEvent.change(input, { target: { value: "x".repeat(1001) } });
+    expect(button.disabled).toBe(true);
+    expect(planCalls()).toHaveLength(0);
+  });
+
+  it("sends only the current task and selected routing settings to the planning API", async () => {
+    const input = await setup();
+    fireEvent.change(input, { target: { value: "  制定学习计划  " } });
+    fireEvent.change(screen.getByLabelText("自动路由偏好"), { target: { value: "privacy" } });
+    fireEvent.click(screen.getByRole("button", { name: "制定计划" }));
+    await waitFor(() => expect(planCalls()).toHaveLength(1));
+    expect(JSON.parse(String(planCalls()[0][1]?.body))).toEqual({
+      provider: "auto", routingPreference: "privacy", messages: [{ role: "user", content: "制定学习计划" }],
+    });
+    expect(chatCalls()).toHaveLength(0);
+  });
+
+  it("shows generating, blocks repeated planning clicks, and leaves ordinary Chat available", async () => {
+    let resolvePlan!: (response: Response) => void;
+    planResponse = new Promise((resolve) => { resolvePlan = resolve; });
+    const input = await setup();
+    fireEvent.change(input, { target: { value: "制定学习计划" } });
+    fireEvent.click(screen.getByRole("button", { name: "制定计划" }));
+    expect(screen.getByRole("status", { name: "" }).textContent).toContain("正在制定计划");
+    expect((screen.getByRole("button", { name: "正在制定计划…" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "发送消息 ↑" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(planCalls()).toHaveLength(1);
+    await act(async () => { resolvePlan(fakeResponse({ plan: validPlan })); });
+  });
+
+  it("renders the validated plan as text and confirms without executing steps", async () => {
+    const input = await setup();
+    fireEvent.change(input, { target: { value: "制定学习计划" } });
+    fireEvent.click(screen.getByRole("button", { name: "制定计划" }));
+    const region = await screen.findByRole("region", { name: "任务计划" });
+    expect(within(region).getByText(validPlan.goal)).toBeTruthy();
+    expect(within(region).getByText(validPlan.steps[0].title)).toBeTruthy();
+    expect(within(region).getByText(validPlan.steps[0].description)).toBeTruthy();
+    expect(within(region).getByText("待执行")).toBeTruthy();
+    fireEvent.click(within(region).getByRole("button", { name: "确认计划" }));
+    expect(within(region).getByText("计划已确认。本阶段不会自动执行步骤。")).toBeTruthy();
+    expect(fetchMock.mock.calls.filter(([url]) => url !== "/api/ai/providers" && url !== "/api/agent/plan")).toHaveLength(0);
+  });
+
+  it("cancels a pending plan without a network or database operation", async () => {
+    const input = await setup();
+    fireEvent.change(input, { target: { value: "制定学习计划" } });
+    fireEvent.click(screen.getByRole("button", { name: "制定计划" }));
+    const region = await screen.findByRole("region", { name: "任务计划" });
+    fireEvent.click(within(region).getByRole("button", { name: "取消" }));
+    expect(within(region).queryByText(validPlan.goal)).toBeNull();
+    expect(within(region).getByText("计划已取消。")).toBeTruthy();
+    expect(planCalls()).toHaveLength(1);
+  });
+
+  it("shows a fixed error for API failures and never exposes server details", async () => {
+    planResponse = Promise.resolve({ ok: false, json: async () => ({ error: { code: "RATE_LIMITED", message: "secret" } }) } as Response);
+    const input = await setup();
+    fireEvent.change(input, { target: { value: "制定学习计划" } });
+    fireEvent.click(screen.getByRole("button", { name: "制定计划" }));
+    const region = await screen.findByRole("region", { name: "任务计划" });
+    expect(within(region).getByRole("alert").textContent).toContain("请求过于频繁");
+    expect(region.textContent).not.toContain("secret");
+    expect(chatCalls()).toHaveLength(0);
+  });
+
+  it("rejects malformed plan responses instead of displaying raw model data", async () => {
+    planResponse = Promise.resolve(fakeResponse({ plan: { ...validPlan, requiresConfirmation: false, debug: "secret" } }));
+    const input = await setup();
+    fireEvent.change(input, { target: { value: "制定学习计划" } });
+    fireEvent.click(screen.getByRole("button", { name: "制定计划" }));
+    const region = await screen.findByRole("region", { name: "任务计划" });
+    expect(within(region).getByRole("alert").textContent).toContain("模型服务暂时不可用");
+    expect(region.textContent).not.toContain("secret");
+  });
+
+  it("ignores a late planning response after switching accounts", async () => {
+    let resolvePlan!: (response: Response) => void;
+    planResponse = new Promise((resolve) => { resolvePlan = resolve; });
+    const view = render(<AgentWorkspace sessionKey="user-a" />);
+    const input = await screen.findByRole("textbox", { name: "发送消息" });
+    await waitFor(() => expect((input as HTMLTextAreaElement).disabled).toBe(false));
+    fireEvent.change(input, { target: { value: "账号 A 的计划" } });
+    fireEvent.click(screen.getByRole("button", { name: "制定计划" }));
+    view.rerender(<AgentWorkspace sessionKey="user-b" />);
+    await act(async () => { resolvePlan(fakeResponse({ plan: validPlan })); });
+    expect(screen.queryByText(validPlan.goal)).toBeNull();
+    expect(planCalls()).toHaveLength(1);
+  });
+
+  it("keeps the existing Chat submission path unchanged", async () => {
+    const input = await setup();
+    await sendMessage(input, "普通对话");
+    expect(planCalls()).toHaveLength(0);
+    expect(JSON.parse(String(chatCalls()[0][1]?.body))).toMatchObject({
+      provider: "auto", messages: [{ role: "user", content: "普通对话" }],
+    });
+  });
 });
 
 describe("opt-in memory candidate workflow", () => {
