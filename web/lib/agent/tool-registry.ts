@@ -1,6 +1,6 @@
 import "server-only";
 import { validateToolInput } from "./tool-contract";
-import type { ToolContract } from "./tool-contract";
+import type { ToolContract, ToolExecutor } from "./tool-contract";
 
 const noInput = Object.freeze({
   type: "object",
@@ -9,15 +9,19 @@ const noInput = Object.freeze({
   additionalProperties: false,
 } as const);
 
-// These contracts advertise future capabilities; neither has an execution handler.
+const readCurrentTime: ToolExecutor<Record<string, unknown>, { iso: string }> = async () => ({
+  iso: new Date().toISOString(),
+});
+
+// Only this fixed, read-only handler is implemented. There is no client registration path.
 const definitions = Object.freeze([
   Object.freeze({
     name: "read_current_time",
-    description: "读取当前时间（尚未实现）",
+    description: "读取当前 UTC 时间",
     inputSchema: noInput,
     readOnly: true,
     requiresConfirmation: false,
-    execution: Object.freeze({ status: "not_implemented" }),
+    execution: Object.freeze({ status: "implemented", handler: readCurrentTime }),
   }),
   Object.freeze({
     name: "read_app_status",
@@ -32,7 +36,7 @@ const definitions = Object.freeze([
 const registry = new Map<string, ToolContract>();
 for (const tool of definitions) {
   if (!/^[a-z][a-z0-9_]*$/u.test(tool.name) || registry.has(tool.name)
-    || tool.execution.status !== "not_implemented") {
+    || (tool.execution.status === "implemented" && typeof tool.execution.handler !== "function")) {
     throw new Error("Invalid or duplicate registered Tool name");
   }
   registry.set(tool.name, tool);

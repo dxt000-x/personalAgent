@@ -44,7 +44,7 @@ describe("server Tool Registry allowlist", () => {
     }
   });
 
-  it("exposes metadata but no execution handler", () => {
+  it("exposes fixed metadata and only the time Tool has a handler", () => {
     for (const name of getRegisteredToolNames()) {
       const tool = lookupTool(name);
       expect(tool).toMatchObject({
@@ -52,11 +52,11 @@ describe("server Tool Registry allowlist", () => {
         readOnly: true,
         requiresConfirmation: false,
         inputSchema: { type: "object", properties: {}, required: [], additionalProperties: false },
-        execution: { status: "not_implemented" },
       });
       expect(tool?.description).toBeTruthy();
-      expect(tool?.execution).not.toHaveProperty("handler");
       expect(validateToolInput(tool!, {})).toBe(true);
     }
+    expect(lookupTool("read_current_time")?.execution).toMatchObject({ status: "implemented", handler: expect.any(Function) });
+    expect(lookupTool("read_app_status")?.execution).toEqual({ status: "not_implemented" });
   });
 });
