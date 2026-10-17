@@ -1,5 +1,6 @@
-// Paste this whole async IIFE into DevTools on the signed-in localhost:3110/agent page.
-// Keep the tab open. Only a four-column status table is printed.
+// Paste this whole async IIFE into DevTools on the signed-in PersonalAgent Preview /agent page
+// (or local http://localhost:3110/agent). It uses the configured OpenRouter model.
+// It asks before making up to three real planning requests. Tokens and response bodies are never logged.
 (async () => {
   const rows = [];
   const add = (scenario, http, code, detail) => rows.push({ scenario, http, code, detail });
@@ -14,7 +15,7 @@
   };
   const summary = (scenario, result, detail = "") => add(scenario, result.http, result.code, detail);
   const planBody = {
-    provider: "ollama", routingPreference: "privacy",
+    provider: "openrouter", routingPreference: "auto",
     messages: [{ role: "user", content: "请制定一个仅读取当前 UTC 时间的简短计划。" }],
   };
   const signatureBytes = (encoded) => Uint8Array.from(
@@ -55,10 +56,47 @@
     return confirmed.http === 200 && confirmed.data?.authorization ? confirmed.data.authorization : null;
   };
   try {
-    if (location.origin !== "http://localhost:3110" || location.pathname !== "/agent") {
-      add("origin_gate", "NOT RUN", "", "open signed-in http://localhost:3110/agent");
+    const allowedLocal = location.origin === "http://localhost:3110";
+    const allowedPreviewHost = /^personal-agent-(?:[a-z0-9]{8,12}|git-feat-agent-planning-mvp)-dxt000-x\.vercel\.app$/iu.test(location.hostname);
+    if ((!allowedLocal && !(location.protocol === "https:" && allowedPreviewHost)) || location.pathname !== "/agent") {
+      add("origin_gate", "NOT RUN", "", "open the signed-in feat/agent-planning-mvp Preview /agent page");
       return;
     }
+    add("origin_gate", "CHECK", "", allowedLocal ? "localhost" : "branch Preview host accepted");
+
+    // This authenticated GET only reports provider configuration; it does not generate model output.
+    const providerResponse = await fetch("/api/ai/providers", {
+      method: "GET", credentials: "same-origin", cache: "no-store",
+    });
+    const providerData = await providerResponse.json().catch(() => null);
+    const openrouter = Array.isArray(providerData)
+      ? providerData.find((entry) => entry?.id === "openrouter")
+      : null;
+    if (!providerResponse.ok || !openrouter
+      || typeof openrouter.configured !== "boolean" || typeof openrouter.model !== "string") {
+      add("openrouter_preflight", providerResponse.status, "", "could_not_verify_model_configuration");
+      return;
+    }
+    add("openrouter_preflight", providerResponse.status, "",
+      "configured=" + openrouter.configured + "; model=" + openrouter.model);
+    if (!openrouter.configured) return;
+
+    const modelLooksFree = openrouter.model === "openrouter/free" || /:free$/iu.test(openrouter.model);
+    const costNote = modelLooksFree
+      ? "The model name looks like a free route, but availability and rate limits still apply."
+      : "This model is not clearly a free route and may incur OpenRouter charges.";
+    const proceed = window.confirm([
+      "Preview Agent HTTP acceptance will make up to 3 real OpenRouter planning requests.",
+      "Configured model: " + openrouter.model,
+      "Each attempt may consume one of the app's 30 daily cloud-model quota units, even if the provider call fails.",
+      costNote,
+      "Check the OpenRouter account's model pricing and usage first. Continue?",
+    ].join("\n"));
+    if (!proceed) {
+      add("operator_confirmation", "SKIPPED", "", "cancelled_before_model_requests");
+      return;
+    }
+
     const first = await createAuthorization("single");
     if (!first) return;
     const forged = forgeSignature(first);
@@ -74,7 +112,8 @@
     const validIso = Number.isFinite(Date.parse(executed.data?.result?.data?.iso));
     summary("execute_first", executed,
       `tool_ok=${executed.data?.result?.tool === "read_current_time" && executed.data?.result?.ok === true}; iso_valid=${validIso}`);
-    add("forgery_did_not_consume", "CHECK", "", executed.http === 200 ? "PASS" : "NOT VERIFIED");
+    add("forgery_did_not_consume", "CHECK", "",
+      executed.http === 200 && executed.data?.result?.ok === true && validIso ? "PASS" : "FAIL");
     const replay = await request("/api/agent/execute", { authorization: first });
     summary("execute_replay", replay, replay.http === 409 && replay.code === "REPLAY_REJECTED" ? "PASS" : "FAIL");
 
@@ -92,7 +131,9 @@
     const third = await createAuthorization("expiry");
     if (!third) return;
     await new Promise((resolve) => setTimeout(resolve, 32000));
-    summary("expired_authorization", await request("/api/agent/execute", { authorization: third }));
+    const expired = await request("/api/agent/execute", { authorization: third });
+    summary("expired_authorization", expired,
+      expired.http === 400 && expired.code === "INVALID_REQUEST" ? "PASS" : "FAIL");
   } catch {
     add("script_error", "NOT RUN", "", "network_or_response_error");
   } finally {
