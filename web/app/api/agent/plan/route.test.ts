@@ -1,6 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { POST } from "./route";
 import { AIGatewayError } from "@/lib/ai/errors";
+import { AIRequestDiagnostics } from "@/lib/ai/diagnostics";
+import { AI_REQUEST_DEADLINE_MS } from "@/lib/ai/request-deadline";
 import { runAiGateway } from "@/lib/ai/gateway";
 import { createClient } from "@/lib/supabase/server";
 import { issuePlanAuthorization } from "@/lib/agent/execution-authorization";
@@ -32,6 +34,11 @@ beforeEach(() => {
   vi.mocked(createClient).mockResolvedValue(client as unknown as NonNullable<Awaited<ReturnType<typeof createClient>>>);
   vi.mocked(runAiGateway).mockResolvedValue({ text: JSON.stringify(plan), provider: "ollama", model: "fake-local" });
 });
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+});
 
 describe("POST /api/agent/plan", () => {
   it("rejects unauthenticated requests before model work", async () => {
@@ -43,6 +50,7 @@ describe("POST /api/agent/plan", () => {
   });
 
   it("passes the validated task, provider and planning instruction to the shared Gateway", async () => {
+    const finish = vi.spyOn(AIRequestDiagnostics.prototype, "finish");
     const response = await POST(request({
       provider: "openrouter", routingPreference: "auto", messages: [{ role: "user", content: "帮我制定学习计划" }],
     }));
@@ -54,6 +62,84 @@ describe("POST /api/agent/plan", () => {
     });
     expect(vi.mocked(runAiGateway).mock.calls[0][1].systemInstruction).toContain("只能输出 JSON");
     expect(vi.mocked(runAiGateway).mock.calls[0][2].signal).toBeInstanceOf(AbortSignal);
+    const diagnostics = vi.mocked(runAiGateway).mock.calls[0][3];
+    expect(diagnostics).toBeInstanceOf(AIRequestDiagnostics);
+    expect(diagnostics?.snapshot("SUCCESS")).toMatchObject({ endpoint: "plan", finalErrorCode: "SUCCESS",
+      authDurationMs: expect.any(Number), validationDurationMs: expect.any(Number), attemptNumber: 0 });
+    expect(finish).toHaveBeenCalledExactlyOnceWith("SUCCESS");
+  });
+
+  it("records quota failure once without logging task content", async () => {
+    const finish = vi.spyOn(AIRequestDiagnostics.prototype, "finish");
+    vi.mocked(runAiGateway).mockImplementation(async (_client, _input, _deadline, diagnostics) => {
+      diagnostics?.setRouting("openrouter", "auto");
+      await diagnostics?.measure("quotaDurationMs", async () => { throw new AIGatewayError("QUOTA_UNAVAILABLE"); });
+      throw new Error("unreachable");
+    });
+    const response = await POST(request());
+    expect(response.status).toBe(503);
+    expect((await response.json()).error.code).toBe("QUOTA_UNAVAILABLE");
+    expect(finish).toHaveBeenCalledExactlyOnceWith("QUOTA_UNAVAILABLE");
+    const diagnostics = vi.mocked(runAiGateway).mock.calls[0][3];
+    const record = diagnostics?.snapshot("QUOTA_UNAVAILABLE");
+    expect(record).toMatchObject({ endpoint: "plan", routingMode: "explicit",
+      quotaDurationMs: expect.any(Number), attemptNumber: 0 });
+    expect(JSON.stringify(record)).not.toContain("帮我制定学习计划");
+  });
+
+  it.each(["TIMEOUT", "PROVIDER_ERROR"] as const)("records %s after a provider attempt", async (code) => {
+    const finish = vi.spyOn(AIRequestDiagnostics.prototype, "finish");
+    vi.mocked(runAiGateway).mockImplementation(async (_client, _input, _deadline, diagnostics) => {
+      diagnostics?.setRouting("auto", "auto");
+      diagnostics?.attempt("openrouter");
+      await diagnostics?.measure("providerDurationMs", async () => { throw new AIGatewayError(code); });
+      throw new Error("unreachable");
+    });
+    const response = await POST(request());
+    expect(response.status).toBe(code === "TIMEOUT" ? 504 : 502);
+    expect((await response.json()).error.code).toBe(code);
+    expect(finish).toHaveBeenCalledExactlyOnceWith(code);
+    const record = vi.mocked(runAiGateway).mock.calls[0][3]?.snapshot(code);
+    expect(record).toMatchObject({ endpoint: "plan", provider: "openrouter", routingMode: "auto",
+      attemptNumber: 1, providerDurationMs: expect.any(Number), finalErrorCode: code });
+    expect(JSON.stringify(record)).not.toContain("帮我制定学习计划");
+  });
+
+  it("logs the active provider phase once when the shared deadline expires before the provider settles", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    vi.stubEnv("NODE_ENV", "development");
+    const log = vi.spyOn(console, "info").mockImplementation(() => {});
+    let providerStarted!: () => void;
+    const started = new Promise<void>((resolve) => { providerStarted = resolve; });
+    let finishProvider!: (result: Awaited<ReturnType<typeof runAiGateway>>) => void;
+    vi.mocked(runAiGateway).mockImplementation((_client, _input, _deadline, diagnostics) => {
+      diagnostics?.setRouting("auto", "auto");
+      diagnostics?.attempt("openrouter");
+      const pending = diagnostics!.measure("providerDurationMs", () => new Promise<Awaited<ReturnType<typeof runAiGateway>>>((resolve) => {
+        finishProvider = resolve;
+      }));
+      providerStarted();
+      return pending;
+    });
+
+    const responsePromise = POST(request());
+    await started;
+    expect(log).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(AI_REQUEST_DEADLINE_MS);
+    const response = await responsePromise;
+    expect(response.status).toBe(504);
+    expect((await response.json()).error.code).toBe("TIMEOUT");
+    expect(log).toHaveBeenCalledTimes(1);
+    const record = JSON.parse(log.mock.calls[0][0] as string);
+    expect(record).toMatchObject({ endpoint: "plan", provider: "openrouter", routingMode: "auto",
+      attemptNumber: 1, finalErrorCode: "TIMEOUT", providerDurationMs: expect.any(Number) });
+    expect(record.providerDurationMs).toBeGreaterThanOrEqual(AI_REQUEST_DEADLINE_MS - 100);
+    expect(record.totalDurationMs).toBeGreaterThanOrEqual(AI_REQUEST_DEADLINE_MS);
+    expect(JSON.stringify(record)).not.toContain("帮我制定学习计划");
+
+    finishProvider({ text: JSON.stringify(plan), provider: "openrouter", model: "fake-cloud" });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(log).toHaveBeenCalledTimes(1);
   });
 
   it("returns only the parsed, pending, confirmation-required plan", async () => {

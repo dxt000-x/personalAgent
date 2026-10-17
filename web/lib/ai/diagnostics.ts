@@ -11,13 +11,14 @@ export class AIRequestDiagnostics {
   readonly requestId = crypto.randomUUID();
   private readonly startedAt = performance.now();
   private readonly durations: Partial<Record<Phase, number>> = {};
+  private readonly activePhases = new Map<Phase, number>();
   private provider?: ProviderId;
   private routingMode?: "auto" | "privacy" | "explicit";
   private attempts = 0;
   private memoryFailureKind?: "timeout" | "database" | "network";
   private finished = false;
 
-  constructor(private readonly endpoint: "chat" | "memory-candidates") {}
+  constructor(private readonly endpoint: "chat" | "memory-candidates" | "plan") {}
 
   setRouting(provider: ProviderSelection, preference: RoutingPreference): void {
     this.routingMode = provider === "auto" ? preference : "explicit";
@@ -34,20 +35,26 @@ export class AIRequestDiagnostics {
 
   async measure<T>(phase: Phase, operation: () => Promise<T>): Promise<T> {
     const start = performance.now();
+    this.activePhases.set(phase, start);
     try { return await operation(); }
     finally {
       this.durations[phase] = Math.round((this.durations[phase] ?? 0) + performance.now() - start);
+      this.activePhases.delete(phase);
     }
   }
 
   snapshot(finalErrorCode: FinalCode) {
+    const durations = { ...this.durations };
+    for (const [phase, start] of this.activePhases) {
+      durations[phase] = Math.round((durations[phase] ?? 0) + performance.now() - start);
+    }
     return {
       event: "ai_gateway_request",
       requestId: this.requestId,
       endpoint: this.endpoint,
       ...(this.provider ? { provider: this.provider } : {}),
       ...(this.routingMode ? { routingMode: this.routingMode } : {}),
-      ...this.durations,
+      ...durations,
       totalDurationMs: Math.round(performance.now() - this.startedAt),
       attemptNumber: this.attempts,
       ...(this.memoryFailureKind ? { memoryFailureKind: this.memoryFailureKind } : {}),

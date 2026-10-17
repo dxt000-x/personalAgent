@@ -36,4 +36,14 @@ describe("AI request deadline and safe diagnostics", () => {
     expect(record).not.toHaveProperty("userId");
     expect(JSON.stringify(record)).not.toContain("fake private response");
   });
+
+  it("includes the elapsed active provider phase when the request times out first", () => {
+    const trace = new AIRequestDiagnostics("plan");
+    trace.attempt("openrouter");
+    void trace.measure("providerDurationMs", () => new Promise<never>(() => {}));
+    const record = trace.snapshot("TIMEOUT");
+    expect(record).toMatchObject({ endpoint: "plan", provider: "openrouter", attemptNumber: 1,
+      providerDurationMs: expect.any(Number), finalErrorCode: "TIMEOUT" });
+    expect(record).not.toHaveProperty("messages");
+  });
 });
