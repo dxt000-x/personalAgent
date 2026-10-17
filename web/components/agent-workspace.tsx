@@ -42,8 +42,10 @@ type TimelineState =
   | { state: "error"; code: GatewayErrorCode };
 type PlanningState =
   | { status: "idle" | "generating" | "cancelled" }
-  | { status: "pending" | "confirmed"; plan: AgentPlan }
-  | { status: "error"; code: GatewayErrorCode };
+  | { status: "pending"; plan: AgentPlan; planAuthorization: string | null }
+  | { status: "executing"; plan: AgentPlan }
+  | { status: "completed"; plan: AgentPlan; iso: string }
+  | { status: "error"; code: GatewayErrorCode; phase?: "execution" };
 
 const providerLabels: Record<ProviderId, string> = {
   ollama: "Ollama",
@@ -192,6 +194,7 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
   const planningGeneration = useRef(0);
   const planningController = useRef<AbortController | null>(null);
   const planningActive = useRef(false);
+  const executingRef = useRef(false);
   const sendingRef = useRef(false);
   const [memorySuggestionsEnabled, setMemorySuggestionsEnabled] = useState(false);
   const suggestionsEnabledRef = useRef(false);
@@ -245,6 +248,7 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
       planningController.current?.abort();
       planningController.current = null;
       planningActive.current = false;
+      executingRef.current = false;
       candidateGeneration.current += 1;
       candidateController.current?.abort();
       candidateController.current = null;
@@ -489,7 +493,7 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
 
   async function createPlan() {
     const content = draft.trim();
-    if (!mounted.current || planningActive.current || !content || content.length > MAX_PLAN_TASK_CHARS
+    if (!mounted.current || planningActive.current || executingRef.current || !content || content.length > MAX_PLAN_TASK_CHARS
       || (selectedProvider !== "auto" && !selectedStatus?.configured)
       || providersLoading || providersError || isSending || retryRequest) return;
 
@@ -522,8 +526,12 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
         return;
       }
       const rawPlan = typeof body === "object" && body !== null ? (body as { plan?: unknown }).plan : undefined;
+      const planAuthorization = typeof body === "object" && body !== null
+        ? (body as { planAuthorization?: unknown }).planAuthorization : undefined;
       const plan = rawPlan && typeof rawPlan === "object" ? parseAgentPlanText(JSON.stringify(rawPlan)) : null;
-      setPlanning(plan ? { status: "pending", plan } : { status: "error", code: "PROVIDER_ERROR" });
+      setPlanning(plan ? { status: "pending", plan,
+        planAuthorization: typeof planAuthorization === "string" && planAuthorization ? planAuthorization : null,
+      } : { status: "error", code: "PROVIDER_ERROR" });
     } catch {
       if (stillCurrent()) setPlanning({ status: "error", code: "PROVIDER_ERROR" });
     } finally {
@@ -540,6 +548,61 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
     planningController.current = null;
     planningActive.current = false;
     setPlanning({ status: "cancelled" });
+  }
+
+  async function confirmPlan(plan: AgentPlan, planAuthorization: string) {
+    if (!mounted.current || executingRef.current) return;
+    executingRef.current = true;
+    const generation = ++planningGeneration.current;
+    const controller = new AbortController();
+    planningController.current = controller;
+    const stillCurrent = () => mounted.current && generation === planningGeneration.current && !controller.signal.aborted;
+    setPlanning({ status: "executing", plan });
+    try {
+      const confirmation = await fetch("/api/agent/confirm", {
+        method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal,
+        body: JSON.stringify({ planAuthorization, plan }),
+      });
+      if (!stillCurrent()) return;
+      const confirmationBody: unknown = await confirmation.json();
+      if (!stillCurrent()) return;
+      if (!confirmation.ok) {
+        const code = typeof confirmationBody === "object" && confirmationBody !== null
+          ? (confirmationBody as { error?: { code?: unknown } }).error?.code : undefined;
+        setPlanning({ status: "error", code: asGatewayErrorCode(code), phase: "execution" });
+        return;
+      }
+      const authorization = typeof confirmationBody === "object" && confirmationBody !== null
+        ? (confirmationBody as { authorization?: unknown }).authorization : undefined;
+      if (typeof authorization !== "string" || !authorization) throw new Error("invalid confirmation");
+      const response = await fetch("/api/agent/execute", {
+        method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal,
+        body: JSON.stringify({ authorization }),
+      });
+      if (!stillCurrent()) return;
+      const body: unknown = await response.json();
+      if (!stillCurrent()) return;
+      if (!response.ok) {
+        const code = typeof body === "object" && body !== null
+          ? (body as { error?: { code?: unknown } }).error?.code : undefined;
+        setPlanning({ status: "error", code: asGatewayErrorCode(code), phase: "execution" });
+        return;
+      }
+      const result = typeof body === "object" && body !== null ? (body as { result?: unknown }).result : undefined;
+      const toolResult = typeof result === "object" && result !== null
+        ? result as { tool?: unknown; ok?: unknown; data?: { iso?: unknown } } : null;
+      const iso = toolResult?.data?.iso;
+      if (toolResult?.tool !== "read_current_time" || toolResult.ok !== true || typeof iso !== "string"
+        || !Number.isFinite(Date.parse(iso)) || new Date(iso).toISOString() !== iso) throw new Error("invalid tool result");
+      setPlanning({ status: "completed", plan, iso });
+    } catch {
+      if (stillCurrent()) setPlanning({ status: "error", code: "PROVIDER_ERROR", phase: "execution" });
+    } finally {
+      if (generation === planningGeneration.current) {
+        planningController.current = null;
+        executingRef.current = false;
+      }
+    }
   }
 
   function submit(event: FormEvent<HTMLFormElement>) {
@@ -564,6 +627,7 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
     planningController.current?.abort();
     planningController.current = null;
     planningActive.current = false;
+    executingRef.current = false;
     setPlanning({ status: "idle" });
     setMessages([]);
     setDraft("");
@@ -579,7 +643,7 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
     && (!knowledgeEnabled || (!!knowledgeQuery.trim() && knowledgeQuery.trim().length <= MAX_SEARCH_QUERY_CHARS
       && /^[\p{L}\p{M}\p{N} ]+$/u.test(knowledgeQuery.trim())));
   const canPlan = (selectedProvider === "auto" || !!selectedStatus?.configured) && !providersLoading && !providersError
-    && !isSending && !retryRequest && planning.status !== "generating" && !!draft.trim()
+    && !isSending && !retryRequest && planning.status !== "generating" && planning.status !== "executing" && !!draft.trim()
     && draft.trim().length <= MAX_PLAN_TASK_CHARS;
 
   return (
@@ -705,9 +769,11 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
               {planning.status === "generating" && (
                 <p className="mt-3 text-sm text-slate-500" role="status">正在制定计划…</p>
               )}
-              {(planning.status === "pending" || planning.status === "confirmed") && (
+              {(planning.status === "pending" || planning.status === "executing" || planning.status === "completed") && (
                 <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
                   {planning.status === "pending" && <p className="mb-2 text-xs font-medium text-amber-700">计划待确认，不会自动执行。</p>}
+                  {planning.status === "pending" && <p className="mb-2 text-xs text-slate-500">确认后仅演示读取当前 UTC 时间；计划步骤仍保持待执行。</p>}
+                  {planning.status === "pending" && !planning.planAuthorization && <p className="mb-2 text-xs text-amber-700">当前环境未配置执行授权，仍可查看或取消计划。</p>}
                   <p className="text-sm font-medium text-slate-800">{planning.plan.goal}</p>
                   <ol className="mt-3 list-decimal space-y-3 pl-5">
                     {planning.plan.steps.map((step) => (
@@ -719,16 +785,24 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
                   </ol>
                   {planning.status === "pending" ? (
                     <div className="mt-4 flex gap-2">
-                      <button type="button" className="button-primary" onClick={() => setPlanning({ status: "confirmed", plan: planning.plan })}>确认计划</button>
+                      <button type="button" className="button-primary" disabled={!planning.planAuthorization}
+                        onClick={() => { if (planning.planAuthorization) void confirmPlan(planning.plan, planning.planAuthorization); }}>确认计划</button>
                       <button type="button" className="button-secondary" onClick={cancelPlan}>取消</button>
                     </div>
-                  ) : <p className="mt-4 text-xs font-medium text-teal-700" role="status">计划已确认。本阶段不会自动执行步骤。</p>}
+                  ) : planning.status === "executing"
+                    ? <p className="mt-4 text-xs font-medium text-teal-700" role="status">计划已确认，正在执行只读工具…</p>
+                    : <div className="mt-4 text-xs font-medium text-teal-700" role="status">
+                      <p>计划已确认。只读工具执行成功。</p>
+                      <p>使用的 Tool：read_current_time</p>
+                      <p>当前 UTC 时间：{planning.iso}</p>
+                    </div>}
                 </div>
               )}
               {planning.status === "cancelled" && <p className="mt-3 text-sm text-slate-500" role="status">计划已取消。</p>}
               {planning.status === "error" && (
                 <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-4" role="alert">
-                  <p className="text-sm text-red-800">{errorMessages[planning.code]}</p>
+                  <p className="text-sm text-red-800">{planning.phase === "execution" && planning.code !== "AUTH_REQUIRED"
+                    ? "计划执行失败，请稍后重试。" : errorMessages[planning.code]}</p>
                   {planning.code === "AUTH_REQUIRED" && <Link href="/login" className="mt-3 inline-block text-sm text-red-800 underline">重新登录</Link>}
                 </div>
               )}

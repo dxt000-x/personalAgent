@@ -3,9 +3,11 @@ import { POST } from "./route";
 import { AIGatewayError } from "@/lib/ai/errors";
 import { runAiGateway } from "@/lib/ai/gateway";
 import { createClient } from "@/lib/supabase/server";
+import { issuePlanAuthorization } from "@/lib/agent/execution-authorization";
 
 vi.mock("@/lib/ai/gateway", () => ({ runAiGateway: vi.fn() }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
+vi.mock("@/lib/agent/execution-authorization", () => ({ issuePlanAuthorization: vi.fn(() => "signed-plan-token") }));
 
 const plan = {
   version: 1,
@@ -61,7 +63,8 @@ describe("POST /api/agent/plan", () => {
     });
     const response = await POST(request());
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ plan });
+    expect(await response.json()).toEqual({ plan, planAuthorization: "signed-plan-token" });
+    expect(issuePlanAuthorization).toHaveBeenCalledWith("user-a", plan);
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
   });
 

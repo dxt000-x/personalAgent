@@ -4,6 +4,7 @@ import { runAiGateway } from "@/lib/ai/gateway";
 import { aiErrorResponse, aiJson, requireAuthenticatedUser } from "@/lib/ai/http";
 import { readJsonBody, validateChatRequest } from "@/lib/ai/request";
 import { AIRequestDeadline } from "@/lib/ai/request-deadline";
+import { issuePlanAuthorization } from "@/lib/agent/execution-authorization";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -13,7 +14,7 @@ export async function POST(request: Request): Promise<Response> {
   try {
     deadline.assertRemaining();
     return await deadline.wait((async () => {
-      const { supabase } = await requireAuthenticatedUser();
+      const { supabase, userId } = await requireAuthenticatedUser();
       deadline.assertRemaining();
 
       const origin = request.headers.get("origin");
@@ -35,7 +36,8 @@ export async function POST(request: Request): Promise<Response> {
       deadline.assertRemaining();
       const plan = parseAgentPlanText(result.text);
       if (!plan) throw new AIGatewayError("PROVIDER_ERROR");
-      return aiJson({ plan });
+      const planAuthorization = issuePlanAuthorization(userId, plan);
+      return aiJson({ plan, planAuthorization });
     })());
   } catch (error) {
     const safeError = error instanceof AIGatewayError ? error

@@ -14,6 +14,8 @@ function fakeResponse(data: unknown): Response {
 
 let chatResponse: Promise<Response>;
 let planResponse: Promise<Response>;
+let confirmResponse: Promise<Response>;
+let executeResponse: Promise<Response>;
 let candidateResponse: Promise<Response>;
 let memoryGetResponse: Promise<Response>;
 let memoryPostResponse: Promise<Response>;
@@ -23,6 +25,8 @@ function chatCalls() {
   return fetchMock.mock.calls.filter(([url]) => url === "/api/ai/chat");
 }
 function planCalls() { return fetchMock.mock.calls.filter(([url]) => url === "/api/agent/plan"); }
+function confirmCalls() { return fetchMock.mock.calls.filter(([url]) => url === "/api/agent/confirm"); }
+function executeCalls() { return fetchMock.mock.calls.filter(([url]) => url === "/api/agent/execute"); }
 const validPlan = {
   version: 1, goal: "完成学习任务",
   steps: [{ id: "step-1", title: "列出目标", description: "确认今天的学习目标。", status: "pending" }],
@@ -56,7 +60,11 @@ beforeEach(() => {
   let nextId = 0;
   vi.stubGlobal("crypto", { randomUUID: () => `fake-message-${++nextId}` });
   chatResponse = Promise.resolve(fakeResponse({ text: "fake reply", provider: "ollama", model: "fake-ollama" }));
-  planResponse = Promise.resolve(fakeResponse({ plan: validPlan }));
+  planResponse = Promise.resolve(fakeResponse({ plan: validPlan, planAuthorization: "signed-plan-token" }));
+  confirmResponse = Promise.resolve(fakeResponse({ authorization: "confirmed-token" }));
+  executeResponse = Promise.resolve(fakeResponse({ result: {
+    tool: "read_current_time", ok: true, data: { iso: "2026-10-16T00:00:00.000Z" },
+  } }));
   candidateResponse = Promise.resolve(fakeResponse({ candidates: [candidate] }));
   memoryGetResponse = Promise.resolve(fakeResponse({ memories: [] }));
   memoryPostResponse = Promise.resolve(fakeResponse({ memory: { id: "fake" } }));
@@ -64,6 +72,8 @@ beforeEach(() => {
     if (url === "/api/ai/providers") return Promise.resolve(fakeResponse(statuses));
     if (url === "/api/ai/chat" && init?.method === "POST") return chatResponse;
     if (url === "/api/agent/plan" && init?.method === "POST") return planResponse;
+    if (url === "/api/agent/confirm" && init?.method === "POST") return confirmResponse;
+    if (url === "/api/agent/execute" && init?.method === "POST") return executeResponse;
     if (url === "/api/ai/memory-candidates" && init?.method === "POST") return candidateResponse;
     if (url === "/api/memories" && init?.method === "POST") return memoryPostResponse;
     if (url === "/api/memories") return memoryGetResponse;
@@ -106,10 +116,10 @@ describe("explicit Agent Planning", () => {
     expect((screen.getByRole("button", { name: "正在制定计划…" }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole("button", { name: "发送消息 ↑" }) as HTMLButtonElement).disabled).toBe(false);
     expect(planCalls()).toHaveLength(1);
-    await act(async () => { resolvePlan(fakeResponse({ plan: validPlan })); });
+    await act(async () => { resolvePlan(fakeResponse({ plan: validPlan, planAuthorization: "signed-plan-token" })); });
   });
 
-  it("renders the validated plan as text and confirms without executing steps", async () => {
+  it("renders the validated plan and executes the fixed read-only tool only after confirmation", async () => {
     const input = await setup();
     fireEvent.change(input, { target: { value: "制定学习计划" } });
     fireEvent.click(screen.getByRole("button", { name: "制定计划" }));
@@ -118,9 +128,14 @@ describe("explicit Agent Planning", () => {
     expect(within(region).getByText(validPlan.steps[0].title)).toBeTruthy();
     expect(within(region).getByText(validPlan.steps[0].description)).toBeTruthy();
     expect(within(region).getByText("待执行")).toBeTruthy();
+    expect(executeCalls()).toHaveLength(0);
     fireEvent.click(within(region).getByRole("button", { name: "确认计划" }));
-    expect(within(region).getByText("计划已确认。本阶段不会自动执行步骤。")).toBeTruthy();
-    expect(fetchMock.mock.calls.filter(([url]) => url !== "/api/ai/providers" && url !== "/api/agent/plan")).toHaveLength(0);
+    await waitFor(() => expect(executeCalls()).toHaveLength(1));
+    expect(JSON.parse(String(confirmCalls()[0][1]?.body))).toEqual({ planAuthorization: "signed-plan-token", plan: validPlan });
+    expect(JSON.parse(String(executeCalls()[0][1]?.body))).toEqual({ authorization: "confirmed-token" });
+    expect(await within(region).findByText("计划已确认。只读工具执行成功。")).toBeTruthy();
+    expect(within(region).getByText("当前 UTC 时间：2026-10-16T00:00:00.000Z")).toBeTruthy();
+    expect(chatCalls()).toHaveLength(0);
   });
 
   it("cancels a pending plan without a network or database operation", async () => {
@@ -132,6 +147,70 @@ describe("explicit Agent Planning", () => {
     expect(within(region).queryByText(validPlan.goal)).toBeNull();
     expect(within(region).getByText("计划已取消。")).toBeTruthy();
     expect(planCalls()).toHaveLength(1);
+    expect(confirmCalls()).toHaveLength(0);
+    expect(executeCalls()).toHaveLength(0);
+  });
+
+  it("keeps the plan viewable but disables execution when signing is not configured", async () => {
+    planResponse = Promise.resolve(fakeResponse({ plan: validPlan, planAuthorization: null }));
+    const input = await setup();
+    fireEvent.change(input, { target: { value: "制定学习计划" } });
+    fireEvent.click(screen.getByRole("button", { name: "制定计划" }));
+    const region = await screen.findByRole("region", { name: "任务计划" });
+    expect(await within(region).findByText(validPlan.goal)).toBeTruthy();
+    expect((within(region).getByRole("button", { name: "确认计划" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(confirmCalls()).toHaveLength(0);
+    expect(executeCalls()).toHaveLength(0);
+  });
+
+  it("shows executing and blocks repeated confirmation", async () => {
+    let resolveExecution!: (response: Response) => void;
+    executeResponse = new Promise((resolve) => { resolveExecution = resolve; });
+    const input = await setup();
+    fireEvent.change(input, { target: { value: "现在几点" } });
+    fireEvent.click(screen.getByRole("button", { name: "制定计划" }));
+    const region = await screen.findByRole("region", { name: "任务计划" });
+    fireEvent.click(within(region).getByRole("button", { name: "确认计划" }));
+    await waitFor(() => expect(executeCalls()).toHaveLength(1));
+    expect(within(region).getByText("计划已确认，正在执行只读工具…")).toBeTruthy();
+    expect(within(region).queryByRole("button", { name: "确认计划" })).toBeNull();
+    expect((screen.getByRole("button", { name: "制定计划" }) as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => { resolveExecution(fakeResponse({ result: {
+      tool: "read_current_time", ok: true, data: { iso: "2026-10-16T00:00:00.000Z" },
+    } })); });
+    expect(executeCalls()).toHaveLength(1);
+  });
+
+  it("shows a safe error when execution fails", async () => {
+    executeResponse = Promise.resolve({ ok: false, json: async () => ({ error: {
+      code: "INVALID_REQUEST", message: "secret internal detail",
+    } }) } as Response);
+    const input = await setup();
+    fireEvent.change(input, { target: { value: "现在几点" } });
+    fireEvent.click(screen.getByRole("button", { name: "制定计划" }));
+    const region = await screen.findByRole("region", { name: "任务计划" });
+    fireEvent.click(within(region).getByRole("button", { name: "确认计划" }));
+    expect(await within(region).findByRole("alert")).toBeTruthy();
+    expect(region.textContent).not.toContain("secret internal detail");
+  });
+
+  it("ignores a late execution result after account change", async () => {
+    let resolveExecution!: (response: Response) => void;
+    executeResponse = new Promise((resolve) => { resolveExecution = resolve; });
+    const view = render(<AgentWorkspace sessionKey="user-a" />);
+    const input = screen.getByRole("textbox", { name: "发送消息" }) as HTMLTextAreaElement;
+    await waitFor(() => expect(input.disabled).toBe(false));
+    fireEvent.change(input, { target: { value: "现在几点" } });
+    fireEvent.click(screen.getByRole("button", { name: "制定计划" }));
+    const region = await screen.findByRole("region", { name: "任务计划" });
+    fireEvent.click(within(region).getByRole("button", { name: "确认计划" }));
+    await waitFor(() => expect(executeCalls()).toHaveLength(1));
+    view.rerender(<AgentWorkspace sessionKey="user-b" />);
+    expect(executeCalls()[0][1]?.signal?.aborted).toBe(true);
+    await act(async () => { resolveExecution(fakeResponse({ result: {
+      tool: "read_current_time", ok: true, data: { iso: "2026-10-16T00:00:00.000Z" },
+    } })); });
+    expect(screen.queryByText("当前 UTC 时间：2026-10-16T00:00:00.000Z")).toBeNull();
   });
 
   it("shows a fixed error for API failures and never exposes server details", async () => {
