@@ -1,5 +1,5 @@
 import "server-only";
-import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import type { AgentPlan } from "./planning";
 
 const TOOL = "read_current_time";
@@ -7,7 +7,9 @@ const TTL_MS = 5 * 60 * 1000;
 const CONFIRMED_TTL_MS = 30 * 1000;
 
 type Authorization = { version: 1; userId: string; tool: typeof TOOL; phase: "plan" | "confirmed";
-  planHash: string; expiresAt: number; nonce: string };
+  planHash: string; expiresAt: number; jti: string };
+export type ExecutionAuthorization = Readonly<{ token: string; jti: string; planHash: string; expiresAt: number }>;
+export type VerifiedExecutionAuthorization = Readonly<{ tool: typeof TOOL; jti: string; planHash: string }>;
 
 function planHash(plan: AgentPlan): string {
   return createHash("sha256").update(JSON.stringify(plan)).digest("hex");
@@ -23,7 +25,7 @@ function signature(payload: string, key: string): Buffer {
 }
 
 /** A short-lived, user-bound capability. It never contains a client-selected handler. */
-function issueAuthorization(userId: string, plan: AgentPlan, phase: Authorization["phase"]): string | null {
+function issueAuthorization(userId: string, plan: AgentPlan, phase: Authorization["phase"]): ExecutionAuthorization | null {
   const key = signingKey();
   if (!key) return null;
   const authorization: Authorization = {
@@ -33,22 +35,23 @@ function issueAuthorization(userId: string, plan: AgentPlan, phase: Authorizatio
     phase,
     planHash: planHash(plan),
     expiresAt: Date.now() + (phase === "confirmed" ? CONFIRMED_TTL_MS : TTL_MS),
-    nonce: randomBytes(16).toString("base64url"),
+    jti: randomUUID(),
   };
   const payload = Buffer.from(JSON.stringify(authorization)).toString("base64url");
-  return `${payload}.${signature(payload, key).toString("base64url")}`;
+  return { token: `${payload}.${signature(payload, key).toString("base64url")}`,
+    jti: authorization.jti, planHash: authorization.planHash, expiresAt: authorization.expiresAt };
 }
 
 export function issuePlanAuthorization(userId: string, plan: AgentPlan): string | null {
-  return issueAuthorization(userId, plan, "plan");
+  return issueAuthorization(userId, plan, "plan")?.token ?? null;
 }
 
-export function issueExecutionAuthorization(userId: string, plan: AgentPlan): string | null {
+export function issueExecutionAuthorization(userId: string, plan: AgentPlan): ExecutionAuthorization | null {
   return issueAuthorization(userId, plan, "confirmed");
 }
 
-export function verifyAuthorization(token: unknown, userId: string, phase: Authorization["phase"],
-  plan?: AgentPlan): typeof TOOL | null {
+function verifiedPayload(token: unknown, userId: string, phase: Authorization["phase"],
+  plan?: AgentPlan): Authorization | null {
   if (phase === "plan" && !plan) return null;
   const key = signingKey();
   if (!key || typeof token !== "string" || token.length > 2048
@@ -68,9 +71,20 @@ export function verifyAuthorization(token: unknown, userId: string, phase: Autho
       || typeof authorization.expiresAt !== "number" || !Number.isSafeInteger(authorization.expiresAt)
       || authorization.expiresAt <= Date.now()
       || authorization.expiresAt > Date.now() + (phase === "confirmed" ? CONFIRMED_TTL_MS : TTL_MS)
-      || typeof authorization.nonce !== "string" || !/^[A-Za-z0-9_-]{16,64}$/u.test(authorization.nonce)) return null;
-    return TOOL;
+      || typeof authorization.jti !== "string"
+      || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(authorization.jti)) return null;
+    return authorization as Authorization;
   } catch {
     return null;
   }
+}
+
+export function verifyAuthorization(token: unknown, userId: string, phase: Authorization["phase"],
+  plan?: AgentPlan): typeof TOOL | null {
+  return verifiedPayload(token, userId, phase, plan)?.tool ?? null;
+}
+
+export function verifyExecutionAuthorization(token: unknown, userId: string): VerifiedExecutionAuthorization | null {
+  const value = verifiedPayload(token, userId, "confirmed");
+  return value ? { tool: value.tool, jti: value.jti, planHash: value.planHash } : null;
 }

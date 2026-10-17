@@ -3,6 +3,7 @@ import { AIGatewayError } from "@/lib/ai/errors";
 import { aiErrorResponse, aiJson, requireUserId } from "@/lib/ai/http";
 import { readJsonBody } from "@/lib/ai/request";
 import { parseAgentPlanText } from "@/lib/agent/planning";
+import { persistExecutionAuthorization } from "@/lib/agent/execution-store";
 
 export const runtime = "nodejs";
 
@@ -23,9 +24,12 @@ export async function POST(request: Request): Promise<Response> {
       throw new AIGatewayError("INVALID_REQUEST");
     }
     const authorization = issueExecutionAuthorization(userId, plan);
-    if (!authorization) throw new AIGatewayError("PROVIDER_ERROR");
-    return aiJson({ authorization });
+    if (!authorization) throw new AIGatewayError("EXECUTION_UNAVAILABLE");
+    await persistExecutionAuthorization(userId, {
+      jti: authorization.jti, planHash: authorization.planHash, expiresAt: authorization.expiresAt,
+    });
+    return aiJson({ authorization: authorization.token });
   } catch (error) {
-    return aiErrorResponse(error instanceof AIGatewayError ? error : new AIGatewayError("PROVIDER_ERROR"));
+    return aiErrorResponse(error instanceof AIGatewayError ? error : new AIGatewayError("EXECUTION_UNAVAILABLE"));
   }
 }

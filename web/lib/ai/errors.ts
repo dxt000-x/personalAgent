@@ -11,7 +11,9 @@ export type AIErrorCode =
   | "QUOTA_UNAVAILABLE"
   | "TIMEOUT"
   | "KNOWLEDGE_UNAVAILABLE"
-  | "KNOWLEDGE_CONTEXT_LIMIT";
+  | "KNOWLEDGE_CONTEXT_LIMIT"
+  | "REPLAY_REJECTED"
+  | "EXECUTION_UNAVAILABLE";
 
 const errorDetails: Record<AIErrorCode, { status: number; message: string }> = {
   AUTH_REQUIRED: { status: 401, message: "请先登录。" },
@@ -27,6 +29,8 @@ const errorDetails: Record<AIErrorCode, { status: number; message: string }> = {
   TIMEOUT: { status: 504, message: "模型服务响应超时，请稍后重试。" },
   KNOWLEDGE_UNAVAILABLE: { status: 503, message: "知识库检索暂时不可用，请稍后重试。" },
   KNOWLEDGE_CONTEXT_LIMIT: { status: 400, message: "本次对话已没有足够空间加入知识库资料，请清空会话或缩短消息。" },
+  REPLAY_REJECTED: { status: 409, message: "执行授权已使用，请重新确认计划。" },
+  EXECUTION_UNAVAILABLE: { status: 503, message: "计划执行暂时不可用，请稍后重试。" },
 };
 
 export class AIGatewayError extends Error {
