@@ -1,12 +1,47 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createOpenRouterProvider } from "../openrouter-provider";
-import { AIRequestDiagnostics } from "../diagnostics";
+import { AIRequestDiagnostics, classifyOutgoingStream } from "../diagnostics";
 import { AIRequestDeadline } from "../request-deadline";
 import type { ProviderLifecycleEvent } from "../types";
 
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 
 describe("OpenRouter lifecycle with the installed SDK and an offline fetch", () => {
+  it("reports the installed SDK's serialized stream:false without exposing other request fields", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    const log = vi.spyOn(console, "info").mockImplementation(() => {});
+    const diagnostics = new AIRequestDiagnostics("plan");
+    diagnostics.attempt("openrouter");
+    vi.stubGlobal("fetch", vi.fn(async (_input: unknown, init?: RequestInit) => {
+      expect(classifyOutgoingStream(init?.body)).toBe("false");
+      return new Response(JSON.stringify({ model: "local", choices: [{ message: { content: "private response" } }] }),
+        { status: 200, headers: { "content-type": "application/json" } });
+    }));
+    await createOpenRouterProvider("fake-key", "fake-model")
+      .generate([{ role: "user", content: "private prompt" }], new AbortController().signal, undefined,
+        { onLifecycleEvent: (event) => diagnostics.recordProviderLifecycle(event) });
+    diagnostics.finish("SUCCESS");
+    diagnostics.finish("SUCCESS");
+    expect(log).toHaveBeenCalledTimes(1);
+    const logged = JSON.parse(log.mock.calls[0][0] as string);
+    expect(logged.providerLifecycle[0]).toMatchObject({ event: "request_started", outgoingStreamStatus: "false" });
+    expect(log.mock.calls[0][0]).not.toMatch(/private|fake-key|local-placeholder/);
+  });
+
+  it.each([
+    { body: undefined, status: "missing" },
+    { body: JSON.stringify({ model: "local" }), status: "missing" },
+    { body: JSON.stringify({ stream: true }), status: "true" },
+    { body: JSON.stringify({ stream: "false" }), status: "invalid" },
+    { body: "{invalid", status: "invalid" },
+  ])("classifies serialized stream value as $status", ({ body, status }) => {
+    expect(classifyOutgoingStream(body)).toBe(status);
+    const diagnostics = new AIRequestDiagnostics("plan");
+    diagnostics.recordProviderLifecycle({ event: "request_started", elapsedMs: 0,
+      outgoingStreamStatus: status as "true" | "false" | "missing" | "invalid" });
+    expect(diagnostics.snapshot("SUCCESS").providerLifecycle?.[0]).toMatchObject({ outgoingStreamStatus: status });
+  });
+
   it.each([
     { generationId: "gen-1792312245-7umsx4QDpralWf1oIGE", status: "present",
       loggedId: "gen-1792312245-7umsx4QDpralWf1oIGE" },
@@ -249,6 +284,38 @@ describe("OpenRouter lifecycle with the installed SDK and an offline fetch", () 
         { event: "request_failed", stage: "reading_body" }]);
       expect(JSON.stringify(events)).not.toContain("private");
     } finally { clearTimeout(timer); vi.useRealTimers(); }
+  });
+
+  it("reports a body stream error without falsely reporting a request abort", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    const log = vi.spyOn(console, "info").mockImplementation(() => {});
+    const diagnostics = new AIRequestDiagnostics("plan");
+    diagnostics.attempt("openrouter");
+    const events: ProviderLifecycleEvent[] = [];
+    let failBody!: () => void;
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ReadableStream<Uint8Array>({
+      start(stream) {
+        stream.enqueue(new TextEncoder().encode('{"choices":'));
+        failBody = () => stream.error(new Error("private stream failure"));
+      },
+    }), { status: 200, headers: { "content-type": "application/json" } })));
+    const pending = createOpenRouterProvider("fake-key", "fake-model")
+      .generate([], new AbortController().signal, undefined, { onLifecycleEvent: (event) => {
+        events.push(event);
+        diagnostics.recordProviderLifecycle(event);
+      } });
+    await vi.waitFor(() => expect(events.map(({ event }) => event)).toEqual(["request_started", "response_headers"]));
+    failBody();
+    await expect(pending).rejects.toBeDefined();
+    expect(events.map(({ event }) => event)).toEqual(["request_started", "response_headers", "request_failed"]);
+    expect(events.at(-1)).toMatchObject({ stage: "reading_body" });
+    diagnostics.finish("PROVIDER_ERROR");
+    diagnostics.finish("PROVIDER_ERROR");
+    expect(log).toHaveBeenCalledTimes(1);
+    const logged = JSON.parse(log.mock.calls[0][0] as string);
+    expect(logged.requestId).toBe(diagnostics.requestId);
+    expect(logged.providerLifecycle.at(-1)).toMatchObject({ event: "request_failed", stage: "reading_body" });
+    expect(log.mock.calls[0][0]).not.toMatch(/private|fake-key/);
   });
 
   it("keeps malformed completed JSON in the SDK parse error path", async () => {

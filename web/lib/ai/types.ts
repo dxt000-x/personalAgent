@@ -52,7 +52,8 @@ export type ProviderStatus = {
 
 export type ProviderLifecycleStage = "awaiting_headers" | "reading_body" | "response_complete";
 export type ProviderLifecycleEvent =
-  | { event: "request_started"; elapsedMs: number }
+  | { event: "request_started"; elapsedMs: number;
+      outgoingStreamStatus?: "true" | "false" | "missing" | "invalid" }
   | { event: "response_headers"; elapsedMs: number; status: number; upstreamRequestId?: string;
       openrouterGenerationId?: string;
       contentType?: string; contentLength?: string | number; transferEncoding?: string;

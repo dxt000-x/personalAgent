@@ -13,6 +13,18 @@ export type FailureKind = ProviderResponseFailure | "provider_attempt_timeout" |
   | "internal_gateway_error" | "unexpected_provider_error" | "plan_invalid_output"
   | "route_unexpected_error";
 
+/** Inspect only the SDK's serialized JSON body; never retain or log other request fields. */
+export function classifyOutgoingStream(body: BodyInit | null | undefined): "true" | "false" | "missing" | "invalid" {
+  if (body === null || body === undefined) return "missing";
+  if (typeof body !== "string") return "invalid";
+  try {
+    const parsed: unknown = JSON.parse(body);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return "invalid";
+    if (!("stream" in parsed)) return "missing";
+    return typeof parsed.stream === "boolean" ? String(parsed.stream) as "true" | "false" : "invalid";
+  } catch { return "invalid"; }
+}
+
 /** Allowlisted operational fields only. Never add request, response, headers or Memory content here. */
 export class AIRequestDiagnostics {
   readonly requestId = crypto.randomUUID();
@@ -50,7 +62,11 @@ export class AIRequestDiagnostics {
     if (this.finished || this.providerLifecycle.length >= 5) return;
     // Only OpenRouter's fixed lifecycle events are accepted. Headers and identifiers are never logged wholesale.
     const elapsedMs = Math.round(Math.max(0, Math.min(30_000, event.elapsedMs)));
-    if (event.event === "response_headers") {
+    if (event.event === "request_started") {
+      const status = event.outgoingStreamStatus;
+      this.providerLifecycle.push({ event: event.event, elapsedMs,
+        outgoingStreamStatus: status === "true" || status === "false" || status === "missing" ? status : "invalid" });
+    } else if (event.event === "response_headers") {
       if (!Number.isInteger(event.status) || event.status < 100 || event.status > 599) return;
       const upstreamRequestId = event.upstreamRequestId && /^[A-Za-z0-9_-]{1,128}$/.test(event.upstreamRequestId)
         ? event.upstreamRequestId : undefined;

@@ -1,6 +1,7 @@
 import "server-only";
 import OpenAI from "openai";
 import { ProviderResponseError } from "./errors";
+import { classifyOutgoingStream } from "./diagnostics";
 import { MAX_OUTPUT_CHARACTERS, MAX_OUTPUT_TOKENS, PROVIDER_TIMEOUT_MS } from "./limits";
 import type { AIProvider, ProviderLifecycleStage } from "./types";
 
@@ -23,7 +24,8 @@ export function createOpenRouterProvider(apiKey: string, model: string): AIProvi
           // The Gateway's 25-second attempt signal is authoritative; keep the SDK timer as a later fallback.
           timeout: PROVIDER_TIMEOUT_MS + 1_000,
           fetch: async (input, init) => {
-            options?.onLifecycleEvent?.({ event: "request_started", elapsedMs: elapsedMs() });
+            options?.onLifecycleEvent?.({ event: "request_started", elapsedMs: elapsedMs(),
+              outgoingStreamStatus: classifyOutgoingStream(init?.body) });
             const response = await globalThis.fetch(input, init);
             stage = "reading_body";
             options?.onLifecycleEvent?.({ event: "response_headers", elapsedMs: elapsedMs(), status: response.status,
