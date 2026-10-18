@@ -1,3 +1,5 @@
+import OpenAI from "openai";
+
 export type AIErrorCode =
   | "AUTH_REQUIRED"
   | "PROVIDER_NOT_CONFIGURED"
@@ -43,7 +45,16 @@ export class AIGatewayError extends Error {
   }
 }
 
+/** Raised only after a provider adapter has received a non-success HTTP response. */
+export class UpstreamHttpError extends AIGatewayError {}
+
+export function upstreamHttpFailure(status: number, signal: AbortSignal): UpstreamHttpError {
+  const safeError = providerFailure({ status }, signal);
+  return new UpstreamHttpError(safeError.code, safeError.status);
+}
+
 export function providerFailure(error: unknown, signal: AbortSignal) {
+  if (error instanceof OpenAI.APIConnectionTimeoutError) return new AIGatewayError("TIMEOUT");
   if (typeof error === "object" && error !== null) {
     if ("status" in error && typeof error.status === "number") {
       if (error.status === 429) return new AIGatewayError("RATE_LIMITED");

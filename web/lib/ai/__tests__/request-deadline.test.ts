@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AIRequestDeadline } from "../request-deadline";
 import { AIRequestDiagnostics } from "../diagnostics";
+
+afterEach(() => vi.useRealTimers());
 
 describe("AI request deadline and safe diagnostics", () => {
   it("returns TIMEOUT at the total deadline even when an uncancellable operation never settles", async () => {
@@ -19,6 +21,47 @@ describe("AI request deadline and safe diagnostics", () => {
       client.abort();
       expect(attempt.aborted).toBe(true);
       expect(() => deadline.assertRemaining()).toThrowError(expect.objectContaining({ code: "TIMEOUT" }));
+    } finally { deadline.close(); }
+  });
+
+  it("retains the first abort reason when attempt and client aborts race", () => {
+    for (const first of ["client", "attempt"] as const) {
+      const client = new AbortController();
+      const timeout = new AbortController();
+      const deadline = new AIRequestDeadline(client.signal);
+      try {
+        const attempt = deadline.attemptSignals(25_000, () => timeout.signal);
+        if (first === "client") { client.abort(); timeout.abort(); }
+        else { timeout.abort(); client.abort(); }
+        expect(attempt.abortOrigin()).toBe(first === "client" ? "client_abort" : "provider_attempt_timeout");
+      } finally { deadline.close(); }
+    }
+  });
+
+  it("retains the shared deadline when it precedes an attempt abort", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    const client = new AbortController();
+    const timeout = new AbortController();
+    const deadline = new AIRequestDeadline(client.signal, 20);
+    try {
+      const attempt = deadline.attemptSignals(20, () => timeout.signal);
+      await vi.advanceTimersByTimeAsync(20);
+      timeout.abort();
+      client.abort();
+      expect(attempt.abortOrigin()).toBe("shared_deadline");
+      expect(deadline.abortOrigin).toBe("shared_deadline");
+    } finally { deadline.close(); }
+  });
+
+  it("uses event order even when different abort sources reuse the same reason", () => {
+    const client = new AbortController();
+    const timeout = new AbortController();
+    const deadline = new AIRequestDeadline(client.signal);
+    try {
+      const attempt = deadline.attemptSignals(25_000, () => timeout.signal);
+      client.abort("same-reason");
+      timeout.abort("same-reason");
+      expect(attempt.abortOrigin()).toBe("client_abort");
     } finally { deadline.close(); }
   });
 

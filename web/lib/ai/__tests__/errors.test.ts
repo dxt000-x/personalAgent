@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { AIGatewayError, providerFailure } from "../errors";
+import OpenAI from "openai";
 import { aiErrorResponse } from "../http";
 
 vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
@@ -71,5 +72,7 @@ describe("public AI errors", () => {
     expect(providerFailure({ status: 503 }, signal).code).toBe("PROVIDER_ERROR");
     expect(providerFailure(new Error("network failed"), signal).code).toBe("PROVIDER_ERROR");
     expect(providerFailure({ status: 408 }, signal).code).toBe("TIMEOUT");
+    // SDK v6 uses Error as the instance name, so classify by type rather than name alone.
+    expect(providerFailure(new OpenAI.APIConnectionTimeoutError(), signal).code).toBe("TIMEOUT");
   });
 });

@@ -5,6 +5,8 @@ import type { ProviderId, ProviderSelection, RoutingPreference } from "./types";
 type Phase = "authDurationMs" | "validationDurationMs" | "memoryDurationMs" | "routeDurationMs"
   | "quotaDurationMs" | "providerDurationMs" | "dedupeDurationMs";
 type FinalCode = AIErrorCode | "SUCCESS" | "CLIENT_ABORTED";
+export type FailureOrigin = "provider_attempt_timeout" | "shared_deadline" | "client_abort"
+  | "sdk_timeout" | "upstream_http" | "unknown";
 
 /** Allowlisted operational fields only. Never add request, response, headers or Memory content here. */
 export class AIRequestDiagnostics {
@@ -16,6 +18,7 @@ export class AIRequestDiagnostics {
   private routingMode?: "auto" | "privacy" | "explicit";
   private attempts = 0;
   private memoryFailureKind?: "timeout" | "database" | "network";
+  private failureOrigin?: FailureOrigin;
   private finished = false;
 
   constructor(private readonly endpoint: "chat" | "memory-candidates" | "plan") {}
@@ -28,7 +31,13 @@ export class AIRequestDiagnostics {
     this.memoryFailureKind = kind;
   }
 
+  setFailureOrigin(origin: FailureOrigin): void { this.failureOrigin = origin; }
+
+  get hasFailureOrigin(): boolean { return this.failureOrigin !== undefined; }
+
   attempt(provider: ProviderId): void {
+    // A later Auto candidate supersedes the previous attempt's diagnostic outcome.
+    this.failureOrigin = undefined;
     this.provider = provider;
     this.attempts += 1;
   }
@@ -58,6 +67,7 @@ export class AIRequestDiagnostics {
       totalDurationMs: Math.round(performance.now() - this.startedAt),
       attemptNumber: this.attempts,
       ...(this.memoryFailureKind ? { memoryFailureKind: this.memoryFailureKind } : {}),
+      ...(this.failureOrigin ? { failureOrigin: this.failureOrigin } : {}),
       finalErrorCode,
     };
   }

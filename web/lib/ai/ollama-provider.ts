@@ -1,5 +1,5 @@
 import "server-only";
-import { AIGatewayError, providerFailure } from "./errors";
+import { AIGatewayError, upstreamHttpFailure } from "./errors";
 import { MAX_OUTPUT_CHARACTERS, MAX_OUTPUT_TOKENS } from "./limits";
 import type { AIProvider } from "./types";
 
@@ -37,7 +37,7 @@ export function createOllamaProvider(baseUrl: string, model: string): AIProvider
       }
 
       if (!response.ok) {
-        throw providerFailure({ status: response.status }, signal);
+        throw upstreamHttpFailure(response.status, signal);
       }
 
       let result: OllamaChatResponse;

@@ -1,6 +1,8 @@
 import "server-only";
+import { ApiError as GeminiApiError } from "@google/genai";
+import OpenAI from "openai";
 import type { createClient } from "@/lib/supabase/server";
-import { AIGatewayError, providerFailure } from "./errors";
+import { AIGatewayError, UpstreamHttpError, providerFailure } from "./errors";
 import { AUTO_PROVIDER_TIMEOUT_MS, PROVIDER_TIMEOUT_MS } from "./limits";
 import { AIRequestDeadline, MIN_CLOUD_START_MS, MIN_FALLBACK_WINDOW_MS } from "./request-deadline";
 import { AIRequestDiagnostics } from "./diagnostics";
@@ -35,7 +37,7 @@ export async function runAiGateway(
       cloudQuotaReserved = true;
     }
     deadline.assertRemaining(providerId === "ollama" ? 1 : MIN_CLOUD_START_MS);
-    const signal = deadline.attemptSignal(timeoutMs);
+    const { signal, abortOrigin, close } = deadline.attemptSignals(timeoutMs);
     diagnostics?.attempt(providerId);
     try {
       const result = await (diagnostics
@@ -45,7 +47,21 @@ export async function runAiGateway(
       deadline.assertRemaining();
       return result;
     } catch (error) {
-      throw error instanceof AIGatewayError ? error : providerFailure(error, signal);
+      const safeError = error instanceof AIGatewayError ? error : providerFailure(error, signal);
+      if (diagnostics) {
+        const httpError = error instanceof UpstreamHttpError
+          || (error instanceof OpenAI.APIError && typeof error.status === "number")
+          || error instanceof GeminiApiError;
+        const sdkTimeout = error instanceof OpenAI.APIConnectionTimeoutError
+          || (error instanceof Error && error.name === "TimeoutError");
+        const aborted = abortOrigin();
+        diagnostics.setFailureOrigin(aborted
+          ? httpError || sdkTimeout ? "unknown" : aborted
+          : httpError ? "upstream_http" : sdkTimeout ? "sdk_timeout" : "unknown");
+      }
+      throw safeError;
+    } finally {
+      close();
     }
   }
 

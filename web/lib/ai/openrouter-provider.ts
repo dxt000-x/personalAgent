@@ -11,7 +11,8 @@ export function createOpenRouterProvider(apiKey: string, model: string): AIProvi
     apiKey,
     baseURL: openRouterBaseUrl,
     maxRetries: 0,
-    timeout: PROVIDER_TIMEOUT_MS,
+    // The Gateway's 25-second attempt signal is authoritative; keep the SDK timer as a later fallback.
+    timeout: PROVIDER_TIMEOUT_MS + 1_000,
   });
 
   return {

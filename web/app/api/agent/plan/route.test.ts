@@ -132,7 +132,8 @@ describe("POST /api/agent/plan", () => {
     expect(log).toHaveBeenCalledTimes(1);
     const record = JSON.parse(log.mock.calls[0][0] as string);
     expect(record).toMatchObject({ endpoint: "plan", provider: "openrouter", routingMode: "auto",
-      attemptNumber: 1, finalErrorCode: "TIMEOUT", providerDurationMs: expect.any(Number) });
+      attemptNumber: 1, finalErrorCode: "TIMEOUT", failureOrigin: "shared_deadline",
+      providerDurationMs: expect.any(Number) });
     expect(record.providerDurationMs).toBeGreaterThanOrEqual(AI_REQUEST_DEADLINE_MS - 100);
     expect(record.totalDurationMs).toBeGreaterThanOrEqual(AI_REQUEST_DEADLINE_MS);
     expect(JSON.stringify(record)).not.toContain("帮我制定学习计划");
@@ -140,6 +141,27 @@ describe("POST /api/agent/plan", () => {
     finishProvider({ text: JSON.stringify(plan), provider: "openrouter", model: "fake-cloud" });
     await vi.advanceTimersByTimeAsync(1);
     expect(log).toHaveBeenCalledTimes(1);
+  });
+
+  it("classifies client cancellation without changing the safe response", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    const log = vi.spyOn(console, "info").mockImplementation(() => {});
+    const controller = new AbortController();
+    const cancelled = new Request("http://localhost:3000/api/agent/plan", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+        provider: "openrouter", messages: [{ role: "user", content: "private task" }],
+      }), signal: controller.signal,
+    });
+    controller.abort();
+    const response = await POST(cancelled);
+    expect(response.status).toBe(504);
+    expect((await response.json()).error.code).toBe("TIMEOUT");
+    expect(runAiGateway).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(log.mock.calls[0][0] as string)).toMatchObject({
+      finalErrorCode: "CLIENT_ABORTED", failureOrigin: "client_abort",
+    });
+    expect(log.mock.calls[0][0]).not.toContain("private task");
   });
 
   it("returns only the parsed, pending, confirmation-required plan", async () => {

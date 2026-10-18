@@ -50,6 +50,9 @@ export async function POST(request: Request): Promise<Response> {
       : deadline.remainingMs() === 0 || deadline.signal.aborted
         ? new AIGatewayError("TIMEOUT") : new AIGatewayError("PROVIDER_ERROR");
     finalCode = request.signal.aborted ? "CLIENT_ABORTED" : safeError.code;
+    if (!diagnostics.hasFailureOrigin && safeError.code === "TIMEOUT") {
+      diagnostics.setFailureOrigin(deadline.abortOrigin ?? "unknown");
+    }
     return aiErrorResponse(safeError);
   } finally {
     deadline.close();
