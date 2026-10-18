@@ -53,7 +53,8 @@ export type ProviderStatus = {
 export type ProviderLifecycleStage = "awaiting_headers" | "reading_body" | "response_complete";
 export type ProviderLifecycleEvent =
   | { event: "request_started"; elapsedMs: number }
-  | { event: "response_headers"; elapsedMs: number; status: number; upstreamRequestId?: string }
+  | { event: "response_headers"; elapsedMs: number; status: number; upstreamRequestId?: string;
+      upstreamRequestIdStatus?: "present" | "missing" | "invalid" }
   | { event: "response_complete"; elapsedMs: number }
   | { event: "request_aborted" | "request_failed"; elapsedMs: number; stage: ProviderLifecycleStage };
 

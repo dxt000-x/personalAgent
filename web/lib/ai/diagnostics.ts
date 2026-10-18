@@ -54,7 +54,10 @@ export class AIRequestDiagnostics {
       if (!Number.isInteger(event.status) || event.status < 100 || event.status > 599) return;
       const upstreamRequestId = event.upstreamRequestId && /^[A-Za-z0-9_-]{1,128}$/.test(event.upstreamRequestId)
         ? event.upstreamRequestId : undefined;
+      const upstreamRequestIdStatus = event.upstreamRequestId === undefined ? "missing"
+        : upstreamRequestId ? "present" : "invalid";
       this.providerLifecycle.push({ event: event.event, elapsedMs, status: event.status,
+        upstreamRequestIdStatus,
         ...(upstreamRequestId ? { upstreamRequestId } : {}) });
     } else if (event.event === "request_aborted" || event.event === "request_failed") {
       this.providerLifecycle.push({ event: event.event, elapsedMs, stage: event.stage });

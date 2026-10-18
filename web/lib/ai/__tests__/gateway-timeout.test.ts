@@ -60,7 +60,8 @@ describe("shared Gateway deadline behavior with fake providers", () => {
       diagnostics.finish("SUCCESS");
       expect(log).toHaveBeenCalledTimes(1);
       expect(JSON.parse(log.mock.calls[0][0] as string)).toMatchObject({ requestId: diagnostics.requestId,
-        providerLifecycle: [{ event: "request_started" }, { event: "response_headers", status: 200 },
+        providerLifecycle: [{ event: "request_started" }, { event: "response_headers", status: 200,
+          upstreamRequestIdStatus: "invalid" },
           { event: "response_complete" }] });
       expect(log.mock.calls[0][0]).not.toMatch(/private|credential/);
     } finally { deadline.close(); log.mockRestore(); vi.unstubAllEnvs(); }
