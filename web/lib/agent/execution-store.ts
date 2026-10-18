@@ -1,6 +1,6 @@
 import "server-only";
 import { X509Certificate } from "node:crypto";
-import { Pool, type PoolClient } from "pg";
+import { Pool } from "pg";
 import type { ExecutionAuthorization, VerifiedExecutionAuthorization } from "./execution-authorization";
 
 export class ExecutionStoreError extends Error {
@@ -8,105 +8,37 @@ export class ExecutionStoreError extends Error {
 }
 
 let pool: Pool | undefined;
-type Check = "pass" | "fail" | "not_checked";
-type Identity = "inferred_from_pooler_routing" | "not_verified";
-export type ExecutionDbDiagnostic = {
-  publicRefExpected: Check;
-  writerRefMatchesPublic: Check;
-  poolerConfig: Check;
-  caConfig: Check;
-  connection: Check;
-  tlsVerification: Check;
-  databaseName: Check;
-  projectIdentity: Identity;
-};
 
-const expectedProjectRef = "pxfaqcepztzqyqtmbdrf";
-let poolChecks: Pick<ExecutionDbDiagnostic, "publicRefExpected" | "writerRefMatchesPublic" | "poolerConfig" | "caConfig" | "tlsVerification"> | undefined;
-
-function checkedConfig() {
-  const checks = {
-    publicRefExpected: "not_checked" as Check,
-    writerRefMatchesPublic: "not_checked" as Check,
-    poolerConfig: "not_checked" as Check,
-    caConfig: "not_checked" as Check,
-    tlsVerification: "not_checked" as Check,
-  };
+function executionPool(): Pool {
+  if (pool) return pool;
   try {
     const raw = process.env.AGENT_DB_URL;
     const encodedCa = process.env.AGENT_DB_CA_CERT_BASE64;
     const publicUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    if (!raw || !encodedCa || !publicUrl) return { checks };
+    if (!raw || !encodedCa || !publicUrl) throw new ExecutionStoreError();
     const url = new URL(raw);
     const publicProject = new URL(publicUrl);
     const ref = /^([a-z0-9]+)\.supabase\.co$/u.exec(publicProject.hostname)?.[1];
-    checks.publicRefExpected = publicProject.protocol === "https:" && ref === expectedProjectRef ? "pass" : "fail";
+    const ca = Buffer.from(encodedCa, "base64").toString("utf8");
+    new X509Certificate(ca);
     const user = decodeURIComponent(url.username);
-    checks.writerRefMatchesPublic = ref && user === `agent_execution_writer_login.${ref}` ? "pass" : "fail";
-    checks.poolerConfig = ["postgres:", "postgresql:"].includes(url.protocol)
-      && /^[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)*\.pooler\.supabase\.com$/u.test(url.hostname)
-      && url.port === "6543" && url.pathname === "/postgres" && !!url.password
-      && (url.search === "" || url.search === "?sslmode=require") && url.hash === "" ? "pass" : "fail";
-    let ca: string;
-    try {
-      ca = Buffer.from(encodedCa, "base64").toString("utf8");
-      new X509Certificate(ca);
-      checks.caConfig = "pass";
-    } catch {
-      checks.caConfig = "fail";
-      return { checks };
+    if (!ref || publicProject.protocol !== "https:" || !["postgres:", "postgresql:"].includes(url.protocol)
+      || user !== `agent_execution_writer_login.${ref}`
+      || !/^[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)*\.pooler\.supabase\.com$/u.test(url.hostname)
+      || url.port !== "6543" || url.pathname !== "/postgres" || !url.password
+      || (url.search !== "" && url.search !== "?sslmode=require") || url.hash !== "") {
+      throw new ExecutionStoreError();
     }
-    if (checks.writerRefMatchesPublic !== "pass" || checks.poolerConfig !== "pass" || !ref || publicProject.protocol !== "https:") return { checks };
-    const options = { host: url.hostname, port: 6543, user,
+    const next = new Pool({ host: url.hostname, port: 6543, user,
       password: decodeURIComponent(url.password), database: "postgres", max: 2,
       connectionTimeoutMillis: 5000, idleTimeoutMillis: 10000, query_timeout: 10000,
-      ssl: { ca, servername: url.hostname, rejectUnauthorized: true } };
-    checks.tlsVerification = "pass";
-    return { checks, options };
-  } catch {
-    return { checks };
-  }
-}
-
-function executionPool(validated?: ReturnType<typeof checkedConfig>): Pool {
-  if (pool) return pool;
-  try {
-    const { checks, options } = validated ?? checkedConfig();
-    if (!options) throw new ExecutionStoreError();
-    const next = new Pool(options);
+      ssl: { ca, servername: url.hostname, rejectUnauthorized: true } });
     next.on("error", () => undefined);
-    poolChecks = checks;
     pool = next;
     return next;
   } catch {
     throw new ExecutionStoreError();
   }
-}
-
-export async function diagnoseExecutionDatabase(): Promise<ExecutionDbDiagnostic> {
-  const validated = pool ? undefined : checkedConfig();
-  const checks = poolChecks ?? validated!.checks;
-  const result: ExecutionDbDiagnostic = { ...checks, connection: "not_checked",
-    tlsVerification: "not_checked", databaseName: "not_checked", projectIdentity: "not_verified" };
-  if (checks.publicRefExpected !== "pass" || checks.writerRefMatchesPublic !== "pass"
-    || checks.poolerConfig !== "pass" || checks.caConfig !== "pass") return result;
-  let client: PoolClient | undefined;
-  try {
-    client = await executionPool(validated).connect();
-    result.connection = "pass";
-    result.tlsVerification = "pass";
-    const query = await client.query("SELECT current_database() AS name");
-    result.databaseName = query.rows[0]?.name === "postgres" ? "pass" : "fail";
-    if (result.databaseName === "pass" && result.tlsVerification === "pass") {
-      result.projectIdentity = "inferred_from_pooler_routing";
-    }
-  } catch {
-    if (!client) result.connection = "fail";
-    else result.databaseName = "fail";
-  } finally {
-    client?.release();
-  }
-  return result;
 }
 
 async function call(sql: string, values: unknown[]): Promise<unknown> {
