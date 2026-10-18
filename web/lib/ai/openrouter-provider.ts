@@ -27,7 +27,10 @@ export function createOpenRouterProvider(apiKey: string, model: string): AIProvi
             const response = await globalThis.fetch(input, init);
             stage = "reading_body";
             options?.onLifecycleEvent?.({ event: "response_headers", elapsedMs: elapsedMs(), status: response.status,
-              upstreamRequestId: response.headers.get("x-request-id") ?? undefined });
+              upstreamRequestId: response.headers.get("x-request-id") ?? undefined,
+              contentType: response.headers.get("content-type") ?? undefined,
+              contentLength: response.headers.get("content-length") ?? undefined,
+              transferEncoding: response.headers.get("transfer-encoding") ?? undefined });
             return response;
           },
         });

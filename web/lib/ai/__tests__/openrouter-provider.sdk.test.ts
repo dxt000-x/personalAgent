@@ -7,6 +7,39 @@ import type { ProviderLifecycleEvent } from "../types";
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 
 describe("OpenRouter lifecycle with the installed SDK and an offline fetch", () => {
+  it("logs only allowlisted response header values without consuming the SDK body", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    const log = vi.spyOn(console, "info").mockImplementation(() => {});
+    const response = new Response(JSON.stringify({ model: "fake-model",
+      choices: [{ message: { content: "private response" } }] }), { status: 200,
+      headers: { "content-type": "application/json; charset=utf-8", "content-length": "81",
+        "transfer-encoding": "chunked", "x-request-id": "safe-id" } });
+    const bodyRead = vi.spyOn(response, "json");
+    vi.stubGlobal("fetch", vi.fn(async () => response));
+    const diagnostics = new AIRequestDiagnostics("plan");
+    diagnostics.attempt("openrouter");
+    await createOpenRouterProvider("fake-key", "fake-model")
+      .generate([{ role: "user", content: "private prompt" }], new AbortController().signal, undefined,
+        { onLifecycleEvent: (event) => diagnostics.recordProviderLifecycle(event) });
+    diagnostics.finish("SUCCESS");
+    const record = JSON.parse(log.mock.calls[0][0] as string);
+    expect(record.providerLifecycle[1]).toMatchObject({ contentType: "application/json",
+      contentLength: 81, transferEncoding: "chunked", upstreamRequestId: "safe-id" });
+    expect(bodyRead).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(log.mock.calls[0][0]).not.toMatch(/private|fake-key|charset/);
+  });
+
+  it("reduces malformed response headers to fixed categories", () => {
+    const diagnostics = new AIRequestDiagnostics("plan");
+    diagnostics.recordProviderLifecycle({ event: "response_headers", elapsedMs: 1, status: 200,
+      contentType: "private/content", contentLength: "private length", transferEncoding: "private encoding" });
+    expect(diagnostics.snapshot("SUCCESS").providerLifecycle?.[0]).toMatchObject({
+      contentType: "other", contentLength: "invalid", transferEncoding: "other",
+      upstreamRequestIdStatus: "missing" });
+    expect(JSON.stringify(diagnostics.snapshot("SUCCESS"))).not.toContain("private");
+  });
+
   it.each([
     { header: "safe_req-123", status: "present", loggedId: "safe_req-123" },
     { header: null, status: "missing", loggedId: undefined },
@@ -141,5 +174,42 @@ describe("OpenRouter lifecycle with the installed SDK and an offline fetch", () 
       deadline.close();
       vi.useRealTimers();
     }
+  });
+
+  it("cancels after a partial body without independently reading its bytes", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const events: ProviderLifecycleEvent[] = [];
+    let bodyController!: ReadableStreamDefaultController<Uint8Array>;
+    vi.stubGlobal("fetch", vi.fn(async (_input: unknown, init: RequestInit) => {
+      init.signal?.addEventListener("abort", () => bodyController.error(new Error("private abort")), { once: true });
+      return new Response(new ReadableStream<Uint8Array>({ start(stream) {
+        bodyController = stream;
+        stream.enqueue(new TextEncoder().encode('{"choices":'));
+      } }), { status: 200, headers: { "content-type": "application/json", "transfer-encoding": "chunked" } });
+    }));
+    const timer = setTimeout(() => controller.abort(), 25_000);
+    const pending = createOpenRouterProvider("fake-key", "fake-model")
+      .generate([], controller.signal, undefined, { onLifecycleEvent: (event) => events.push(event) });
+    const outcome = pending.then(() => "unexpected_success", (error: unknown) => error);
+    try {
+      await vi.advanceTimersByTimeAsync(25_000);
+      expect(await outcome).toBeInstanceOf(Error);
+      expect(events).toMatchObject([{ event: "request_started" }, { event: "response_headers", status: 200 },
+        { event: "request_aborted", stage: "reading_body" },
+        { event: "request_failed", stage: "reading_body" }]);
+      expect(JSON.stringify(events)).not.toContain("private");
+    } finally { clearTimeout(timer); vi.useRealTimers(); }
+  });
+
+  it("keeps malformed completed JSON in the SDK parse error path", async () => {
+    const events: ProviderLifecycleEvent[] = [];
+    vi.stubGlobal("fetch", vi.fn(async () => new Response('{"choices":', { status: 200,
+      headers: { "content-type": "application/json", "content-length": "11" } })));
+    await expect(createOpenRouterProvider("fake-key", "fake-model")
+      .generate([], new AbortController().signal, undefined, { onLifecycleEvent: (event) => events.push(event) }))
+      .rejects.toBeInstanceOf(SyntaxError);
+    expect(events).toMatchObject([{ event: "request_started" }, { event: "response_headers", status: 200 },
+      { event: "request_failed", stage: "reading_body" }]);
   });
 });

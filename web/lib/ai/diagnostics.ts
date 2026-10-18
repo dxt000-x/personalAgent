@@ -56,8 +56,18 @@ export class AIRequestDiagnostics {
         ? event.upstreamRequestId : undefined;
       const upstreamRequestIdStatus = event.upstreamRequestId === undefined ? "missing"
         : upstreamRequestId ? "present" : "invalid";
+      const mediaType = event.contentType?.split(";", 1)[0].trim().toLowerCase();
+      const contentType = mediaType === undefined ? "missing"
+        : mediaType === "application/json" || mediaType === "text/event-stream" ? mediaType : "other";
+      const rawLength = event.contentLength;
+      const parsedLength = typeof rawLength === "string" && /^(0|[1-9][0-9]{0,8})$/.test(rawLength)
+        ? Number(rawLength) : undefined;
+      const contentLength = rawLength === undefined ? "missing"
+        : parsedLength === undefined ? "invalid" : parsedLength <= 10_000_000 ? parsedLength : "over_limit";
+      const transferEncoding = event.transferEncoding === undefined ? "missing"
+        : event.transferEncoding.trim().toLowerCase() === "chunked" ? "chunked" : "other";
       this.providerLifecycle.push({ event: event.event, elapsedMs, status: event.status,
-        upstreamRequestIdStatus,
+        upstreamRequestIdStatus, contentType, contentLength, transferEncoding,
         ...(upstreamRequestId ? { upstreamRequestId } : {}) });
     } else if (event.event === "request_aborted" || event.event === "request_failed") {
       this.providerLifecycle.push({ event: event.event, elapsedMs, stage: event.stage });
