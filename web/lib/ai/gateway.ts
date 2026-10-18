@@ -39,10 +39,15 @@ export async function runAiGateway(
     deadline.assertRemaining(providerId === "ollama" ? 1 : MIN_CLOUD_START_MS);
     const { signal, abortOrigin, close } = deadline.attemptSignals(timeoutMs);
     diagnostics?.attempt(providerId);
+    const providerOptions = { disableThinking: input.disableThinking,
+      ...(providerId === "openrouter" && diagnostics
+        ? { onLifecycleEvent: (event: import("./types").ProviderLifecycleEvent) => diagnostics.recordProviderLifecycle(event) }
+        : {}) };
     try {
       const result = await (diagnostics
-        ? diagnostics.measure("providerDurationMs", () => provider.generate(input.messages, signal, input.systemInstruction, { disableThinking: input.disableThinking }))
-        : provider.generate(input.messages, signal, input.systemInstruction, { disableThinking: input.disableThinking }));
+        ? diagnostics.measure("providerDurationMs", () => provider.generate(input.messages, signal, input.systemInstruction,
+          providerOptions))
+        : provider.generate(input.messages, signal, input.systemInstruction, providerOptions));
       if (signal.aborted) throw new AIGatewayError("TIMEOUT");
       deadline.assertRemaining();
       return result;

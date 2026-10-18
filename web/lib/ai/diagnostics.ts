@@ -1,6 +1,6 @@
 import "server-only";
 import type { AIErrorCode, ProviderResponseFailure } from "./errors";
-import type { ProviderId, ProviderSelection, RoutingPreference } from "./types";
+import type { ProviderId, ProviderLifecycleEvent, ProviderSelection, RoutingPreference } from "./types";
 
 type Phase = "authDurationMs" | "validationDurationMs" | "memoryDurationMs" | "routeDurationMs"
   | "quotaDurationMs" | "providerDurationMs" | "dedupeDurationMs";
@@ -25,6 +25,7 @@ export class AIRequestDiagnostics {
   private memoryFailureKind?: "timeout" | "database" | "network";
   private failureOrigin?: FailureOrigin;
   private failureKind?: FailureKind;
+  private providerLifecycle: ProviderLifecycleEvent[] = [];
   private finished = false;
 
   constructor(private readonly endpoint: "chat" | "memory-candidates" | "plan") {}
@@ -45,10 +46,28 @@ export class AIRequestDiagnostics {
 
   get hasFailureKind(): boolean { return this.failureKind !== undefined; }
 
+  recordProviderLifecycle(event: ProviderLifecycleEvent): void {
+    if (this.finished || this.providerLifecycle.length >= 5) return;
+    // Only OpenRouter's fixed lifecycle events are accepted. Headers and identifiers are never logged wholesale.
+    const elapsedMs = Math.round(Math.max(0, Math.min(30_000, event.elapsedMs)));
+    if (event.event === "response_headers") {
+      if (!Number.isInteger(event.status) || event.status < 100 || event.status > 599) return;
+      const upstreamRequestId = event.upstreamRequestId && /^[A-Za-z0-9_-]{1,128}$/.test(event.upstreamRequestId)
+        ? event.upstreamRequestId : undefined;
+      this.providerLifecycle.push({ event: event.event, elapsedMs, status: event.status,
+        ...(upstreamRequestId ? { upstreamRequestId } : {}) });
+    } else if (event.event === "request_aborted" || event.event === "request_failed") {
+      this.providerLifecycle.push({ event: event.event, elapsedMs, stage: event.stage });
+    } else {
+      this.providerLifecycle.push({ event: event.event, elapsedMs });
+    }
+  }
+
   attempt(provider: ProviderId): void {
     // A later Auto candidate supersedes the previous attempt's diagnostic outcome.
     this.failureOrigin = undefined;
     this.failureKind = undefined;
+    this.providerLifecycle = [];
     this.provider = provider;
     this.attempts += 1;
   }
@@ -80,6 +99,7 @@ export class AIRequestDiagnostics {
       ...(this.memoryFailureKind ? { memoryFailureKind: this.memoryFailureKind } : {}),
       ...(this.failureOrigin ? { failureOrigin: this.failureOrigin } : {}),
       ...(this.failureKind ? { failureKind: this.failureKind } : {}),
+      ...(this.providerLifecycle.length ? { providerLifecycle: this.providerLifecycle } : {}),
       finalErrorCode,
     };
   }

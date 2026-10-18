@@ -42,6 +42,30 @@ describe("shared Gateway deadline behavior with fake providers", () => {
     } finally { deadline.close(); }
   });
 
+  it("retains a sanitized lifecycle under the same request ID and logs one final record", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    const log = vi.spyOn(console, "info").mockImplementation(() => {});
+    calls.openrouter.mockImplementation(async (_messages, _signal, _instruction, options) => {
+      options?.onLifecycleEvent?.({ event: "request_started", elapsedMs: 1 });
+      options?.onLifecycleEvent?.({ event: "response_headers", elapsedMs: 12, status: 200,
+        upstreamRequestId: "private credential with spaces" });
+      options?.onLifecycleEvent?.({ event: "response_complete", elapsedMs: 15 });
+      return { text: "private response", provider: "openrouter", model: "fake-model" };
+    });
+    const deadline = new AIRequestDeadline(new AbortController().signal);
+    const diagnostics = new AIRequestDiagnostics("plan");
+    try {
+      await runAiGateway(client, { provider: "openrouter", routingPreference: "auto", messages }, deadline, diagnostics);
+      diagnostics.finish("SUCCESS");
+      diagnostics.finish("SUCCESS");
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(log.mock.calls[0][0] as string)).toMatchObject({ requestId: diagnostics.requestId,
+        providerLifecycle: [{ event: "request_started" }, { event: "response_headers", status: 200 },
+          { event: "response_complete" }] });
+      expect(log.mock.calls[0][0]).not.toMatch(/private|credential/);
+    } finally { deadline.close(); log.mockRestore(); vi.unstubAllEnvs(); }
+  });
+
   it.each([
     { error: new OpenAI.APIConnectionTimeoutError(), code: "TIMEOUT", status: 504, origin: "sdk_timeout", kind: "sdk_timeout" },
     { error: new OpenAI.APIError(408, {}, "private prompt", new Headers()), code: "TIMEOUT", status: 504, origin: "upstream_http", kind: "upstream_http_error" },

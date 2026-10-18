@@ -50,6 +50,14 @@ export type ProviderStatus = {
   model: string;
 };
 
+export type ProviderLifecycleStage = "awaiting_headers" | "reading_body" | "response_complete";
+export type ProviderLifecycleEvent =
+  | { event: "request_started"; elapsedMs: number }
+  | { event: "response_headers"; elapsedMs: number; status: number; upstreamRequestId?: string }
+  | { event: "response_complete"; elapsedMs: number }
+  | { event: "request_aborted" | "request_failed"; elapsedMs: number; stage: ProviderLifecycleStage };
+
 export interface AIProvider {
-  generate(messages: ChatMessage[], signal: AbortSignal, systemInstruction?: string, options?: { disableThinking?: boolean }): Promise<AIChatResult>;
+  generate(messages: ChatMessage[], signal: AbortSignal, systemInstruction?: string,
+    options?: { disableThinking?: boolean; onLifecycleEvent?: (event: ProviderLifecycleEvent) => void }): Promise<AIChatResult>;
 }
