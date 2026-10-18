@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError as GeminiApiError } from "@google/genai";
 import OpenAI from "openai";
 import { runAiGateway } from "../gateway";
-import { AIGatewayError, UpstreamHttpError } from "../errors";
+import { AIGatewayError, ProviderResponseError, UpstreamHttpError } from "../errors";
 import { getProvider, getProviderStatuses } from "../provider-registry";
 import { reserveCloudAiQuota } from "../quota";
 import { AIRequestDeadline } from "../request-deadline";
@@ -43,21 +43,33 @@ describe("shared Gateway deadline behavior with fake providers", () => {
   });
 
   it.each([
-    { error: new OpenAI.APIConnectionTimeoutError(), code: "TIMEOUT", origin: "sdk_timeout" },
-    { error: new OpenAI.APIError(408, {}, "private prompt", new Headers()), code: "TIMEOUT", origin: "upstream_http" },
-    { error: new OpenAI.APIError(429, {}, "private prompt", new Headers()), code: "RATE_LIMITED", origin: "upstream_http" },
-    { error: new OpenAI.APIError(503, {}, "private prompt", new Headers()), code: "PROVIDER_ERROR", origin: "upstream_http" },
-    { error: new GeminiApiError({ status: 503, message: "private prompt" }), code: "PROVIDER_ERROR", origin: "upstream_http" },
-    { error: new AIGatewayError("PROVIDER_ERROR"), code: "PROVIDER_ERROR", origin: "unknown" },
-  ])("classifies $origin without recording raw errors", async ({ error, code, origin }) => {
+    { error: new OpenAI.APIConnectionTimeoutError(), code: "TIMEOUT", status: 504, origin: "sdk_timeout", kind: "sdk_timeout" },
+    { error: new OpenAI.APIError(408, {}, "private prompt", new Headers()), code: "TIMEOUT", status: 504, origin: "upstream_http", kind: "upstream_http_error" },
+    { error: new OpenAI.APIError(401, {}, "private prompt", new Headers()), code: "PROVIDER_AUTH_FAILED", status: 502, origin: "upstream_http", kind: "upstream_http_error" },
+    { error: new OpenAI.APIError(404, {}, "private prompt", new Headers()), code: "PROVIDER_REQUEST_REJECTED", status: 502, origin: "upstream_http", kind: "upstream_http_error" },
+    { error: new OpenAI.APIError(429, {}, "private prompt", new Headers()), code: "RATE_LIMITED", status: 429, origin: "upstream_http", kind: "upstream_http_error" },
+    { error: new OpenAI.APIError(503, {}, "private prompt", new Headers()), code: "PROVIDER_ERROR", status: 502, origin: "upstream_http", kind: "upstream_http_error" },
+    { error: new GeminiApiError({ status: 503, message: "private prompt" }), code: "PROVIDER_ERROR", status: 502, origin: "upstream_http", kind: "upstream_http_error" },
+    { error: new OpenAI.APIConnectionError({ message: "private prompt" }), code: "PROVIDER_ERROR", status: 502, origin: "unknown", kind: "sdk_connection_error" },
+    { error: new OpenAI.APIError(undefined, {}, "private prompt", new Headers()), code: "PROVIDER_ERROR", status: 502, origin: "unknown", kind: "sdk_api_error" },
+    { error: new SyntaxError("private prompt"), code: "PROVIDER_ERROR", status: 502, origin: "unknown", kind: "response_parse_error" },
+    { error: new ProviderResponseError("empty_choices"), code: "PROVIDER_ERROR", status: 502, origin: "unknown", kind: "empty_choices" },
+    { error: new ProviderResponseError("missing_content"), code: "PROVIDER_ERROR", status: 502, origin: "unknown", kind: "missing_content" },
+    { error: new ProviderResponseError("empty_content"), code: "PROVIDER_ERROR", status: 502, origin: "unknown", kind: "empty_content" },
+    { error: new ProviderResponseError("malformed_response"), code: "PROVIDER_ERROR", status: 502, origin: "unknown", kind: "malformed_response" },
+    { error: new AIGatewayError("PROVIDER_ERROR"), code: "PROVIDER_ERROR", status: 502, origin: "unknown", kind: "internal_gateway_error" },
+    { error: new Error("private prompt"), code: "PROVIDER_ERROR", status: 502, origin: "unknown", kind: "unexpected_provider_error" },
+  ])("classifies $kind without recording raw errors", async ({ error, code, status, origin, kind }) => {
     calls.openrouter.mockRejectedValue(error);
     const deadline = new AIRequestDeadline(new AbortController().signal);
     const diagnostics = new AIRequestDiagnostics("plan");
     try {
       await expect(runAiGateway(client, { provider: "openrouter", routingPreference: "auto", messages }, deadline, diagnostics))
-        .rejects.toMatchObject({ code });
-      const record = diagnostics.snapshot(code as "TIMEOUT" | "PROVIDER_ERROR" | "RATE_LIMITED");
-      expect(record).toMatchObject({ failureOrigin: origin, attemptNumber: 1 });
+        .rejects.toMatchObject({ code, status });
+      const record = diagnostics.snapshot(code as "TIMEOUT" | "PROVIDER_ERROR" | "RATE_LIMITED"
+        | "PROVIDER_AUTH_FAILED" | "PROVIDER_REQUEST_REJECTED");
+      expect(record).toMatchObject({ failureOrigin: origin, failureKind: kind,
+        attemptNumber: 1, finalErrorCode: code });
       expect(JSON.stringify(record)).not.toContain("private prompt");
       expect(JSON.stringify(record)).not.toContain("sk-test-secret");
     } finally { deadline.close(); }
@@ -70,7 +82,8 @@ describe("shared Gateway deadline behavior with fake providers", () => {
     try {
       await expect(runAiGateway(client, { provider: "openrouter", routingPreference: "auto", messages }, deadline, diagnostics))
         .rejects.toMatchObject({ code: "PROVIDER_ERROR", status: 502 });
-      expect(diagnostics.snapshot("PROVIDER_ERROR")).toMatchObject({ failureOrigin: "unknown" });
+      expect(diagnostics.snapshot("PROVIDER_ERROR")).toMatchObject({ failureOrigin: "unknown",
+        failureKind: "internal_gateway_error" });
     } finally { deadline.close(); }
   });
 
@@ -96,7 +109,7 @@ describe("shared Gateway deadline behavior with fake providers", () => {
       if (first === "client") { clientAbort.abort(); attemptAbort.abort(); }
       else { attemptAbort.abort(); clientAbort.abort(); }
       await expect(pending).rejects.toMatchObject({ code: "TIMEOUT", status: 504 });
-      expect(diagnostics.snapshot("TIMEOUT")).toMatchObject({ failureOrigin: origin });
+      expect(diagnostics.snapshot("TIMEOUT")).toMatchObject({ failureOrigin: origin, failureKind: origin });
     } finally { deadline.close(); }
   });
 
@@ -110,7 +123,8 @@ describe("shared Gateway deadline behavior with fake providers", () => {
     try {
       await expect(runAiGateway(client, { provider: "openrouter", routingPreference: "auto", messages }, deadline, diagnostics))
         .rejects.toMatchObject({ code: "TIMEOUT" });
-      expect(diagnostics.snapshot("TIMEOUT")).toMatchObject({ failureOrigin: "unknown" });
+      expect(diagnostics.snapshot("TIMEOUT")).toMatchObject({ failureOrigin: "unknown",
+        failureKind: "abort_race_unknown" });
     } finally { deadline.close(); }
   });
 
@@ -121,7 +135,8 @@ describe("shared Gateway deadline behavior with fake providers", () => {
     try {
       await expect(runAiGateway(client, { provider: "ollama", routingPreference: "auto", messages }, deadline, diagnostics))
         .rejects.toMatchObject({ code: "RATE_LIMITED", status: 429 });
-      expect(diagnostics.snapshot("RATE_LIMITED")).toMatchObject({ failureOrigin: "upstream_http" });
+      expect(diagnostics.snapshot("RATE_LIMITED")).toMatchObject({ failureOrigin: "upstream_http",
+        failureKind: "upstream_http_error" });
     } finally { deadline.close(); }
   });
   it("times out explicit Ollama without reaching cloud", async () => {

@@ -135,6 +135,7 @@ describe("POST /api/agent/plan", () => {
     const record = JSON.parse(log.mock.calls[0][0] as string);
     expect(record).toMatchObject({ endpoint: "plan", provider: "openrouter", routingMode: "auto",
       attemptNumber: 1, finalErrorCode: "TIMEOUT", failureOrigin: "shared_deadline",
+      failureKind: "shared_deadline",
       providerDurationMs: expect.any(Number) });
     expect(record.providerDurationMs).toBeGreaterThanOrEqual(AI_REQUEST_DEADLINE_MS - 100);
     expect(record.totalDurationMs).toBeGreaterThanOrEqual(AI_REQUEST_DEADLINE_MS);
@@ -162,7 +163,7 @@ describe("POST /api/agent/plan", () => {
     expect(runAiGateway).not.toHaveBeenCalled();
     expect(log).toHaveBeenCalledTimes(1);
     expect(JSON.parse(log.mock.calls[0][0] as string)).toMatchObject({
-      finalErrorCode: "CLIENT_ABORTED", failureOrigin: "client_abort",
+      finalErrorCode: "CLIENT_ABORTED", failureOrigin: "client_abort", failureKind: "client_abort",
     });
     expect(log.mock.calls[0][0]).not.toContain("private task");
   });
@@ -225,6 +226,8 @@ describe("POST /api/agent/plan", () => {
   it.each(["not JSON", '{"version":1,"goal":"三天学习计划","steps":[',
     JSON.stringify({ ...plan, requiresConfirmation: false })])(
     "rejects invalid model output with a fixed safe error", async (text) => {
+      vi.stubEnv("NODE_ENV", "development");
+      const log = vi.spyOn(console, "info").mockImplementation(() => {});
       vi.mocked(runAiGateway).mockResolvedValue({ text, provider: "ollama", model: "fake-local" });
       const response = await POST(request());
       const body = await response.json();
@@ -232,6 +235,11 @@ describe("POST /api/agent/plan", () => {
       expect(body.error.code).toBe("PROVIDER_ERROR");
       expect(JSON.stringify(body)).not.toContain(text);
       expect(body.plan).toBeUndefined();
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(log.mock.calls[0][0] as string)).toMatchObject({
+        finalErrorCode: "PROVIDER_ERROR", failureKind: "plan_invalid_output",
+      });
+      expect(log.mock.calls[0][0]).not.toContain(text);
     },
   );
 
@@ -243,11 +251,18 @@ describe("POST /api/agent/plan", () => {
   });
 
   it("does not expose unexpected SDK error details", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    const log = vi.spyOn(console, "info").mockImplementation(() => {});
     vi.mocked(runAiGateway).mockRejectedValue(new Error("secret provider request detail"));
     const response = await POST(request());
     expect(response.status).toBe(502);
     const body = await response.json();
     expect(body.error.code).toBe("PROVIDER_ERROR");
     expect(JSON.stringify(body)).not.toContain("secret provider request detail");
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(log.mock.calls[0][0] as string)).toMatchObject({
+      finalErrorCode: "PROVIDER_ERROR", failureKind: "route_unexpected_error",
+    });
+    expect(log.mock.calls[0][0]).not.toContain("secret provider request detail");
   });
 });

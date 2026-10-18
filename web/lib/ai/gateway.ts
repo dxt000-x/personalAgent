@@ -2,7 +2,7 @@ import "server-only";
 import { ApiError as GeminiApiError } from "@google/genai";
 import OpenAI from "openai";
 import type { createClient } from "@/lib/supabase/server";
-import { AIGatewayError, UpstreamHttpError, providerFailure } from "./errors";
+import { AIGatewayError, ProviderResponseError, UpstreamHttpError, providerFailure } from "./errors";
 import { AUTO_PROVIDER_TIMEOUT_MS, PROVIDER_TIMEOUT_MS } from "./limits";
 import { AIRequestDeadline, MIN_CLOUD_START_MS, MIN_FALLBACK_WINDOW_MS } from "./request-deadline";
 import { AIRequestDiagnostics } from "./diagnostics";
@@ -55,9 +55,20 @@ export async function runAiGateway(
         const sdkTimeout = error instanceof OpenAI.APIConnectionTimeoutError
           || (error instanceof Error && error.name === "TimeoutError");
         const aborted = abortOrigin();
-        diagnostics.setFailureOrigin(aborted
+        const origin = aborted
           ? httpError || sdkTimeout ? "unknown" : aborted
-          : httpError ? "upstream_http" : sdkTimeout ? "sdk_timeout" : "unknown");
+          : httpError ? "upstream_http" : sdkTimeout ? "sdk_timeout" : "unknown";
+        diagnostics.setFailureOrigin(origin);
+        diagnostics.setFailureKind(aborted
+          ? origin === "unknown" || aborted === "unknown" ? "abort_race_unknown" : aborted
+          : error instanceof ProviderResponseError ? error.failure
+            : httpError ? "upstream_http_error"
+              : sdkTimeout ? "sdk_timeout"
+                : error instanceof OpenAI.APIConnectionError ? "sdk_connection_error"
+                  : error instanceof OpenAI.APIError ? "sdk_api_error"
+                    : error instanceof SyntaxError ? "response_parse_error"
+                      : error instanceof AIGatewayError ? "internal_gateway_error"
+                        : "unexpected_provider_error");
       }
       throw safeError;
     } finally {

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createOpenRouterProvider } from "../openrouter-provider";
 import { MAX_OUTPUT_TOKENS, PROVIDER_TIMEOUT_MS } from "../limits";
+import { ProviderResponseError } from "../errors";
 
 const mocks = vi.hoisted(() => ({ create: vi.fn(), config: vi.fn() }));
 vi.mock("openai", () => ({ default: class {
@@ -23,6 +24,21 @@ describe("OpenRouter provider with an offline SDK mock", () => {
     const provider = createOpenRouterProvider("fake-key", "fake-model");
     await expect(provider.generate([{ role: "user", content: "private task" }], new AbortController().signal))
       .rejects.toMatchObject({ code: "PROVIDER_ERROR", status: 502 });
+  });
+
+  it.each([
+    { response: { choices: [] }, failure: "empty_choices" },
+    { response: { choices: [{}] }, failure: "missing_content" },
+    { response: { choices: [{ message: { content: null } }] }, failure: "missing_content" },
+    { response: { choices: [{ message: { content: "   " } }] }, failure: "empty_content" },
+    { response: { choices: [{ message: { content: 42 } }] }, failure: "malformed_response" },
+    { response: {}, failure: "malformed_response" },
+  ])("classifies $failure without exposing response content", async ({ response, failure }) => {
+    mocks.create.mockResolvedValue(response);
+    const provider = createOpenRouterProvider("fake-key", "fake-model");
+    const result = provider.generate([{ role: "user", content: "private task" }], new AbortController().signal);
+    await expect(result).rejects.toBeInstanceOf(ProviderResponseError);
+    await expect(result).rejects.toMatchObject({ failure, code: "PROVIDER_ERROR", status: 502 });
   });
 
   it("requests a complete non-streaming response and forwards the attempt signal", async () => {

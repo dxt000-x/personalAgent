@@ -48,6 +48,15 @@ export class AIGatewayError extends Error {
 /** Raised only after a provider adapter has received a non-success HTTP response. */
 export class UpstreamHttpError extends AIGatewayError {}
 
+export type ProviderResponseFailure = "empty_choices" | "missing_content" | "empty_content" | "malformed_response";
+
+/** Safe structural classification; never carries response content or SDK details. */
+export class ProviderResponseError extends AIGatewayError {
+  constructor(readonly failure: ProviderResponseFailure) {
+    super("PROVIDER_ERROR");
+  }
+}
+
 export function upstreamHttpFailure(status: number, signal: AbortSignal): UpstreamHttpError {
   const safeError = providerFailure({ status }, signal);
   return new UpstreamHttpError(safeError.code, safeError.status);

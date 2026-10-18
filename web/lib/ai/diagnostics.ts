@@ -1,5 +1,5 @@
 import "server-only";
-import type { AIErrorCode } from "./errors";
+import type { AIErrorCode, ProviderResponseFailure } from "./errors";
 import type { ProviderId, ProviderSelection, RoutingPreference } from "./types";
 
 type Phase = "authDurationMs" | "validationDurationMs" | "memoryDurationMs" | "routeDurationMs"
@@ -7,6 +7,11 @@ type Phase = "authDurationMs" | "validationDurationMs" | "memoryDurationMs" | "r
 type FinalCode = AIErrorCode | "SUCCESS" | "CLIENT_ABORTED";
 export type FailureOrigin = "provider_attempt_timeout" | "shared_deadline" | "client_abort"
   | "sdk_timeout" | "upstream_http" | "unknown";
+export type FailureKind = ProviderResponseFailure | "provider_attempt_timeout" | "shared_deadline"
+  | "client_abort" | "abort_race_unknown" | "timeout_source_unknown" | "sdk_timeout" | "upstream_http_error"
+  | "sdk_connection_error" | "response_parse_error" | "sdk_api_error"
+  | "internal_gateway_error" | "unexpected_provider_error" | "plan_invalid_output"
+  | "route_unexpected_error";
 
 /** Allowlisted operational fields only. Never add request, response, headers or Memory content here. */
 export class AIRequestDiagnostics {
@@ -19,6 +24,7 @@ export class AIRequestDiagnostics {
   private attempts = 0;
   private memoryFailureKind?: "timeout" | "database" | "network";
   private failureOrigin?: FailureOrigin;
+  private failureKind?: FailureKind;
   private finished = false;
 
   constructor(private readonly endpoint: "chat" | "memory-candidates" | "plan") {}
@@ -33,11 +39,16 @@ export class AIRequestDiagnostics {
 
   setFailureOrigin(origin: FailureOrigin): void { this.failureOrigin = origin; }
 
+  setFailureKind(kind: FailureKind): void { this.failureKind = kind; }
+
   get hasFailureOrigin(): boolean { return this.failureOrigin !== undefined; }
+
+  get hasFailureKind(): boolean { return this.failureKind !== undefined; }
 
   attempt(provider: ProviderId): void {
     // A later Auto candidate supersedes the previous attempt's diagnostic outcome.
     this.failureOrigin = undefined;
+    this.failureKind = undefined;
     this.provider = provider;
     this.attempts += 1;
   }
@@ -68,6 +79,7 @@ export class AIRequestDiagnostics {
       attemptNumber: this.attempts,
       ...(this.memoryFailureKind ? { memoryFailureKind: this.memoryFailureKind } : {}),
       ...(this.failureOrigin ? { failureOrigin: this.failureOrigin } : {}),
+      ...(this.failureKind ? { failureKind: this.failureKind } : {}),
       finalErrorCode,
     };
   }

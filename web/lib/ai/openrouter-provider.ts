@@ -1,6 +1,6 @@
 import "server-only";
 import OpenAI from "openai";
-import { AIGatewayError } from "./errors";
+import { ProviderResponseError } from "./errors";
 import { MAX_OUTPUT_CHARACTERS, MAX_OUTPUT_TOKENS, PROVIDER_TIMEOUT_MS } from "./limits";
 import type { AIProvider } from "./types";
 
@@ -29,8 +29,13 @@ export function createOpenRouterProvider(apiKey: string, model: string): AIProvi
         },
         { signal },
       );
-      const text = response.choices[0]?.message.content?.trim();
-      if (!text) throw new AIGatewayError("PROVIDER_ERROR");
+      if (!response || !Array.isArray(response.choices)) throw new ProviderResponseError("malformed_response");
+      if (response.choices.length === 0) throw new ProviderResponseError("empty_choices");
+      const content = response.choices[0]?.message?.content;
+      if (content === null || content === undefined) throw new ProviderResponseError("missing_content");
+      if (typeof content !== "string") throw new ProviderResponseError("malformed_response");
+      const text = content.trim();
+      if (!text) throw new ProviderResponseError("empty_content");
       return {
         text: text.slice(0, MAX_OUTPUT_CHARACTERS),
         provider: "openrouter",

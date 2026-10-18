@@ -41,7 +41,10 @@ export async function POST(request: Request): Promise<Response> {
       }, deadline, diagnostics);
       deadline.assertRemaining();
       const plan = parseAgentPlanText(result.text);
-      if (!plan) throw new AIGatewayError("PROVIDER_ERROR");
+      if (!plan) {
+        diagnostics.setFailureKind("plan_invalid_output");
+        throw new AIGatewayError("PROVIDER_ERROR");
+      }
       const planAuthorization = issuePlanAuthorization(userId, plan);
       return aiJson({ plan, planAuthorization });
     })());
@@ -52,6 +55,14 @@ export async function POST(request: Request): Promise<Response> {
     finalCode = request.signal.aborted ? "CLIENT_ABORTED" : safeError.code;
     if (!diagnostics.hasFailureOrigin && safeError.code === "TIMEOUT") {
       diagnostics.setFailureOrigin(deadline.abortOrigin ?? "unknown");
+    }
+    if (!diagnostics.hasFailureKind) {
+      if (safeError.code === "TIMEOUT") {
+        const origin = deadline.abortOrigin;
+        diagnostics.setFailureKind(origin && origin !== "unknown" ? origin : "timeout_source_unknown");
+      } else if (safeError.code === "PROVIDER_ERROR") {
+        diagnostics.setFailureKind("route_unexpected_error");
+      }
     }
     return aiErrorResponse(safeError);
   } finally {
