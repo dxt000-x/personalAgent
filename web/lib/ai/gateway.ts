@@ -61,7 +61,7 @@ export async function runAiGateway(
           || (error instanceof Error && error.name === "TimeoutError");
         const aborted = abortOrigin();
         if (error instanceof OpenAI.APIError && typeof error.status === "number") {
-          diagnostics.recordUpstreamError(error.error);
+          diagnostics.recordUpstreamError(error.status, error.error);
         }
         const origin = aborted
           ? httpError || sdkTimeout ? "unknown" : aborted

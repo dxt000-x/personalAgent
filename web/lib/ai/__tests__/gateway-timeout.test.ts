@@ -44,7 +44,7 @@ describe("shared Gateway deadline behavior with fake providers", () => {
       const record = diagnostics.snapshot("RATE_LIMITED");
       expect(record).toMatchObject({ failureOrigin: "upstream_http", failureKind: "upstream_http_error",
         attemptNumber: 1, fallback: { candidateStatus: "not_evaluated_explicit", decision: "explicit_no_fallback" },
-        upstreamError: { payloadStatus: "structured", type: "rate_limit", code: "capacity_exceeded" } });
+        upstreamError: { status: 429, payloadStatus: "structured", type: "rate_limit", code: "capacity_exceeded" } });
       for (const id of ids.filter((id) => id !== "openrouter")) expect(calls[id]).not.toHaveBeenCalled();
       expect(JSON.stringify(record)).not.toContain("private upstream details");
     } finally { deadline.close(); }
@@ -59,7 +59,7 @@ describe("shared Gateway deadline behavior with fake providers", () => {
     try {
       await expect(runAiGateway(client, { provider: "openrouter", routingPreference: "auto", messages },
         deadline, diagnostics)).rejects.toMatchObject({ code: "RATE_LIMITED" });
-      expect(diagnostics.snapshot("RATE_LIMITED").upstreamError).toEqual({ payloadStatus: "structured" });
+      expect(diagnostics.snapshot("RATE_LIMITED").upstreamError).toEqual({ status: 429, payloadStatus: "structured" });
       expect(JSON.stringify(diagnostics.snapshot("RATE_LIMITED"))).not.toContain("private");
     } finally { deadline.close(); }
   });
@@ -72,8 +72,40 @@ describe("shared Gateway deadline behavior with fake providers", () => {
     try {
       await expect(runAiGateway(client, { provider: "openrouter", routingPreference: "auto", messages },
         deadline, diagnostics)).rejects.toMatchObject({ code: "RATE_LIMITED" });
-      expect(diagnostics.snapshot("RATE_LIMITED").upstreamError).toEqual({ payloadStatus: "unavailable_or_invalid" });
+      expect(diagnostics.snapshot("RATE_LIMITED").upstreamError).toEqual({ status: 429, payloadStatus: "unavailable_or_invalid" });
       expect(JSON.stringify(diagnostics.snapshot("RATE_LIMITED"))).not.toContain("private");
+    } finally { deadline.close(); }
+  });
+
+  it("records a DeepSeek upstream status and only allowlisted parsed error fields", async () => {
+    calls.deepseek.mockRejectedValue(new OpenAI.BadRequestError(400,
+      { type: "unknown_error", code: "invalid_request_error", param: "model", message: "private upstream details" },
+      "private upstream details", new Headers()));
+    const deadline = new AIRequestDeadline(new AbortController().signal);
+    const diagnostics = new AIRequestDiagnostics("plan");
+    try {
+      await expect(runAiGateway(client, { provider: "deepseek", routingPreference: "auto", messages },
+        deadline, diagnostics)).rejects.toMatchObject({ code: "PROVIDER_REQUEST_REJECTED", status: 502 });
+      const record = diagnostics.snapshot("PROVIDER_REQUEST_REJECTED");
+      expect(record).toMatchObject({ provider: "deepseek", failureOrigin: "upstream_http",
+        upstreamError: { status: 400, payloadStatus: "structured", type: "unknown_error",
+          code: "invalid_request_error", param: "model" } });
+      expect(JSON.stringify(record)).not.toContain("private upstream details");
+    } finally { deadline.close(); }
+  });
+
+  it("omits untrusted or missing DeepSeek error fields while preserving upstream status", async () => {
+    calls.deepseek.mockRejectedValue(new OpenAI.UnprocessableEntityError(422,
+      { type: "private value", code: "private\ncode", param: "sk-test-sensitive", message: "private detail" },
+      "private detail", new Headers()));
+    const deadline = new AIRequestDeadline(new AbortController().signal);
+    const diagnostics = new AIRequestDiagnostics("plan");
+    try {
+      await expect(runAiGateway(client, { provider: "deepseek", routingPreference: "auto", messages },
+        deadline, diagnostics)).rejects.toMatchObject({ code: "PROVIDER_REQUEST_REJECTED", status: 502 });
+      expect(diagnostics.snapshot("PROVIDER_REQUEST_REJECTED").upstreamError).toEqual({
+        status: 422, payloadStatus: "structured" });
+      expect(JSON.stringify(diagnostics.snapshot("PROVIDER_REQUEST_REJECTED"))).not.toMatch(/private|sk-test/);
     } finally { deadline.close(); }
   });
 

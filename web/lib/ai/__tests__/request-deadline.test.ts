@@ -80,6 +80,19 @@ describe("AI request deadline and safe diagnostics", () => {
     expect(JSON.stringify(record)).not.toContain("fake private response");
   });
 
+  it("omits invalid upstream statuses and keeps missing payload fields absent", () => {
+    const trace = new AIRequestDiagnostics("plan");
+    trace.recordUpstreamError(200, { type: "unknown_error", code: "invalid_request_error" });
+    expect(trace.snapshot("PROVIDER_REQUEST_REJECTED")).not.toHaveProperty("upstreamError");
+    trace.recordUpstreamError(400, { message: "private detail", param: null });
+    expect(trace.snapshot("PROVIDER_REQUEST_REJECTED").upstreamError).toEqual({
+      status: 400, payloadStatus: "structured" });
+    trace.recordUpstreamError(422, undefined);
+    expect(trace.snapshot("PROVIDER_REQUEST_REJECTED").upstreamError).toEqual({
+      status: 422, payloadStatus: "unavailable_or_invalid" });
+    expect(JSON.stringify(trace.snapshot("PROVIDER_REQUEST_REJECTED"))).not.toContain("private detail");
+  });
+
   it("includes the elapsed active provider phase when the request times out first", () => {
     const trace = new AIRequestDiagnostics("plan");
     trace.attempt("openrouter");

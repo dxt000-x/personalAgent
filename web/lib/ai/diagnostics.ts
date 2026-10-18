@@ -29,6 +29,11 @@ function safeUpstreamLabel(value: unknown): string | undefined {
   return typeof value === "string" && /^[A-Za-z0-9_.-]{1,64}$/.test(value) ? value : undefined;
 }
 
+function safeUpstreamParam(value: unknown): string | undefined {
+  return typeof value === "string" && ["model", "messages", "max_tokens", "stream", "temperature", "response_format"]
+    .includes(value) ? value : undefined;
+}
+
 function safeRateLimitNumber(value: string | number | undefined): number | undefined {
   return typeof value === "string" && /^(0|[1-9][0-9]{0,11})$/.test(value) ? Number(value) : undefined;
 }
@@ -57,8 +62,8 @@ export class AIRequestDiagnostics {
   private fallback?: { candidateStatus: "not_evaluated_explicit" | "available" | "unavailable";
     decision: "explicit_no_fallback" | "auto_candidate_available" | "auto_no_candidate"
       | "auto_error_ineligible" | "auto_attempted" };
-  private upstreamError?: { payloadStatus: "structured" | "unavailable_or_invalid";
-    type?: string; code?: string };
+  private upstreamError?: { status: number; payloadStatus: "structured" | "unavailable_or_invalid";
+    type?: string; code?: string; param?: string };
   private providerLifecycle: ProviderLifecycleEvent[] = [];
   private finished = false;
 
@@ -81,15 +86,17 @@ export class AIRequestDiagnostics {
     this.fallback = { candidateStatus, decision };
   }
 
-  recordUpstreamError(value: unknown): void {
+  recordUpstreamError(status: number, value: unknown): void {
+    if (!Number.isInteger(status) || status < 400 || status > 599) return;
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
-      this.upstreamError = { payloadStatus: "unavailable_or_invalid" };
+      this.upstreamError = { status, payloadStatus: "unavailable_or_invalid" };
       return;
     }
     const error = value as Record<string, unknown>;
-    this.upstreamError = { payloadStatus: "structured",
+    this.upstreamError = { status, payloadStatus: "structured",
       ...(safeUpstreamLabel(error.type) ? { type: safeUpstreamLabel(error.type) } : {}),
-      ...(safeUpstreamLabel(error.code) ? { code: safeUpstreamLabel(error.code) } : {}) };
+      ...(safeUpstreamLabel(error.code) ? { code: safeUpstreamLabel(error.code) } : {}),
+      ...(safeUpstreamParam(error.param) ? { param: safeUpstreamParam(error.param) } : {}) };
   }
 
   get hasFailureOrigin(): boolean { return this.failureOrigin !== undefined; }
