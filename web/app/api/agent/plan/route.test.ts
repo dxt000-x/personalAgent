@@ -122,7 +122,9 @@ describe("POST /api/agent/plan", () => {
       return pending;
     });
 
-    const responsePromise = POST(request());
+    const responsePromise = POST(request({
+      provider: "openrouter", messages: [{ role: "user", content: "private task sk-test-secret" }],
+    }));
     await started;
     expect(log).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(AI_REQUEST_DEADLINE_MS);
@@ -136,7 +138,8 @@ describe("POST /api/agent/plan", () => {
       providerDurationMs: expect.any(Number) });
     expect(record.providerDurationMs).toBeGreaterThanOrEqual(AI_REQUEST_DEADLINE_MS - 100);
     expect(record.totalDurationMs).toBeGreaterThanOrEqual(AI_REQUEST_DEADLINE_MS);
-    expect(JSON.stringify(record)).not.toContain("帮我制定学习计划");
+    expect(JSON.stringify(record)).not.toContain("private task");
+    expect(JSON.stringify(record)).not.toContain("sk-test-secret");
 
     finishProvider({ text: JSON.stringify(plan), provider: "openrouter", model: "fake-cloud" });
     await vi.advanceTimersByTimeAsync(1);
@@ -177,6 +180,29 @@ describe("POST /api/agent/plan", () => {
   });
 
   it.each([
+    { task: "制定三天学习计划", count: 3 },
+    { task: "制定复杂项目交付计划", count: 8 },
+  ])("returns a complete valid plan for $task", async ({ task, count }) => {
+    const generated = {
+      ...plan,
+      goal: task,
+      steps: Array.from({ length: count }, (_, index) => ({
+        id: `step-${index + 1}`,
+        title: `阶段 ${index + 1}`,
+        description: `完成第 ${index + 1} 阶段。`,
+        status: "pending",
+      })),
+    };
+    vi.mocked(runAiGateway).mockResolvedValue({
+      text: JSON.stringify(generated), provider: "openrouter", model: "fake-cloud",
+    });
+    const response = await POST(request({ provider: "openrouter", messages: [{ role: "user", content: task }] }));
+    expect(response.status).toBe(200);
+    expect((await response.json()).plan.steps).toHaveLength(count);
+    expect(issuePlanAuthorization).toHaveBeenCalledWith("user-a", generated);
+  });
+
+  it.each([
     { provider: "auto", messages: [{ role: "user", content: "" }] },
     { provider: "auto", messages: [{ role: "user", content: "x".repeat(1001) }] },
     { provider: "auto", messages: [{ role: "user", content: "one" }, { role: "user", content: "two" }] },
@@ -196,7 +222,8 @@ describe("POST /api/agent/plan", () => {
     expect(runAiGateway).not.toHaveBeenCalled();
   });
 
-  it.each(["not JSON", JSON.stringify({ ...plan, requiresConfirmation: false })])(
+  it.each(["not JSON", '{"version":1,"goal":"三天学习计划","steps":[',
+    JSON.stringify({ ...plan, requiresConfirmation: false })])(
     "rejects invalid model output with a fixed safe error", async (text) => {
       vi.mocked(runAiGateway).mockResolvedValue({ text, provider: "ollama", model: "fake-local" });
       const response = await POST(request());
