@@ -60,6 +60,9 @@ export async function runAiGateway(
         const sdkTimeout = error instanceof OpenAI.APIConnectionTimeoutError
           || (error instanceof Error && error.name === "TimeoutError");
         const aborted = abortOrigin();
+        if (error instanceof OpenAI.APIError && typeof error.status === "number") {
+          diagnostics.recordUpstreamError(error.error);
+        }
         const origin = aborted
           ? httpError || sdkTimeout ? "unknown" : aborted
           : httpError ? "upstream_http" : sdkTimeout ? "sdk_timeout" : "unknown";
@@ -81,12 +84,17 @@ export async function runAiGateway(
     }
   }
 
-  if (input.provider !== "auto") return generate(input.provider, PROVIDER_TIMEOUT_MS);
+  if (input.provider !== "auto") {
+    diagnostics?.setFallback("not_evaluated_explicit", "explicit_no_fallback");
+    return generate(input.provider, PROVIDER_TIMEOUT_MS);
+  }
 
   deadline.assertRemaining();
   const route = await (diagnostics
     ? diagnostics.measure("routeDurationMs", () => getAutoRoute({ preference: input.routingPreference, signal: deadline.signal }))
     : getAutoRoute({ preference: input.routingPreference, signal: deadline.signal }));
+  diagnostics?.setFallback(route.length > 1 ? "available" : "unavailable",
+    route.length > 1 ? "auto_candidate_available" : "auto_no_candidate");
   deadline.assertRemaining();
   let lastError: AIGatewayError | undefined;
   for (let index = 0; index < route.length; index += 1) {
@@ -102,7 +110,11 @@ export async function runAiGateway(
     } catch (error) {
       const safeError = error instanceof AIGatewayError ? error : new AIGatewayError("PROVIDER_ERROR");
       lastError = safeError;
+      if (index < route.length - 1 && !["PROVIDER_ERROR", "TIMEOUT"].includes(safeError.code)) {
+        diagnostics?.setFallback("available", "auto_error_ineligible");
+      }
       if (index >= route.length - 1 || !["PROVIDER_ERROR", "TIMEOUT"].includes(safeError.code)) throw safeError;
+      diagnostics?.setFallback("available", "auto_attempted");
       deadline.assertRemaining();
     }
   }

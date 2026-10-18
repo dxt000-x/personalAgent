@@ -57,6 +57,8 @@ export type ProviderLifecycleEvent =
   | { event: "response_headers"; elapsedMs: number; status: number; upstreamRequestId?: string;
       openrouterGenerationId?: string;
       contentType?: string; contentLength?: string | number; transferEncoding?: string;
+      retryAfter?: string; retryAfterSeconds?: number;
+      rateLimitLimit?: string | number; rateLimitRemaining?: string | number; rateLimitReset?: string | number;
       upstreamRequestIdStatus?: "present" | "missing" | "invalid";
       openrouterGenerationIdStatus?: "present" | "missing" | "invalid" }
   | { event: "response_complete"; elapsedMs: number }

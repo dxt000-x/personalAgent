@@ -7,6 +7,39 @@ import type { ProviderLifecycleEvent } from "../types";
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 
 describe("OpenRouter lifecycle with the installed SDK and an offline fetch", () => {
+  it("records allowlisted 429 headers without reading the error body twice", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    const log = vi.spyOn(console, "info").mockImplementation(() => {});
+    const response = new Response(JSON.stringify({ error: { type: "rate_limit", code: "capacity_exceeded",
+      message: "private upstream details" } }), { status: 429, headers: {
+      "content-type": "application/json", "retry-after": "12", "x-ratelimit-limit": "100",
+      "x-ratelimit-remaining": "0", "x-ratelimit-reset": "123456",
+      "x-ratelimit-private": "private credential" } });
+    const bodyRead = vi.spyOn(response, "text");
+    vi.stubGlobal("fetch", vi.fn(async () => response));
+    const diagnostics = new AIRequestDiagnostics("plan");
+    diagnostics.attempt("openrouter");
+    await expect(createOpenRouterProvider("fake-key", "fake-model")
+      .generate([{ role: "user", content: "private prompt" }], new AbortController().signal, undefined,
+        { onLifecycleEvent: (event) => diagnostics.recordProviderLifecycle(event) })).rejects.toMatchObject({ status: 429 });
+    diagnostics.finish("RATE_LIMITED");
+    expect(bodyRead).toHaveBeenCalledTimes(1);
+    const logged = JSON.parse(log.mock.calls[0][0] as string);
+    expect(logged.providerLifecycle[1]).toMatchObject({ status: 429, retryAfterSeconds: 12,
+      rateLimitLimit: 100, rateLimitRemaining: 0, rateLimitReset: 123456 });
+    expect(log.mock.calls[0][0]).not.toMatch(/private|fake-key|capacity_exceeded|x-ratelimit-private/);
+  });
+
+  it("drops malformed or oversized rate-limit header values", () => {
+    const diagnostics = new AIRequestDiagnostics("plan");
+    diagnostics.recordProviderLifecycle({ event: "response_headers", elapsedMs: 1, status: 429,
+      retryAfter: "private token", rateLimitLimit: "999999999999999999999",
+      rateLimitRemaining: "secret", rateLimitReset: "invalid" });
+    const record = JSON.stringify(diagnostics.snapshot("RATE_LIMITED"));
+    expect(record).not.toMatch(/private|secret|999999999999999999999/);
+    expect(diagnostics.snapshot("RATE_LIMITED").providerLifecycle?.[0]).toMatchObject({ status: 429 });
+  });
+
   it("reports the installed SDK's serialized stream:false without exposing other request fields", async () => {
     vi.stubEnv("NODE_ENV", "development");
     const log = vi.spyOn(console, "info").mockImplementation(() => {});

@@ -32,6 +32,51 @@ beforeEach(() => {
 });
 
 describe("shared Gateway deadline behavior with fake providers", () => {
+  it("keeps explicit OpenRouter 429 without fallback and logs only safe parsed error labels", async () => {
+    calls.openrouter.mockRejectedValue(new OpenAI.RateLimitError(429,
+      { type: "rate_limit", code: "capacity_exceeded", message: "private upstream details" },
+      "private upstream details", new Headers()));
+    const deadline = new AIRequestDeadline(new AbortController().signal);
+    const diagnostics = new AIRequestDiagnostics("plan");
+    try {
+      await expect(runAiGateway(client, { provider: "openrouter", routingPreference: "auto", messages },
+        deadline, diagnostics)).rejects.toMatchObject({ code: "RATE_LIMITED", status: 429 });
+      const record = diagnostics.snapshot("RATE_LIMITED");
+      expect(record).toMatchObject({ failureOrigin: "upstream_http", failureKind: "upstream_http_error",
+        attemptNumber: 1, fallback: { candidateStatus: "not_evaluated_explicit", decision: "explicit_no_fallback" },
+        upstreamError: { payloadStatus: "structured", type: "rate_limit", code: "capacity_exceeded" } });
+      for (const id of ids.filter((id) => id !== "openrouter")) expect(calls[id]).not.toHaveBeenCalled();
+      expect(JSON.stringify(record)).not.toContain("private upstream details");
+    } finally { deadline.close(); }
+  });
+
+  it("does not log unsafe upstream error labels or claim a body-read failure", async () => {
+    calls.openrouter.mockRejectedValue(new OpenAI.RateLimitError(429,
+      { type: "private value / token", code: "private\ncode", message: "private upstream details" },
+      "private upstream details", new Headers()));
+    const deadline = new AIRequestDeadline(new AbortController().signal);
+    const diagnostics = new AIRequestDiagnostics("plan");
+    try {
+      await expect(runAiGateway(client, { provider: "openrouter", routingPreference: "auto", messages },
+        deadline, diagnostics)).rejects.toMatchObject({ code: "RATE_LIMITED" });
+      expect(diagnostics.snapshot("RATE_LIMITED").upstreamError).toEqual({ payloadStatus: "structured" });
+      expect(JSON.stringify(diagnostics.snapshot("RATE_LIMITED"))).not.toContain("private");
+    } finally { deadline.close(); }
+  });
+
+  it("marks unavailable parsed 429 payload without claiming the SDK body read failed", async () => {
+    calls.openrouter.mockRejectedValue(new OpenAI.RateLimitError(429, undefined,
+      "private upstream body or read error", new Headers()));
+    const deadline = new AIRequestDeadline(new AbortController().signal);
+    const diagnostics = new AIRequestDiagnostics("plan");
+    try {
+      await expect(runAiGateway(client, { provider: "openrouter", routingPreference: "auto", messages },
+        deadline, diagnostics)).rejects.toMatchObject({ code: "RATE_LIMITED" });
+      expect(diagnostics.snapshot("RATE_LIMITED").upstreamError).toEqual({ payloadStatus: "unavailable_or_invalid" });
+      expect(JSON.stringify(diagnostics.snapshot("RATE_LIMITED"))).not.toContain("private");
+    } finally { deadline.close(); }
+  });
+
   it("records success without a failure origin", async () => {
     const deadline = new AIRequestDeadline(new AbortController().signal);
     const diagnostics = new AIRequestDiagnostics("plan");

@@ -33,7 +33,11 @@ export function createOpenRouterProvider(apiKey: string, model: string): AIProvi
               openrouterGenerationId: response.headers.get("x-generation-id") ?? undefined,
               contentType: response.headers.get("content-type") ?? undefined,
               contentLength: response.headers.get("content-length") ?? undefined,
-              transferEncoding: response.headers.get("transfer-encoding") ?? undefined });
+              transferEncoding: response.headers.get("transfer-encoding") ?? undefined,
+              retryAfter: response.headers.get("retry-after") ?? undefined,
+              rateLimitLimit: response.headers.get("x-ratelimit-limit") ?? undefined,
+              rateLimitRemaining: response.headers.get("x-ratelimit-remaining") ?? undefined,
+              rateLimitReset: response.headers.get("x-ratelimit-reset") ?? undefined });
             return response;
           },
         });
