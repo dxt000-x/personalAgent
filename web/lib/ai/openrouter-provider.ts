@@ -28,6 +28,7 @@ export function createOpenRouterProvider(apiKey: string, model: string): AIProvi
             stage = "reading_body";
             options?.onLifecycleEvent?.({ event: "response_headers", elapsedMs: elapsedMs(), status: response.status,
               upstreamRequestId: response.headers.get("x-request-id") ?? undefined,
+              openrouterGenerationId: response.headers.get("x-generation-id") ?? undefined,
               contentType: response.headers.get("content-type") ?? undefined,
               contentLength: response.headers.get("content-length") ?? undefined,
               transferEncoding: response.headers.get("transfer-encoding") ?? undefined });

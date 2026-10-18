@@ -56,6 +56,11 @@ export class AIRequestDiagnostics {
         ? event.upstreamRequestId : undefined;
       const upstreamRequestIdStatus = event.upstreamRequestId === undefined ? "missing"
         : upstreamRequestId ? "present" : "invalid";
+      const openrouterGenerationId = event.openrouterGenerationId
+        && /^gen-[A-Za-z0-9_-]{1,128}$/.test(event.openrouterGenerationId)
+        ? event.openrouterGenerationId : undefined;
+      const openrouterGenerationIdStatus = event.openrouterGenerationId === undefined ? "missing"
+        : openrouterGenerationId ? "present" : "invalid";
       const mediaType = event.contentType?.split(";", 1)[0].trim().toLowerCase();
       const contentType = mediaType === undefined ? "missing"
         : mediaType === "application/json" || mediaType === "text/event-stream" ? mediaType : "other";
@@ -67,8 +72,9 @@ export class AIRequestDiagnostics {
       const transferEncoding = event.transferEncoding === undefined ? "missing"
         : event.transferEncoding.trim().toLowerCase() === "chunked" ? "chunked" : "other";
       this.providerLifecycle.push({ event: event.event, elapsedMs, status: event.status,
-        upstreamRequestIdStatus, contentType, contentLength, transferEncoding,
-        ...(upstreamRequestId ? { upstreamRequestId } : {}) });
+        upstreamRequestIdStatus, openrouterGenerationIdStatus, contentType, contentLength, transferEncoding,
+        ...(upstreamRequestId ? { upstreamRequestId } : {}),
+        ...(openrouterGenerationId ? { openrouterGenerationId } : {}) });
     } else if (event.event === "request_aborted" || event.event === "request_failed") {
       this.providerLifecycle.push({ event: event.event, elapsedMs, stage: event.stage });
     } else {

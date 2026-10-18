@@ -7,6 +7,39 @@ import type { ProviderLifecycleEvent } from "../types";
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 
 describe("OpenRouter lifecycle with the installed SDK and an offline fetch", () => {
+  it.each([
+    { generationId: "gen-1792312245-7umsx4QDpralWf1oIGE", status: "present",
+      loggedId: "gen-1792312245-7umsx4QDpralWf1oIGE" },
+    { generationId: null, status: "missing", loggedId: undefined },
+    { generationId: "private generation id / token", status: "invalid", loggedId: undefined },
+  ])("safely carries a $status Generation ID from response headers to the final log",
+    async ({ generationId, status, loggedId }) => {
+      vi.stubEnv("NODE_ENV", "development");
+      const log = vi.spyOn(console, "info").mockImplementation(() => {});
+      const headers = new Headers({ "content-type": "application/json" });
+      if (generationId !== null) headers.set("x-generation-id", generationId);
+      const response = new Response(JSON.stringify({ model: "fake-model",
+        choices: [{ message: { content: "private response" } }] }), { status: 200, headers });
+      const bodyRead = vi.spyOn(response, "json");
+      vi.stubGlobal("fetch", vi.fn(async () => response));
+      const diagnostics = new AIRequestDiagnostics("plan");
+      diagnostics.attempt("openrouter");
+      await createOpenRouterProvider("fake-key", "fake-model")
+        .generate([{ role: "user", content: "private prompt" }], new AbortController().signal, undefined,
+          { onLifecycleEvent: (event) => diagnostics.recordProviderLifecycle(event) });
+      diagnostics.finish("SUCCESS");
+      diagnostics.finish("SUCCESS");
+      expect(log).toHaveBeenCalledTimes(1);
+      const logged = JSON.parse(log.mock.calls[0][0] as string);
+      expect(logged.requestId).toBe(diagnostics.requestId);
+      expect(logged.providerLifecycle[1]).toMatchObject({ event: "response_headers", status: 200,
+        upstreamRequestIdStatus: "missing", openrouterGenerationIdStatus: status });
+      expect(logged.providerLifecycle[1].openrouterGenerationId).toBe(loggedId);
+      expect(logged.providerLifecycle[1].upstreamRequestId).toBeUndefined();
+      expect(bodyRead).toHaveBeenCalledTimes(1);
+      expect(log.mock.calls[0][0]).not.toMatch(/private|fake-key/);
+    });
+
   it("logs only allowlisted response header values without consuming the SDK body", async () => {
     vi.stubEnv("NODE_ENV", "development");
     const log = vi.spyOn(console, "info").mockImplementation(() => {});
@@ -139,7 +172,11 @@ describe("OpenRouter lifecycle with the installed SDK and an offline fetch", () 
 
   it("cancels a stalled body read at the 25-second attempt signal without waiting in real time", async () => {
     vi.useFakeTimers();
+    vi.stubEnv("NODE_ENV", "development");
+    const log = vi.spyOn(console, "info").mockImplementation(() => {});
     const events: ProviderLifecycleEvent[] = [];
+    const diagnostics = new AIRequestDiagnostics("plan");
+    diagnostics.attempt("openrouter");
     const deadline = new AIRequestDeadline(new AbortController().signal);
     const attemptController = new AbortController();
     let attemptTimer!: ReturnType<typeof setTimeout>;
@@ -151,11 +188,14 @@ describe("OpenRouter lifecycle with the installed SDK and an offline fetch", () 
     const fetchMock = vi.fn(async (_input: unknown, init: RequestInit) => {
       init.signal?.addEventListener("abort", () => bodyController.error(new Error("private body abort")), { once: true });
       return new Response(new ReadableStream<Uint8Array>({ start(stream) { bodyController = stream; } }),
-        { status: 200, headers: { "content-type": "application/json" } });
+        { status: 200, headers: { "content-type": "application/json", "x-generation-id": "gen-timeout123" } });
     });
     vi.stubGlobal("fetch", fetchMock);
     const pending = createOpenRouterProvider("fake-key", "fake-model")
-      .generate([], attempt.signal, undefined, { onLifecycleEvent: (event) => events.push(event) });
+      .generate([], attempt.signal, undefined, { onLifecycleEvent: (event) => {
+        events.push(event);
+        diagnostics.recordProviderLifecycle(event);
+      } });
     const outcome = pending.then(() => "unexpected_success", (error: unknown) => error);
     try {
       await vi.advanceTimersByTimeAsync(1);
@@ -168,6 +208,15 @@ describe("OpenRouter lifecycle with the installed SDK and an offline fetch", () 
         { event: "request_failed", stage: "reading_body" }]);
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(JSON.stringify(events)).not.toContain("private");
+      diagnostics.finish("TIMEOUT");
+      diagnostics.finish("TIMEOUT");
+      expect(log).toHaveBeenCalledTimes(1);
+      const logged = JSON.parse(log.mock.calls[0][0] as string);
+      expect(logged.requestId).toBe(diagnostics.requestId);
+      expect(logged.finalErrorCode).toBe("TIMEOUT");
+      expect(logged.providerLifecycle[1]).toMatchObject({ event: "response_headers", status: 200,
+        openrouterGenerationIdStatus: "present", openrouterGenerationId: "gen-timeout123" });
+      expect(log.mock.calls[0][0]).not.toMatch(/private|fake-key/);
     } finally {
       clearTimeout(attemptTimer);
       attempt.close();
