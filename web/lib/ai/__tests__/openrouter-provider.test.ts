@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import OpenAI from "openai";
 import { createOpenRouterProvider } from "../openrouter-provider";
-import { MAX_OUTPUT_TOKENS, PROVIDER_TIMEOUT_MS } from "../limits";
+import { PROVIDER_TIMEOUT_MS } from "../limits";
 import { ProviderResponseError } from "../errors";
 import type { ProviderLifecycleEvent } from "../types";
 
@@ -62,6 +62,7 @@ describe("OpenRouter provider with an offline SDK mock", () => {
     { body: { choices: [] }, failure: "empty_choices" },
     { body: { choices: [{}] }, failure: "missing_content" },
     { body: { choices: [{ message: { content: null } }] }, failure: "missing_content" },
+    { body: { choices: [{ finish_reason: "length", message: { content: null } }] }, failure: "missing_content" },
     { body: { choices: [{ message: { content: "   " } }] }, failure: "empty_content" },
     { body: { choices: [{ message: { content: 42 } }] }, failure: "malformed_response" },
     { body: {}, failure: "malformed_response" },
@@ -78,7 +79,7 @@ describe("OpenRouter provider with an offline SDK mock", () => {
       .generate([{ role: "user", content: "private task" }], controller.signal, "planning rules");
     await pending;
     expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({
-      model: "fake-model", stream: false, max_tokens: MAX_OUTPUT_TOKENS,
+      model: "fake-model", stream: false, max_tokens: 2_048,
     }), { signal: controller.signal });
     expect(vi.mocked(fetch).mock.calls[0][1]).toMatchObject({ signal: controller.signal });
   });

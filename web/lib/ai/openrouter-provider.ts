@@ -2,10 +2,12 @@ import "server-only";
 import OpenAI from "openai";
 import { ProviderResponseError } from "./errors";
 import { classifyOutgoingStream, summarizeProviderResponseStructure } from "./diagnostics";
-import { MAX_OUTPUT_CHARACTERS, MAX_OUTPUT_TOKENS, PROVIDER_TIMEOUT_MS } from "./limits";
+import { MAX_OUTPUT_CHARACTERS, PROVIDER_TIMEOUT_MS } from "./limits";
 import type { AIProvider, ProviderLifecycleStage } from "./types";
 
 const openRouterBaseUrl = "https://openrouter.ai/api/v1";
+// Temporary Preview check for OpenRouter responses that end at the prior 1024-token cap.
+const openRouterMaxOutputTokens = 2_048;
 
 export function createOpenRouterProvider(apiKey: string, model: string): AIProvider {
   return {
@@ -48,7 +50,7 @@ export function createOpenRouterProvider(apiKey: string, model: string): AIProvi
               ...(systemInstruction ? [{ role: "system" as const, content: systemInstruction }] : []),
               ...messages.map(({ role, content }) => ({ role, content })),
             ],
-            max_tokens: MAX_OUTPUT_TOKENS,
+            max_tokens: openRouterMaxOutputTokens,
             stream: false,
           },
           { signal },
