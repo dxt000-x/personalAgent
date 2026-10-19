@@ -62,6 +62,13 @@ export type ProviderLifecycleEvent =
       upstreamRequestIdStatus?: "present" | "missing" | "invalid";
       openrouterGenerationIdStatus?: "present" | "missing" | "invalid" }
   | { event: "response_complete"; elapsedMs: number }
+  | { event: "response_structure"; elapsedMs: number;
+      choicesStatus: "missing" | "array" | "other"; choiceCount: number | "over_limit";
+      firstChoicePresent: boolean; messagePresent: boolean;
+      contentKind: "missing" | "null" | "string" | "other";
+      contentEmpty?: boolean; contentLength?: number | "over_limit";
+      finishReason: "stop" | "length" | "tool_calls" | "content_filter" | "function_call" | "missing" | "other";
+      hasToolCalls: boolean; hasRefusal: boolean; hasReasoning: boolean }
   | { event: "request_aborted" | "request_failed"; elapsedMs: number; stage: ProviderLifecycleStage };
 
 export interface AIProvider {

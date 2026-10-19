@@ -1,7 +1,7 @@
 import "server-only";
 import OpenAI from "openai";
 import { ProviderResponseError } from "./errors";
-import { classifyOutgoingStream } from "./diagnostics";
+import { classifyOutgoingStream, summarizeProviderResponseStructure } from "./diagnostics";
 import { MAX_OUTPUT_CHARACTERS, MAX_OUTPUT_TOKENS, PROVIDER_TIMEOUT_MS } from "./limits";
 import type { AIProvider, ProviderLifecycleStage } from "./types";
 
@@ -55,6 +55,9 @@ export function createOpenRouterProvider(apiKey: string, model: string): AIProvi
         );
         stage = "response_complete";
         options?.onLifecycleEvent?.({ event: "response_complete", elapsedMs: elapsedMs() });
+        if (options?.onLifecycleEvent) {
+          options.onLifecycleEvent(summarizeProviderResponseStructure(response, elapsedMs()));
+        }
         if (!response || !Array.isArray(response.choices)) throw new ProviderResponseError("malformed_response");
         if (response.choices.length === 0) throw new ProviderResponseError("empty_choices");
         const content = response.choices[0]?.message?.content;

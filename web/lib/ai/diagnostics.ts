@@ -2,6 +2,37 @@ import "server-only";
 import type { AIErrorCode, ProviderResponseFailure } from "./errors";
 import type { ProviderId, ProviderLifecycleEvent, ProviderSelection, RoutingPreference } from "./types";
 
+type ResponseStructure = Extract<ProviderLifecycleEvent, { event: "response_structure" }>;
+const finishReasons = ["stop", "length", "tool_calls", "content_filter", "function_call"] as const;
+
+/** Classify shape only; response text and all unrecognized upstream values stay out of diagnostics. */
+export function summarizeProviderResponseStructure(value: unknown, elapsedMs: number): ResponseStructure {
+  const response = typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown> : {};
+  const choices = response.choices;
+  const choicesStatus = !Object.hasOwn(response, "choices") ? "missing"
+    : Array.isArray(choices) ? "array" : "other";
+  const first = Array.isArray(choices) ? choices[0] : undefined;
+  const firstChoicePresent = typeof first === "object" && first !== null && !Array.isArray(first);
+  const choice = firstChoicePresent ? first as Record<string, unknown> : {};
+  const rawMessage = choice.message;
+  const messagePresent = typeof rawMessage === "object" && rawMessage !== null && !Array.isArray(rawMessage);
+  const message = messagePresent ? rawMessage as Record<string, unknown> : {};
+  const content = message.content;
+  const contentKind = !messagePresent || !Object.hasOwn(message, "content") ? "missing"
+    : content === null ? "null" : typeof content === "string" ? "string" : "other";
+  const rawFinishReason = choice.finish_reason;
+  const finishReason = !Object.hasOwn(choice, "finish_reason") ? "missing"
+    : finishReasons.some((reason) => reason === rawFinishReason) ? rawFinishReason as ResponseStructure["finishReason"] : "other";
+  return { event: "response_structure", elapsedMs, choicesStatus,
+    choiceCount: Array.isArray(choices) ? choices.length <= 32 ? choices.length : "over_limit" : 0,
+    firstChoicePresent, messagePresent, contentKind,
+    ...(typeof content === "string" ? { contentEmpty: content.trim().length === 0,
+      contentLength: content.length <= 12_000 ? content.length : "over_limit" as const } : {}),
+    finishReason, hasToolCalls: Object.hasOwn(message, "tool_calls"),
+    hasRefusal: Object.hasOwn(message, "refusal"), hasReasoning: Object.hasOwn(message, "reasoning") };
+}
+
 type Phase = "authDurationMs" | "validationDurationMs" | "memoryDurationMs" | "routeDurationMs"
   | "quotaDurationMs" | "providerDurationMs" | "dedupeDurationMs";
 type FinalCode = AIErrorCode | "SUCCESS" | "CLIENT_ABORTED";
@@ -144,6 +175,20 @@ export class AIRequestDiagnostics {
         ...(rateLimitReset !== undefined ? { rateLimitReset } : {}),
         ...(upstreamRequestId ? { upstreamRequestId } : {}),
         ...(openrouterGenerationId ? { openrouterGenerationId } : {}) });
+    } else if (event.event === "response_structure") {
+      this.providerLifecycle.push({ event: event.event, elapsedMs,
+        choicesStatus: ["missing", "array", "other"].includes(event.choicesStatus) ? event.choicesStatus : "other",
+        choiceCount: typeof event.choiceCount === "number" && Number.isInteger(event.choiceCount)
+          && event.choiceCount >= 0 && event.choiceCount <= 32 ? event.choiceCount : "over_limit",
+        firstChoicePresent: event.firstChoicePresent === true, messagePresent: event.messagePresent === true,
+        contentKind: ["missing", "null", "string", "other"].includes(event.contentKind) ? event.contentKind : "other",
+        ...(event.contentKind === "string" ? { contentEmpty: event.contentEmpty === true,
+          contentLength: typeof event.contentLength === "number" && Number.isInteger(event.contentLength)
+            && event.contentLength >= 0 && event.contentLength <= 12_000 ? event.contentLength : "over_limit" } : {}),
+        finishReason: event.finishReason === "missing" || finishReasons.some((reason) => reason === event.finishReason)
+          ? event.finishReason : "other",
+        hasToolCalls: event.hasToolCalls === true, hasRefusal: event.hasRefusal === true,
+        hasReasoning: event.hasReasoning === true });
     } else if (event.event === "request_aborted" || event.event === "request_failed") {
       this.providerLifecycle.push({ event: event.event, elapsedMs, stage: event.stage });
     } else {

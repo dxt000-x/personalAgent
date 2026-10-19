@@ -93,7 +93,7 @@ describe("OpenRouter provider with an offline SDK mock", () => {
     expect(mocks.create).toHaveBeenCalledTimes(1);
     expect(events).toMatchObject([{ event: "request_started" },
       { event: "response_headers", status: 200, upstreamRequestId: "safe-id_123" },
-      { event: "response_complete" }]);
+      { event: "response_complete" }, { event: "response_structure", contentKind: "string" }]);
     expect(JSON.stringify(events)).not.toMatch(/private|credential/);
   });
 

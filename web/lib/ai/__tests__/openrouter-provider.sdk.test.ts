@@ -3,10 +3,100 @@ import { createOpenRouterProvider } from "../openrouter-provider";
 import { AIRequestDiagnostics, classifyOutgoingStream } from "../diagnostics";
 import { AIRequestDeadline } from "../request-deadline";
 import type { ProviderLifecycleEvent } from "../types";
+import { parseAgentPlanText } from "@/lib/agent/planning";
 
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 
 describe("OpenRouter lifecycle with the installed SDK and an offline fetch", () => {
+  it.each([
+    { body: { choices: [{ finish_reason: "length", message: { content: null } }] },
+      kind: "null", empty: undefined, finish: "length", failure: "missing_content" },
+    { body: { choices: [{ finish_reason: "stop", message: {} }] },
+      kind: "missing", empty: undefined, finish: "stop", failure: "missing_content" },
+    { body: { choices: [{ finish_reason: "stop", message: { content: "" } }] },
+      kind: "string", empty: true, finish: "stop", failure: "empty_content" },
+    { body: { choices: [{ finish_reason: "length", message: { content: null,
+      reasoning: "private reasoning", tool_calls: [{ command: "private command" }] } }] },
+      kind: "null", empty: undefined, finish: "length", failure: "missing_content" },
+    { body: { choices: [{ finish_reason: "content_filter", message: { content: null,
+      refusal: "private refusal" } }] },
+      kind: "null", empty: undefined, finish: "content_filter", failure: "missing_content" },
+  ])("logs only response shape for $kind content and keeps $failure", async ({ body, kind, empty, finish, failure }) => {
+    const diagnostics = new AIRequestDiagnostics("plan");
+    diagnostics.attempt("openrouter");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(body), {
+      status: 200, headers: { "content-type": "application/json" },
+    })));
+    await expect(createOpenRouterProvider("fake-key", "fake-model")
+      .generate([{ role: "user", content: "private prompt" }], new AbortController().signal, undefined,
+        { onLifecycleEvent: (event) => diagnostics.recordProviderLifecycle(event) }))
+      .rejects.toMatchObject({ failure, code: "PROVIDER_ERROR", status: 502 });
+    const events = diagnostics.snapshot("PROVIDER_ERROR").providerLifecycle;
+    expect(events?.[3]).toMatchObject({ event: "response_structure", choicesStatus: "array", choiceCount: 1,
+      firstChoicePresent: true, messagePresent: true, contentKind: kind, finishReason: finish,
+      ...(empty === undefined ? {} : { contentEmpty: empty }) });
+    expect(JSON.stringify(events)).not.toMatch(/private|command|prompt|reasoning/);
+  });
+
+  it("keeps nonempty truncated Plan JSON on the parser failure path", async () => {
+    const diagnostics = new AIRequestDiagnostics("plan");
+    diagnostics.attempt("openrouter");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      choices: [{ finish_reason: "length", message: { content: '{"version":1,"steps":[' } }],
+    }), { status: 200, headers: { "content-type": "application/json" } })));
+    const result = await createOpenRouterProvider("fake-key", "fake-model")
+      .generate([], new AbortController().signal, undefined,
+        { onLifecycleEvent: (event) => diagnostics.recordProviderLifecycle(event) });
+    expect(parseAgentPlanText(result.text)).toBeNull();
+    expect(diagnostics.snapshot("PROVIDER_ERROR").providerLifecycle?.[3]).toMatchObject({
+      event: "response_structure", contentKind: "string", contentEmpty: false, finishReason: "length",
+    });
+    expect(JSON.stringify(diagnostics.snapshot("PROVIDER_ERROR"))).not.toContain(result.text);
+  });
+
+  it.each([
+    { body: {}, status: "missing", count: 0 },
+    { body: { choices: [] }, status: "array", count: 0 },
+    { body: { choices: "private choices" }, status: "other", count: 0 },
+    { body: { choices: Array.from({ length: 33 }, () => null) }, status: "array", count: "over_limit" },
+  ])("bounds $status choices diagnostics", async ({ body, status, count }) => {
+    const diagnostics = new AIRequestDiagnostics("plan");
+    diagnostics.attempt("openrouter");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(body), {
+      status: 200, headers: { "content-type": "application/json" },
+    })));
+    await expect(createOpenRouterProvider("fake-key", "fake-model")
+      .generate([], new AbortController().signal, undefined,
+        { onLifecycleEvent: (event) => diagnostics.recordProviderLifecycle(event) }))
+      .rejects.toMatchObject({ code: "PROVIDER_ERROR", status: 502 });
+    expect(diagnostics.snapshot("PROVIDER_ERROR").providerLifecycle?.[3]).toMatchObject({
+      event: "response_structure", choicesStatus: status, choiceCount: count,
+      firstChoicePresent: false, messagePresent: false, contentKind: "missing",
+    });
+    expect(JSON.stringify(diagnostics.snapshot("PROVIDER_ERROR"))).not.toContain("private choices");
+  });
+
+  it("reduces malicious response fields and forged lifecycle values to fixed categories", () => {
+    vi.stubEnv("NODE_ENV", "development");
+    const log = vi.spyOn(console, "info").mockImplementation(() => {});
+    const diagnostics = new AIRequestDiagnostics("plan");
+    diagnostics.attempt("openrouter");
+    diagnostics.recordProviderLifecycle({ event: "response_structure", elapsedMs: 1,
+      choicesStatus: "private" as "array", choiceCount: 999, firstChoicePresent: true, messagePresent: true,
+      contentKind: "private" as "string", contentEmpty: true, contentLength: 999999,
+      finishReason: "private credential" as "stop", hasToolCalls: true, hasRefusal: false, hasReasoning: true });
+    const record = diagnostics.snapshot("PROVIDER_ERROR").providerLifecycle?.[0];
+    expect(record).toMatchObject({ choicesStatus: "other", choiceCount: "over_limit", contentKind: "other",
+      finishReason: "other", hasToolCalls: true, hasReasoning: true });
+    diagnostics.finish("PROVIDER_ERROR");
+    diagnostics.finish("PROVIDER_ERROR");
+    expect(log).toHaveBeenCalledTimes(1);
+    const serialized = log.mock.calls[0][0] as string;
+    expect(serialized).not.toMatch(/private|credential|prompt|command/);
+    expect(JSON.parse(serialized).providerLifecycle[0]).toMatchObject({
+      event: "response_structure", choicesStatus: "other", contentKind: "other", finishReason: "other",
+    });
+  });
   it("records allowlisted 429 headers without reading the error body twice", async () => {
     vi.stubEnv("NODE_ENV", "development");
     const log = vi.spyOn(console, "info").mockImplementation(() => {});
@@ -201,7 +291,8 @@ describe("OpenRouter lifecycle with the installed SDK and an offline fetch", () 
       expect(bodyRead).toHaveBeenCalledTimes(1);
     } finally { finishBody(); }
     await expect(pending).resolves.toMatchObject({ text: "complete" });
-    expect(events.at(-1)).toMatchObject({ event: "response_complete" });
+    expect(events.at(-2)).toMatchObject({ event: "response_complete" });
+    expect(events.at(-1)).toMatchObject({ event: "response_structure", contentKind: "string" });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(bodyRead).toHaveBeenCalledTimes(1);
   });
