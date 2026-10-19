@@ -13,7 +13,10 @@
     const json = await response.json().catch(() => ({}));
     return { http: response.status, code: json?.error?.code ?? "", data: json };
   };
-  const summary = (scenario, result, detail = "") => add(scenario, result.http, result.code, detail);
+  const safeErrorCode = (code) => ["AUTH_REQUIRED", "INVALID_REQUEST", "REPLAY_REJECTED",
+    "RATE_LIMITED", "TIMEOUT", "PROVIDER_ERROR", "EXECUTION_UNAVAILABLE", "QUOTA_UNAVAILABLE"].includes(code)
+    ? code : code ? "OTHER" : "";
+  const summary = (scenario, result, detail = "") => add(scenario, result.http, safeErrorCode(result.code), detail);
   const planBody = {
     provider: "openrouter", routingPreference: "auto",
     messages: [{ role: "user", content: "请制定一个仅读取当前 UTC 时间的简短计划。" }],
@@ -22,6 +25,20 @@
     atob(encoded.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(encoded.length / 4) * 4, "=")),
     (character) => character.charCodeAt(0),
   );
+  // Correlation only: the server still verifies the signature and database state.
+  const authorizationJti = (authorization) => {
+    try {
+      const parts = authorization.split(".");
+      if (parts.length !== 2 || !/^[A-Za-z0-9_-]+$/u.test(parts[0])) return null;
+      const payload = JSON.parse(atob(parts[0].replace(/-/g, "+").replace(/_/g, "/")
+        .padEnd(Math.ceil(parts[0].length / 4) * 4, "=")));
+      return typeof payload?.jti === "string"
+        && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(payload.jti)
+        ? payload.jti : null;
+    } catch { return null; }
+  };
+  const safeConcurrentCode = (result) => result.http === 200 ? ""
+    : result.http === 409 && result.code === "REPLAY_REJECTED" ? "REPLAY_REJECTED" : "OTHER";
   const forgeSignature = (authorization) => {
     const parts = authorization.split(".");
     if (parts.length !== 2 || !/^[A-Za-z0-9_-]+$/.test(parts[1]) || parts[1].length < 3) return null;
@@ -119,14 +136,21 @@
 
     const second = await createAuthorization("concurrent");
     if (!second) return;
+    const concurrentJti = authorizationJti(second);
+    if (!concurrentJti) {
+      add("concurrent_audit", "NOT RUN", "", "signed_authorization_jti_unavailable");
+      return;
+    }
     const pair = await Promise.all([
       request("/api/agent/execute", { authorization: second }),
       request("/api/agent/execute", { authorization: second }),
     ]);
     for (let i = 0; i < pair.length; i += 1) summary(`concurrent_${i + 1}`, pair[i]);
-    add("concurrent_verdict", "CHECK", "",
-      pair.filter((item) => item.http === 200).length === 1
-      && pair.filter((item) => item.http === 409 && item.code === "REPLAY_REJECTED").length === 1 ? "PASS" : "FAIL");
+    const concurrentVerdict = pair.filter((item) => item.http === 200).length === 1
+      && pair.filter((item) => item.http === 409 && item.code === "REPLAY_REJECTED").length === 1 ? "PASS" : "FAIL";
+    add("concurrent_verdict", "CHECK", "", concurrentVerdict);
+    add("concurrent_audit", "CHECK", "", `jti=${concurrentJti}; http=${pair[0].http},${pair[1].http}; `
+      + `code=${safeConcurrentCode(pair[0]) || "none"},${safeConcurrentCode(pair[1]) || "none"}; verdict=${concurrentVerdict}`);
 
     const third = await createAuthorization("expiry");
     if (!third) return;
