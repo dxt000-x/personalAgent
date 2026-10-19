@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-本文件同时记录既有验收证据和后续操作步骤，测试目标仅为 `personal-agent-quota-test`（Ref `pxfaqcepztzqyqtmbdrf`）。先前的隔离数据库验收记录为 `ISSUE=PASS`、`TLS=PASS`、`ROLE=PASS`、`CONCURRENCY=PASS`、`FINISH=PASS`；相关函数已可调用，但本轮未重新运行数据库测试，也未独立复核 Migration 执行记录及完整对象权限。`AUDIT_READ=NOT_RUN`，登录后真实 HTTP 重放验收仍为 **NOT RUN**。不得连接 Production 项目 `uuktbpywrzflrdbxnzfx`。
+本文件同时记录既有验收证据和后续操作步骤，测试目标仅为 `personal-agent-quota-test`（Ref `pxfaqcepztzqyqtmbdrf`）。先前的隔离数据库验收记录为 `ISSUE=PASS`、`TLS=PASS`、`ROLE=PASS`、`CONCURRENCY=PASS`、`FINISH=PASS`；相关函数已可调用，但本轮未重新运行数据库测试，也未独立复核 Migration 执行记录及完整对象权限。针对下文精确 JTI 的 HTTP 并发审计核验为 `AUDIT_READ=PASS`；其他 HTTP 场景不能据此一并判定通过。不得连接 Production 项目 `uuktbpywrzflrdbxnzfx`。
 
 ## 1. 项目与 Migration 门禁
 
@@ -44,10 +44,25 @@ order by event_id;
 
 ## 4. 登录后 HTTP 验收
 
-先核对本地应用确实使用测试项目、已应用 Migration、受限 Writer、严格 TLS，且本地 Ollama 可用。用普通测试账号登录 `http://localhost:3110/agent`。在该页面 DevTools Console 粘贴 `web/scripts/agent-execution-http-acceptance.js` 的完整内容。脚本仅向同源的 `/api/agent/plan`、`/api/agent/confirm`、`/api/agent/execute` 发送请求；Provider 固定为 `ollama`，路由为 `privacy`。它不输出 Plan 正文或授权原文。
+先核对本地应用确实使用测试项目、已应用 Migration、受限 Writer 和严格 TLS，并确认 OpenRouter 的测试模型及额度可用。用普通测试账号登录 `http://localhost:3110/agent`，或打开已核对提交的目标 Preview `/agent`。在该页面 DevTools Console 粘贴 `web/scripts/agent-execution-http-acceptance.js` 的完整内容。脚本仅向同源的 `/api/agent/plan`、`/api/agent/confirm`、`/api/agent/execute` 发送请求；Provider 固定为 `openrouter`。它不输出 Plan 正文或授权原文；脚本会先提示真实模型请求及额度影响，由操作者决定是否继续。
 
 预期首次 Execute 为 200 且返回有效 `read_current_time` ISO 时间；同一授权重放为 409 `REPLAY_REJECTED`；另一个授权的两个并发 Execute 恰好一个 200、一个 409。伪造授权、篡改 Plan 与等待过期的授权应被拒绝。跨用户测试需要独立 B 会话并在有效期内切换，**该脚本标记 NOT RUN**；如另行测试，必须单独记录实际状态码及错误码。脚本中的 `CHECK` 行是本地汇总断言，不是 HTTP 状态码。网络或前置请求失败时，不得将后续步骤记为 PASS。
 
+并发请求复用同一份 Confirm 签发的执行授权。脚本仅在浏览器内从该授权的签名载荷提取符合 UUID 格式的 JTI，供审计关联；这不是客户端验签，也不代替服务端授权校验。保存脱敏的 `concurrent_audit` 汇总行（JTI、两个 HTTP 状态码、受限错误码、`verdict`），不要保存授权 token、Cookie、Plan 或请求正文。维护者先确认测试项目 Ref，再将**此行的精确 JTI**填入第 3 节的两条只读 SQL；核对授权最终状态和事件计数。数据库并发脚本输出的是另一条合成授权 JTI，不得与 HTTP JTI 混用。
+
+### 本次 HTTP 并发与审计核验：PASS
+
+证据来源为本次 HTTP 并发测试的脱敏摘要，以及 Supabase 对精确 JTI `71108f00-6048-43b3-9677-9b50dffeb0e6` 的只读查询结果；两者已按此 JTI 关联。以下结果由维护者提供并确认，本次文档更新没有重新发送 HTTP 请求或执行 SQL：
+
+| 核验项 | 实际结果 |
+| --- | --- |
+| 两个并发 Execute | HTTP 200 一次；HTTP 409、`REPLAY_REJECTED` 一次 |
+| 授权最终状态 | `succeeded` |
+| `replay_rejected_count` | 1 |
+| 审计事件 `issued` / `started` / `succeeded` / `failed` / `replay_rejected` | 1 / 1 / 1 / 0 / 1 |
+
+该精确 JTI 的 HTTP 并发审计核验记为 `AUDIT_READ=PASS`。第 3 节旧数据库脚本输出的 `AUDIT_READ=NOT_RUN` 是另一条合成授权的历史状态，不得改写为 PASS。
+
 ## 完成边界
 
-保留审计记录供核验；不得自动删除或批量清理。先前隔离数据库测试已记录签发、TLS、Writer 权限、双连接并发消费和完成操作 **PASS**；本轮仅校准文档，未重新运行或独立复核这些测试。`AUDIT_READ=NOT_RUN`；登录后真实 HTTP 验收、跨用户 HTTP 验收及 Preview 验收仍为 **NOT RUN**。今后的数据库写入、Migration、账号登录和 HTTP 调用仍须另行授权并通过环境门禁；离线测试不构成 Preview 验收证据。
+保留审计记录供核验；不得自动删除或批量清理。先前隔离数据库测试已记录签发、TLS、Writer 权限、双连接并发消费和完成操作 **PASS**；本轮仅更新文档，未重新运行这些测试。精确 JTI `71108f00-6048-43b3-9677-9b50dffeb0e6` 的 HTTP 并发与审计核验为 **PASS**（`AUDIT_READ=PASS`）。其他未单独提供证据的 HTTP 场景、跨用户 HTTP 验收及完整 Preview 验收仍为 **NOT RUN**；本次核验也不构成 Migration 执行记录及完整对象权限的独立复核。今后的数据库写入、Migration、账号登录和 HTTP 调用仍须另行授权并通过环境门禁；离线测试不构成 Preview 验收证据。
