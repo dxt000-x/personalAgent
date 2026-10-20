@@ -81,6 +81,8 @@ describe("agent planning", () => {
   });
 
   it("rejects invalid JSON", () => {
+    expect(parseAgentPlanText("")).toBeNull();
+    expect(parseAgentPlanText("   ")).toBeNull();
     expect(parseAgentPlanText("不是 JSON")).toBeNull();
     expect(parseAgentPlanText('{"version":1,"goal":"三天学习计划","steps":[')).toBeNull();
   });
@@ -147,12 +149,14 @@ describe("planning instruction", () => {
   it("requires JSON-only confirmed plans", () => {
     const instruction = buildPlanningInstruction();
 
-    expect(instruction).toContain("只能输出 JSON");
+    expect(instruction).toContain("只能输出 JSON，且必须紧凑、完整");
+    expect(instruction).toContain("直接给出结果，不展开推理、背景说明");
     expect(instruction).toContain("requiresConfirmation");
     expect(instruction).toContain("不得自行保存 Memory");
     expect(instruction).toContain("不得输出 shell 命令");
     expect(instruction).toContain("三天学习计划通常按每天一步");
     expect(instruction).toContain("复杂任务不能为求简短而遗漏必要阶段");
-    expect(instruction).toContain("输出紧凑 JSON");
+    expect(instruction).toContain("不重复目标、背景或其他步骤");
+    expect(instruction).toContain("只输出上述字段组成的完整 JSON");
   });
 });

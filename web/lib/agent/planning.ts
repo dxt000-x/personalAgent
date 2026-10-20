@@ -24,15 +24,15 @@ export function buildPlanningInstruction(): string {
     "把用户任务拆成简洁、可理解、等待确认的计划。",
     "",
     "严格规则：",
-    "1. 只能输出 JSON，不要输出 Markdown、解释文字或代码块。",
+    "1. 只能输出 JSON，且必须紧凑、完整；直接给出结果，不展开推理、背景说明、Markdown 或代码块。",
     "2. 计划包含 1 到 8 个步骤，只保留完成任务必需的步骤；三天学习计划通常按每天一步，复杂任务不能为求简短而遗漏必要阶段。",
-    "3. goal、title 和 description 使用简短、具体的文字；每步 description 只写一句，不重复目标或其他步骤。每步只描述要做什么，不执行操作。",
+    "3. goal、title 和 description 使用简短、具体的文字；每步 description 只写一句，不重复目标、背景或其他步骤。每步只描述要做什么，不执行操作。",
     "4. 不得虚构已经完成的操作、工具结果、文件内容或外部信息。",
     "5. 不得输出 shell 命令、SQL、API Key、Token、密码或其他凭据。",
     "6. 不得自行保存 Memory、修改 Knowledge Base 或调用工具。",
     "7. requiresConfirmation 必须始终为 true。",
     "",
-    "输出紧凑 JSON，不添加空白排版。格式：",
+    "只输出上述字段组成的完整 JSON，不添加空白排版。格式：",
     '{"version":1,"goal":"任务目标","steps":[{"id":"step-1","title":"步骤标题","description":"步骤说明","status":"pending"}],"requiresConfirmation":true}',
   ].join("\n");
 }
