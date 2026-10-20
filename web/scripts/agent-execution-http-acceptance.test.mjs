@@ -13,19 +13,24 @@ const plan = { version: 1, goal: "fixture goal", steps: [], requiresConfirmation
 const tokenFor = (jti) => `${Buffer.from(JSON.stringify({ jti, phase: "confirmed", secret: "fixture-secret" }))
   .toString("base64url")}.${Buffer.alloc(32, 7).toString("base64url")}`;
 
-async function runAcceptance(concurrentJti = jtis[1]) {
+async function runAcceptance(concurrentJti = jtis[1], mode = "full") {
   const tokens = [tokenFor(jtis[0]), tokenFor(concurrentJti), tokenFor(jtis[2])];
   const rows = [];
   const executeBodies = [];
+  const requestPaths = [];
+  const planBodies = [];
   const consumed = new Set();
   let plans = 0;
   let confirms = 0;
+  let toolExecutions = 0;
   const respond = (status, body) => ({ status, ok: status < 400, json: async () => body });
   const fetch = async (path, options) => {
+    requestPaths.push(path);
     if (path === "/api/ai/providers") return respond(200, [{ id: "openrouter", configured: true, model: "openrouter/free" }]);
     const body = JSON.parse(options.body);
     if (path === "/api/agent/plan") {
       plans += 1;
+      planBodies.push(body);
       return respond(200, { plan, planAuthorization: `fixture-plan-authorization-${plans}`,
         private: "fixture-secret" });
     }
@@ -39,6 +44,7 @@ async function runAcceptance(concurrentJti = jtis[1]) {
       if (body.authorization === tokens[2]) return respond(400, { error: { code: "INVALID_REQUEST" } });
       if (consumed.has(body.authorization)) return respond(409, { error: { code: "REPLAY_REJECTED" } });
       consumed.add(body.authorization);
+      toolExecutions += 1;
       return respond(200, { result: { tool: "read_current_time", ok: true,
         data: { iso: "2026-10-19T00:00:00.000Z" } } });
     }
@@ -48,15 +54,49 @@ async function runAcceptance(concurrentJti = jtis[1]) {
     fetch, atob, Date, Promise, JSON, Uint8Array, location: {
       origin: "http://localhost:3110", protocol: "http:", hostname: "localhost", pathname: "/agent",
     },
-    window: { confirm: () => true },
+    window: { __agentExecutionAcceptanceMode: mode, confirm: () => true },
     setTimeout: (callback) => { callback(); return 1; },
     console: { table: (value) => { rows.push(...value); } },
   }, { timeout: 1000 });
   await Promise.race([result, new Promise((_, reject) => setTimeout(() => reject(new Error("test timeout")), 2000))]);
-  return { rows, executeBodies, tokens };
+  return { rows, executeBodies, tokens, requestPaths, planBodies, plans, confirms, toolExecutions };
 }
 
 describe("Agent HTTP acceptance audit correlation", () => {
+  it("rejects an unsupported mode without making any request", async () => {
+    const { rows, requestPaths } = await runAcceptance(jtis[1], "replayOnly");
+    expect(requestPaths).toEqual([]);
+    expect(rows.find((row) => row.scenario === "mode_gate")).toMatchObject({
+      http: "NOT RUN", detail: "unsupported_mode",
+    });
+  });
+
+  it("runs only one Auto-routed Plan, Confirm and same-authorization replay in replay-only mode", async () => {
+    const { rows, executeBodies, tokens, requestPaths, planBodies, plans, confirms, toolExecutions } =
+      await runAcceptance(jtis[1], "replay-only");
+    expect(plans).toBe(1);
+    expect(confirms).toBe(1);
+    expect(toolExecutions).toBe(1);
+    expect(planBodies).toHaveLength(1);
+    expect(planBodies[0]).toMatchObject({ provider: "auto", routingPreference: "auto" });
+    expect(requestPaths).toEqual(["/api/agent/plan", "/api/agent/confirm",
+      "/api/agent/execute", "/api/agent/execute"]);
+    expect(executeBodies).toEqual([{ authorization: tokens[0] }, { authorization: tokens[0] }]);
+    expect(rows.find((row) => row.scenario === "replay_execute_first")).toMatchObject({
+      http: 200, detail: "tool_ok=true; iso_valid=true",
+    });
+    expect(rows.find((row) => row.scenario === "replay_execute_second")).toMatchObject({
+      http: 409, code: "REPLAY_REJECTED", detail: "rejected_without_result",
+    });
+    expect(rows.find((row) => row.scenario === "replay_audit")).toMatchObject({
+      detail: `jti=${jtis[0]}; http=200,409; code=none,REPLAY_REJECTED; verdict=PASS`,
+    });
+    expect(rows.some((row) => /^(?:tampered|forged|concurrent|expired|cross_user)/u.test(row.scenario))).toBe(false);
+    const output = JSON.stringify(rows);
+    for (const token of tokens) expect(output).not.toContain(token);
+    expect(output).not.toMatch(/fixture-secret|fixture goal|fixture-plan-authorization|private/);
+  });
+
   it("reports the exact concurrent JTI and both results without exposing authorization or response data", async () => {
     const { rows, executeBodies, tokens } = await runAcceptance();
     expect(rows.map((row) => row.scenario)).toContain("concurrent_audit");

@@ -1,7 +1,11 @@
 // Paste this whole async IIFE into DevTools on the signed-in PersonalAgent Preview /agent page
-// (or local http://localhost:3110/agent). It uses the configured OpenRouter model.
-// It asks before making up to three real planning requests. Tokens and response bodies are never logged.
+// (or local http://localhost:3110/agent). Full mode uses the configured OpenRouter model.
+// Set window.__agentExecutionAcceptanceMode = "replay-only" for one Auto-routed Plan and a replay check.
+// The default full mode asks before making up to three real OpenRouter planning requests.
+// Tokens and response bodies are never logged.
 (async () => {
+  const mode = window.__agentExecutionAcceptanceMode ?? "full";
+  const replayOnly = mode === "replay-only";
   const rows = [];
   const add = (scenario, http, code, detail) => rows.push({ scenario, http, code, detail });
   const request = async (path, body) => {
@@ -18,7 +22,7 @@
     ? code : code ? "OTHER" : "";
   const summary = (scenario, result, detail = "") => add(scenario, result.http, safeErrorCode(result.code), detail);
   const planBody = {
-    provider: "openrouter", routingPreference: "auto",
+    provider: replayOnly ? "auto" : "openrouter", routingPreference: "auto",
     messages: [{ role: "user", content: "请制定一个仅读取当前 UTC 时间的简短计划。" }],
   };
   const signatureBytes = (encoded) => Uint8Array.from(
@@ -80,6 +84,39 @@
       return;
     }
     add("origin_gate", "CHECK", "", allowedLocal ? "localhost" : "branch Preview host accepted");
+    if (mode !== "full" && !replayOnly) {
+      add("mode_gate", "NOT RUN", "", "unsupported_mode");
+      return;
+    }
+
+    if (replayOnly) {
+      const proceed = window.confirm("Replay-only acceptance will make one Auto-routed planning request, "
+        + "one confirmation and two Execute requests using the same authorization. "
+        + "Auto may choose a cloud provider and consume quota. Continue?");
+      if (!proceed) {
+        add("operator_confirmation", "SKIPPED", "", "cancelled_before_model_requests");
+        return;
+      }
+      const authorization = await createAuthorization("replay");
+      if (!authorization) return;
+      const jti = authorizationJti(authorization);
+      if (!jti) {
+        add("replay_audit", "NOT RUN", "", "signed_authorization_jti_unavailable");
+        return;
+      }
+      const first = await request("/api/agent/execute", { authorization });
+      const firstValid = first.http === 200 && first.data?.result?.tool === "read_current_time"
+        && first.data?.result?.ok === true && Number.isFinite(Date.parse(first.data?.result?.data?.iso));
+      summary("replay_execute_first", first, firstValid ? "tool_ok=true; iso_valid=true" : "FAIL");
+      if (!firstValid) return;
+      const second = await request("/api/agent/execute", { authorization });
+      const replayRejected = second.http === 409 && second.code === "REPLAY_REJECTED"
+        && !Object.hasOwn(second.data ?? {}, "result");
+      summary("replay_execute_second", second, replayRejected ? "rejected_without_result" : "FAIL");
+      add("replay_audit", "CHECK", "", `jti=${jti}; http=${first.http},${second.http}; `
+        + `code=none,${safeConcurrentCode(second) || "none"}; verdict=${replayRejected ? "PASS" : "FAIL"}`);
+      return;
+    }
 
     // This authenticated GET only reports provider configuration; it does not generate model output.
     const providerResponse = await fetch("/api/ai/providers", {
@@ -161,7 +198,7 @@
   } catch {
     add("script_error", "NOT RUN", "", "network_or_response_error");
   } finally {
-    add("cross_user", "NOT RUN", "", "requires separate B session within authorization lifetime");
+    if (mode === "full") add("cross_user", "NOT RUN", "", "requires separate B session within authorization lifetime");
     console.table(rows);
   }
 })();
