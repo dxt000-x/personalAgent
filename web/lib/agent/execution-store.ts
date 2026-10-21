@@ -54,8 +54,8 @@ function checkedConfig(): { checks: ConfigChecks; options?: ConstructorParameter
       checks.caConfig = "fail";
       return { checks };
     }
-    if (!ref || publicProject.protocol !== "https:" || user !== `agent_execution_writer_login.${ref}`
-      || checks.poolerConfig !== "pass") return { checks };
+    if (checks.publicRefExpected !== "pass" || checks.writerRefExpected !== "pass"
+      || checks.poolerConfig !== "pass" || checks.caConfig !== "pass") return { checks };
     return { checks, options: { host: url.hostname, port: 6543, user,
       password: decodeURIComponent(url.password), database: "postgres", max: 2,
       connectionTimeoutMillis: 5000, idleTimeoutMillis: 10000, query_timeout: 10000,

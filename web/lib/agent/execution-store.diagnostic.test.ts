@@ -12,13 +12,17 @@ vi.mock("pg", () => ({ Pool: class {
   connect() { return state.connect(); }
   query(...args: unknown[]) { return state.poolQuery(...args); }
 } }));
-vi.mock("node:crypto", () => ({ X509Certificate: class {
+vi.mock("node:crypto", async (importOriginal) => ({ ...(await importOriginal<typeof import("node:crypto")>()), X509Certificate: class {
   constructor() {
     state.certCount += 1;
     state.onCert?.();
     if (state.certFails) throw new Error("private certificate detail");
   }
 } }));
+vi.mock("@/lib/ai/http", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/ai/http")>()),
+  requireUserId: vi.fn().mockResolvedValue("11111111-1111-4111-8111-111111111111"),
+}));
 
 const ref = "pxfaqcepztzqyqtmbdrf";
 const goodUrl = `postgresql://agent_execution_writer_login.${ref}:test-only@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres?sslmode=require`;
@@ -80,6 +84,30 @@ describe("execution database read-only diagnostic", () => {
     expect(result.writerRefExpected).toBe("fail");
     expect(result.projectIdentity).toBe("not_verified");
     expect(state.connect).not.toHaveBeenCalled();
+  });
+
+  it("rejects matching wrong refs on the Confirm persistence path without creating a pool or exposing configuration", async () => {
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://otherproject.supabase.co");
+    vi.stubEnv("AGENT_DB_URL", goodUrl.replaceAll(ref, "otherproject"));
+    vi.stubEnv("AGENT_EXECUTION_SECRET", "local-test-only-key-with-more-than-thirty-two-characters");
+    const { issuePlanAuthorization } = await import("./execution-authorization");
+    const { POST } = await import("../../app/api/agent/confirm/route");
+    const plan = { version: 1 as const, goal: "读取当前时间", steps: [{
+      id: "step-1", title: "读取时间", description: "读取当前 UTC 时间。", status: "pending" as const,
+    }], requiresConfirmation: true as const };
+    const planAuthorization = issuePlanAuthorization("11111111-1111-4111-8111-111111111111", plan);
+    const response = await POST(new Request("http://localhost:3000/api/agent/confirm", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ plan, planAuthorization }),
+    }));
+    expect(response.status).toBe(503);
+    const body = await response.json();
+    expect(body).toMatchObject({ error: { code: "EXECUTION_UNAVAILABLE" } });
+    expect(JSON.stringify(body)).not.toMatch(/otherproject|test-only|pooler|postgresql|certificate|planAuthorization/u);
+    expect(state.poolCount).toBe(0);
+    expect(state.poolQuery).not.toHaveBeenCalled();
+    expect(state.connect).not.toHaveBeenCalled();
+    expect(state.query).not.toHaveBeenCalled();
   });
 
   it("rejects a Writer ref different from the target", async () => {
