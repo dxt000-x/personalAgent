@@ -12,8 +12,14 @@ const result = { publicRefExpected: "pass", writerRefExpected: "pass",
   poolerConfig: "pass", caConfig: "pass", connection: "pass",
   tlsVerification: "pass", databaseName: "pass",
   projectIdentity: "inferred_from_pooler_routing" };
+let diagnosticLog: ReturnType<typeof vi.spyOn>;
+function logged() {
+  expect(diagnosticLog).toHaveBeenCalledTimes(1);
+  return JSON.parse(diagnosticLog.mock.calls[0][0] as string);
+}
 
 beforeEach(() => {
+  diagnosticLog = vi.spyOn(console, "info").mockImplementation(() => undefined);
   vi.stubEnv("VERCEL_ENV", "preview");
   vi.stubEnv("VERCEL_GIT_COMMIT_REF", "feat/agent-planning-mvp");
   vi.stubEnv("VERCEL_GIT_COMMIT_SHA", sha);
@@ -22,7 +28,7 @@ beforeEach(() => {
   vi.mocked(requireUserId).mockResolvedValue(userId);
   vi.mocked(diagnoseExecutionDatabase).mockResolvedValue(result as Awaited<ReturnType<typeof diagnoseExecutionDatabase>>);
 });
-afterEach(() => { vi.unstubAllEnvs(); vi.resetAllMocks(); });
+afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); vi.resetAllMocks(); });
 
 describe("temporary execution database diagnostic access gate", () => {
   it("returns fixed states to the approved authenticated Preview user without caching", async () => {
@@ -32,6 +38,10 @@ describe("temporary execution database diagnostic access gate", () => {
     expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
     expect(await response.json()).toEqual(result);
     expect(diagnoseExecutionDatabase).toHaveBeenCalledTimes(1);
+    expect(logged()).toMatchObject({ event: "agent_execution_db_diagnostic", stage: "complete",
+      authSucceeded: true, userMatchesAllowed: true, previewEnv: true, branchMatches: true,
+      expectedShaValid: true, deploymentShaValid: true, shaMatches: true,
+      databaseDiagnosticException: false, errorClass: "none" });
   });
 
   it.each(["unauthenticated", "wrong_user", "missing_user", "invalid_user",
@@ -53,6 +63,23 @@ describe("temporary execution database diagnostic access gate", () => {
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
     expect(await response.text()).toBe("");
     expect(diagnoseExecutionDatabase).not.toHaveBeenCalled();
+    const record = logged();
+    if (caseName === "unauthenticated") {
+      expect(record).toMatchObject({ stage: "authentication", authSucceeded: false,
+        userMatchesAllowed: "not_checked", errorClass: "authentication_failed" });
+    } else {
+      expect(record).toMatchObject({ stage: "access_gate", authSucceeded: true,
+        errorClass: "access_denied", databaseDiagnosticException: "not_checked" });
+      const failedField: Record<string, string> = {
+        wrong_user: "userMatchesAllowed", missing_user: "allowedUserConfigValid",
+        invalid_user: "allowedUserConfigValid", non_preview: "previewEnv",
+        wrong_branch: "branchMatches", missing_branch: "branchMatches",
+        wrong_sha: "shaMatches", missing_sha: "deploymentShaValid",
+        missing_expected_sha: "expectedShaValid", invalid_expected_sha: "expectedShaValid",
+      };
+      expect(record[failedField[caseName]]).toBe(false);
+    }
+    expect(JSON.stringify(record)).not.toMatch(/private|11111111|22222222|operator|production|feat\/agent|"main"|short|aaaaaaaa|bbbbbbbb/u);
   });
 
   it("never exposes a raw database failure or secret", async () => {
@@ -61,5 +88,8 @@ describe("temporary execution database diagnostic access gate", () => {
     expect(response.status).toBe(404);
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
     expect(await response.text()).toBe("");
+    expect(logged()).toMatchObject({ stage: "database", authSucceeded: true,
+      databaseDiagnosticException: true, errorClass: "database_diagnostic_failed" });
+    expect(JSON.stringify(diagnosticLog.mock.calls)).not.toContain("private URL password token");
   });
 });
