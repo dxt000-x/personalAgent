@@ -16,7 +16,8 @@ type AuthenticatedClient = NonNullable<Awaited<ReturnType<typeof createClient>>>
 /** Shared chat/extraction path: one quota reservation per routed request, before cloud I/O. */
 export async function runAiGateway(
   supabase: AuthenticatedClient,
-  input: { provider: ProviderSelection; routingPreference: RoutingPreference; messages: ChatMessage[]; systemInstruction?: string; disableThinking?: boolean },
+  input: { provider: ProviderSelection; routingPreference: RoutingPreference; messages: ChatMessage[];
+    systemInstruction?: string; disableThinking?: boolean; openRouterMaxOutputTokens?: 2_048 },
   deadline: AIRequestDeadline,
   diagnostics?: AIRequestDiagnostics,
 ): Promise<AIChatResult> {
@@ -40,6 +41,8 @@ export async function runAiGateway(
     const { signal, abortOrigin, close } = deadline.attemptSignals(timeoutMs);
     diagnostics?.attempt(providerId);
     const providerOptions = { disableThinking: input.disableThinking,
+      ...(providerId === "openrouter" && input.openRouterMaxOutputTokens
+        ? { openRouterMaxOutputTokens: input.openRouterMaxOutputTokens } : {}),
       ...(providerId === "openrouter" && diagnostics
         ? { onLifecycleEvent: (event: import("./types").ProviderLifecycleEvent) => diagnostics.recordProviderLifecycle(event) }
         : {}) };

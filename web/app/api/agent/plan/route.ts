@@ -5,7 +5,7 @@ import { runAiGateway } from "@/lib/ai/gateway";
 import { aiErrorResponse, aiJson, requireAuthenticatedUser } from "@/lib/ai/http";
 import { readJsonBody, validateChatRequest } from "@/lib/ai/request";
 import { AIRequestDeadline } from "@/lib/ai/request-deadline";
-import { issuePlanAuthorization } from "@/lib/agent/execution-authorization";
+import { hasExecutionSigningKey, issuePlanAuthorization } from "@/lib/agent/execution-authorization";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -32,12 +32,14 @@ export async function POST(request: Request): Promise<Response> {
         return parsed;
       });
       deadline.assertRemaining();
+      if (!hasExecutionSigningKey()) throw new AIGatewayError("EXECUTION_UNAVAILABLE");
 
       const result = await runAiGateway(supabase, {
         provider: input.provider,
         routingPreference: input.routingPreference,
         messages: input.messages,
         systemInstruction: buildPlanningInstruction(),
+        openRouterMaxOutputTokens: 2_048,
       }, deadline, diagnostics);
       deadline.assertRemaining();
       const plan = parseAgentPlanText(result.text);
@@ -46,6 +48,7 @@ export async function POST(request: Request): Promise<Response> {
         throw new AIGatewayError("PROVIDER_ERROR");
       }
       const planAuthorization = issuePlanAuthorization(userId, plan);
+      if (!planAuthorization) throw new AIGatewayError("EXECUTION_UNAVAILABLE");
       return aiJson({ plan, planAuthorization });
     })());
   } catch (error) {

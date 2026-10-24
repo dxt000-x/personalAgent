@@ -5,11 +5,13 @@ import { AIRequestDiagnostics } from "@/lib/ai/diagnostics";
 import { AI_REQUEST_DEADLINE_MS } from "@/lib/ai/request-deadline";
 import { runAiGateway } from "@/lib/ai/gateway";
 import { createClient } from "@/lib/supabase/server";
-import { issuePlanAuthorization } from "@/lib/agent/execution-authorization";
+import { hasExecutionSigningKey, issuePlanAuthorization } from "@/lib/agent/execution-authorization";
 
 vi.mock("@/lib/ai/gateway", () => ({ runAiGateway: vi.fn() }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
-vi.mock("@/lib/agent/execution-authorization", () => ({ issuePlanAuthorization: vi.fn(() => "signed-plan-token") }));
+vi.mock("@/lib/agent/execution-authorization", () => ({
+  hasExecutionSigningKey: vi.fn(() => true), issuePlanAuthorization: vi.fn(() => "signed-plan-token"),
+}));
 
 const plan = {
   version: 1,
@@ -59,6 +61,7 @@ describe("POST /api/agent/plan", () => {
     expect(vi.mocked(runAiGateway).mock.calls[0][1]).toMatchObject({
       provider: "openrouter", routingPreference: "auto",
       messages: [{ role: "user", content: "帮我制定学习计划" }],
+      openRouterMaxOutputTokens: 2_048,
     });
     expect(vi.mocked(runAiGateway).mock.calls[0][1].systemInstruction).toContain("只能输出 JSON");
     expect(vi.mocked(runAiGateway).mock.calls[0][2].signal).toBeInstanceOf(AbortSignal);
@@ -67,6 +70,25 @@ describe("POST /api/agent/plan", () => {
     expect(diagnostics?.snapshot("SUCCESS")).toMatchObject({ endpoint: "plan", finalErrorCode: "SUCCESS",
       authDurationMs: expect.any(Number), validationDurationMs: expect.any(Number), attemptNumber: 0 });
     expect(finish).toHaveBeenCalledExactlyOnceWith("SUCCESS");
+  });
+
+  it.each([undefined, "short"])("rejects an unusable signing key before model work: %s", async (key) => {
+    vi.stubEnv("AGENT_EXECUTION_SECRET", key);
+    const { hasExecutionSigningKey: actualCheck } = await vi.importActual<
+      typeof import("@/lib/agent/execution-authorization")>("@/lib/agent/execution-authorization");
+    vi.mocked(hasExecutionSigningKey).mockImplementation(actualCheck);
+    const response = await POST(request());
+    expect(response.status).toBe(503);
+    expect((await response.json()).error.code).toBe("EXECUTION_UNAVAILABLE");
+    expect(runAiGateway).not.toHaveBeenCalled();
+    expect(issuePlanAuthorization).not.toHaveBeenCalled();
+  });
+
+  it("rejects issuance failure instead of returning a plan without authorization", async () => {
+    vi.mocked(issuePlanAuthorization).mockReturnValueOnce(null);
+    const response = await POST(request());
+    expect(response.status).toBe(503);
+    expect((await response.json()).error.code).toBe("EXECUTION_UNAVAILABLE");
   });
 
   it("records quota failure once without logging task content", async () => {

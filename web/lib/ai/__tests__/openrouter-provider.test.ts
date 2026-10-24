@@ -79,9 +79,17 @@ describe("OpenRouter provider with an offline SDK mock", () => {
       .generate([{ role: "user", content: "private task" }], controller.signal, "planning rules");
     await pending;
     expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({
-      model: "fake-model", stream: false, max_tokens: 2_048,
+      model: "fake-model", stream: false, max_tokens: 1_024,
     }), { signal: controller.signal });
     expect(vi.mocked(fetch).mock.calls[0][1]).toMatchObject({ signal: controller.signal });
+  });
+
+  it("uses 2048 only when the server supplies the Plan override", async () => {
+    await createOpenRouterProvider("fake-key", "fake-model")
+      .generate([], new AbortController().signal, undefined, { openRouterMaxOutputTokens: 2_048 });
+    expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({
+      model: "fake-model", stream: false, max_tokens: 2_048,
+    }), expect.anything());
   });
 
   it("records start, response headers and completed body in the final event sequence", async () => {

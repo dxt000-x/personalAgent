@@ -73,5 +73,6 @@ export type ProviderLifecycleEvent =
 
 export interface AIProvider {
   generate(messages: ChatMessage[], signal: AbortSignal, systemInstruction?: string,
-    options?: { disableThinking?: boolean; onLifecycleEvent?: (event: ProviderLifecycleEvent) => void }): Promise<AIChatResult>;
+    options?: { disableThinking?: boolean; openRouterMaxOutputTokens?: 2_048;
+      onLifecycleEvent?: (event: ProviderLifecycleEvent) => void }): Promise<AIChatResult>;
 }

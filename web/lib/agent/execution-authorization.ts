@@ -20,6 +20,10 @@ function signingKey(): string | null {
   return key && key.length >= 32 ? key : null;
 }
 
+export function hasExecutionSigningKey(): boolean {
+  return signingKey() !== null;
+}
+
 function signature(payload: string, key: string): Buffer {
   return createHmac("sha256", key).update(payload).digest();
 }

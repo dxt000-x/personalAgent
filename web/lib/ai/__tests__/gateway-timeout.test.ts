@@ -32,6 +32,18 @@ beforeEach(() => {
 });
 
 describe("shared Gateway deadline behavior with fake providers", () => {
+  it("passes the Plan-only output override to OpenRouter, not other providers", async () => {
+    const deadline = new AIRequestDeadline(new AbortController().signal);
+    try {
+      await runAiGateway(client, { provider: "openrouter", routingPreference: "auto", messages,
+        openRouterMaxOutputTokens: 2_048 }, deadline);
+      expect(calls.openrouter.mock.calls[0][3]).toMatchObject({ openRouterMaxOutputTokens: 2_048 });
+      await runAiGateway(client, { provider: "ollama", routingPreference: "auto", messages,
+        openRouterMaxOutputTokens: 2_048 }, deadline);
+      expect(calls.ollama.mock.calls[0][3]).not.toHaveProperty("openRouterMaxOutputTokens");
+    } finally { deadline.close(); }
+  });
+
   it("keeps explicit OpenRouter 429 without fallback and logs only safe parsed error labels", async () => {
     calls.openrouter.mockRejectedValue(new OpenAI.RateLimitError(429,
       { type: "rate_limit", code: "capacity_exceeded", message: "private upstream details" },
