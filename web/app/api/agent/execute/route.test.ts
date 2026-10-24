@@ -9,6 +9,7 @@ import { executeRegisteredTool } from "@/lib/agent/tool-executor";
 
 vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
 vi.mock("@/lib/agent/execution-store", () => ({
+  ExecutionStoreError: class extends Error {},
   persistExecutionAuthorization: vi.fn(), consumeExecutionAuthorization: vi.fn(), finishExecutionAuthorization: vi.fn(),
 }));
 vi.mock("@/lib/agent/tool-executor", () => ({ executeRegisteredTool: vi.fn() }));

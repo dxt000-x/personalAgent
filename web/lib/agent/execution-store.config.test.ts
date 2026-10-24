@@ -5,6 +5,9 @@ const state = vi.hoisted(() => ({
   poolCount: 0,
   poolOptions: undefined as { user: string; host: string; ssl: { rejectUnauthorized: boolean; servername: string } } | undefined,
   query: vi.fn(),
+  connectError: false,
+  releaseError: false,
+  releaseCount: 0,
   certificateFails: false,
   onCertificate: undefined as (() => void) | undefined,
 }));
@@ -13,6 +16,13 @@ vi.mock("pg", () => ({ Pool: class {
   constructor(options: NonNullable<typeof state.poolOptions>) { state.poolCount += 1; state.poolOptions = options; }
   on() { return this; }
   query(...args: unknown[]) { return state.query(...args); }
+  async connect() {
+    if (state.connectError) throw new Error("private connection detail");
+    return { query: (...args: unknown[]) => state.query(...args), release: () => {
+      state.releaseCount += 1;
+      if (state.releaseError) throw new Error("private release detail");
+    } };
+  }
 } }));
 vi.mock("node:crypto", async (importOriginal) => ({ ...(await importOriginal<typeof import("node:crypto")>()),
   X509Certificate: class {
@@ -57,6 +67,9 @@ beforeEach(() => {
   state.poolCount = 0;
   state.poolOptions = undefined;
   state.certificateFails = false;
+  state.connectError = false;
+  state.releaseError = false;
+  state.releaseCount = 0;
   state.onCertificate = undefined;
   vi.mocked(createClient).mockResolvedValue({ auth: { getClaims: vi.fn().mockResolvedValue({
     data: { claims: { sub: "11111111-1111-4111-8111-111111111111" } }, error: null,
@@ -145,5 +158,57 @@ describe("execution store project configuration", () => {
     const response = await confirmPlan();
     expect(response.status).toBe(503);
     expect(JSON.stringify(await response.json())).not.toMatch(/private|database password|test-only/u);
+    expect(state.releaseCount).toBe(1);
+  });
+
+  it.each([
+    ["config", "invalid_config", "config"],
+    ["pool_connect", "connection_or_tls", "connect"],
+    ["issue_query", "query_error", "query"],
+    ["issue_result", "returned_false", "false"],
+    ["issue_result", "unexpected_result", "empty"],
+  ] as const)("logs one safe %s failure", async (stage, category, failure) => {
+    const log = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    if (failure === "config") vi.stubEnv("AGENT_EXECUTION_EXPECTED_PROJECT_REF", undefined);
+    if (failure === "connect") state.connectError = true;
+    if (failure === "query") state.query.mockRejectedValueOnce(new Error("private password and SQL parameters"));
+    if (failure === "false") state.query.mockResolvedValueOnce({ rows: [{ value: false }] });
+    if (failure === "empty") state.query.mockResolvedValueOnce({ rows: [] });
+    const response = await confirmPlan();
+    expect(response.status).toBe(503);
+    expect((await response.json()).error.code).toBe("EXECUTION_UNAVAILABLE");
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(log.mock.calls[0][0]))).toEqual({ event: "agent_confirm_failure", stage, category });
+    expect(String(log.mock.calls[0][0])).not.toMatch(/private|password|postgres|certificate|11111111|pxfaqcepztzqyqtmbdrf/u);
+    expect(state.releaseCount).toBe(failure === "query" || failure === "false" || failure === "empty" ? 1 : 0);
+    log.mockRestore();
+  });
+
+  it("classifies a signing failure without database access", async () => {
+    const log = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const authorization = await import("./execution-authorization");
+    const issue = vi.spyOn(authorization, "issueExecutionAuthorization").mockReturnValueOnce(null);
+    const response = await confirmPlan();
+    expect(response.status).toBe(503);
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(log.mock.calls[0][0]))).toEqual({
+      event: "agent_confirm_failure", stage: "signing", category: "invalid_config",
+    });
+    expect(state.poolCount).toBe(0);
+    issue.mockRestore();
+    log.mockRestore();
+  });
+
+  it("classifies an unexpected error without logging its contents", async () => {
+    const log = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    state.releaseError = true;
+    const response = await confirmPlan();
+    expect(response.status).toBe(503);
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(log.mock.calls[0][0]))).toEqual({
+      event: "agent_confirm_failure", stage: "unexpected", category: "unexpected",
+    });
+    expect(String(log.mock.calls[0][0])).not.toContain("private release detail");
+    log.mockRestore();
   });
 });
