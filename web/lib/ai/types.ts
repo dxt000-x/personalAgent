@@ -50,6 +50,29 @@ export type ProviderStatus = {
   model: string;
 };
 
+export type ProviderLifecycleStage = "awaiting_headers" | "reading_body" | "response_complete";
+export type ProviderLifecycleEvent =
+  | { event: "request_started"; elapsedMs: number;
+      outgoingStreamStatus?: "true" | "false" | "missing" | "invalid" }
+  | { event: "response_headers"; elapsedMs: number; status: number; upstreamRequestId?: string;
+      openrouterGenerationId?: string;
+      contentType?: string; contentLength?: string | number; transferEncoding?: string;
+      retryAfter?: string; retryAfterSeconds?: number;
+      rateLimitLimit?: string | number; rateLimitRemaining?: string | number; rateLimitReset?: string | number;
+      upstreamRequestIdStatus?: "present" | "missing" | "invalid";
+      openrouterGenerationIdStatus?: "present" | "missing" | "invalid" }
+  | { event: "response_complete"; elapsedMs: number }
+  | { event: "response_structure"; elapsedMs: number;
+      choicesStatus: "missing" | "array" | "other"; choiceCount: number | "over_limit";
+      firstChoicePresent: boolean; messagePresent: boolean;
+      contentKind: "missing" | "null" | "string" | "other";
+      contentEmpty?: boolean; contentLength?: number | "over_limit";
+      finishReason: "stop" | "length" | "tool_calls" | "content_filter" | "function_call" | "missing" | "other";
+      hasToolCalls: boolean; hasRefusal: boolean; hasReasoning: boolean }
+  | { event: "request_aborted" | "request_failed"; elapsedMs: number; stage: ProviderLifecycleStage };
+
 export interface AIProvider {
-  generate(messages: ChatMessage[], signal: AbortSignal, systemInstruction?: string, options?: { disableThinking?: boolean }): Promise<AIChatResult>;
+  generate(messages: ChatMessage[], signal: AbortSignal, systemInstruction?: string,
+    options?: { disableThinking?: boolean; openRouterMaxOutputTokens?: 2_048;
+      onLifecycleEvent?: (event: ProviderLifecycleEvent) => void }): Promise<AIChatResult>;
 }

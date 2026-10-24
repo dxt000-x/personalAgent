@@ -1,3 +1,5 @@
+import OpenAI from "openai";
+
 export type AIErrorCode =
   | "AUTH_REQUIRED"
   | "PROVIDER_NOT_CONFIGURED"
@@ -11,7 +13,9 @@ export type AIErrorCode =
   | "QUOTA_UNAVAILABLE"
   | "TIMEOUT"
   | "KNOWLEDGE_UNAVAILABLE"
-  | "KNOWLEDGE_CONTEXT_LIMIT";
+  | "KNOWLEDGE_CONTEXT_LIMIT"
+  | "REPLAY_REJECTED"
+  | "EXECUTION_UNAVAILABLE";
 
 const errorDetails: Record<AIErrorCode, { status: number; message: string }> = {
   AUTH_REQUIRED: { status: 401, message: "请先登录。" },
@@ -27,6 +31,8 @@ const errorDetails: Record<AIErrorCode, { status: number; message: string }> = {
   TIMEOUT: { status: 504, message: "模型服务响应超时，请稍后重试。" },
   KNOWLEDGE_UNAVAILABLE: { status: 503, message: "知识库检索暂时不可用，请稍后重试。" },
   KNOWLEDGE_CONTEXT_LIMIT: { status: 400, message: "本次对话已没有足够空间加入知识库资料，请清空会话或缩短消息。" },
+  REPLAY_REJECTED: { status: 409, message: "执行授权已使用，请重新确认计划。" },
+  EXECUTION_UNAVAILABLE: { status: 503, message: "计划执行暂时不可用，请稍后重试。" },
 };
 
 export class AIGatewayError extends Error {
@@ -39,7 +45,25 @@ export class AIGatewayError extends Error {
   }
 }
 
+/** Raised only after a provider adapter has received a non-success HTTP response. */
+export class UpstreamHttpError extends AIGatewayError {}
+
+export type ProviderResponseFailure = "empty_choices" | "missing_content" | "empty_content" | "malformed_response";
+
+/** Safe structural classification; never carries response content or SDK details. */
+export class ProviderResponseError extends AIGatewayError {
+  constructor(readonly failure: ProviderResponseFailure) {
+    super("PROVIDER_ERROR");
+  }
+}
+
+export function upstreamHttpFailure(status: number, signal: AbortSignal): UpstreamHttpError {
+  const safeError = providerFailure({ status }, signal);
+  return new UpstreamHttpError(safeError.code, safeError.status);
+}
+
 export function providerFailure(error: unknown, signal: AbortSignal) {
+  if (error instanceof OpenAI.APIConnectionTimeoutError) return new AIGatewayError("TIMEOUT");
   if (typeof error === "object" && error !== null) {
     if ("status" in error && typeof error.status === "number") {
       if (error.status === 429) return new AIGatewayError("RATE_LIMITED");

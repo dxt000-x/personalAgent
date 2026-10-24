@@ -66,6 +66,13 @@ beforeEach(() => {
 });
 
 describe("POST /api/ai/chat with fake providers", () => {
+  it("does not request the Plan-only OpenRouter output override", async () => {
+    const { response } = await responseFor("openrouter");
+    expect(response.status).toBe(200);
+    expect(calls.openrouter).toHaveBeenCalledTimes(1);
+    expect(calls.openrouter.mock.calls[0][3]).not.toHaveProperty("openRouterMaxOutputTokens");
+  });
+
   const source = { documentId: "11111111-1111-4111-8111-111111111111", fileName: "notes.txt",
     chunkIndex: 0, snippet: "TCP 是传输协议" };
   const knowledgeRequest = (knowledge: unknown, provider: ProviderId | "auto" = "ollama",

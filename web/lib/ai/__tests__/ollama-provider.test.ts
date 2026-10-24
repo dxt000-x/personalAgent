@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createOllamaProvider } from "../ollama-provider";
+import { UpstreamHttpError } from "../errors";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -43,7 +44,9 @@ describe("Ollama request options with fake fetch", () => {
     const expected = status === 429 ? "RATE_LIMITED"
       : status === 401 || status === 403 ? "PROVIDER_AUTH_FAILED"
         : status >= 500 ? "PROVIDER_ERROR" : "PROVIDER_REQUEST_REJECTED";
-    await expect(createOllamaProvider("http://localhost.invalid", "qwen3:8b")
-      .generate([{ role: "user", content: "fake" }], new AbortController().signal)).rejects.toMatchObject({ code: expected });
+    const result = createOllamaProvider("http://localhost.invalid", "qwen3:8b")
+      .generate([{ role: "user", content: "fake" }], new AbortController().signal);
+    await expect(result).rejects.toBeInstanceOf(UpstreamHttpError);
+    await expect(result).rejects.toMatchObject({ code: expected });
   });
 });

@@ -1,6 +1,8 @@
 import "server-only";
+import { ApiError as GeminiApiError } from "@google/genai";
+import OpenAI from "openai";
 import type { createClient } from "@/lib/supabase/server";
-import { AIGatewayError, providerFailure } from "./errors";
+import { AIGatewayError, ProviderResponseError, UpstreamHttpError, providerFailure } from "./errors";
 import { AUTO_PROVIDER_TIMEOUT_MS, PROVIDER_TIMEOUT_MS } from "./limits";
 import { AIRequestDeadline, MIN_CLOUD_START_MS, MIN_FALLBACK_WINDOW_MS } from "./request-deadline";
 import { AIRequestDiagnostics } from "./diagnostics";
@@ -14,7 +16,8 @@ type AuthenticatedClient = NonNullable<Awaited<ReturnType<typeof createClient>>>
 /** Shared chat/extraction path: one quota reservation per routed request, before cloud I/O. */
 export async function runAiGateway(
   supabase: AuthenticatedClient,
-  input: { provider: ProviderSelection; routingPreference: RoutingPreference; messages: ChatMessage[]; systemInstruction?: string; disableThinking?: boolean },
+  input: { provider: ProviderSelection; routingPreference: RoutingPreference; messages: ChatMessage[];
+    systemInstruction?: string; disableThinking?: boolean; openRouterMaxOutputTokens?: 2_048 },
   deadline: AIRequestDeadline,
   diagnostics?: AIRequestDiagnostics,
 ): Promise<AIChatResult> {
@@ -35,26 +38,66 @@ export async function runAiGateway(
       cloudQuotaReserved = true;
     }
     deadline.assertRemaining(providerId === "ollama" ? 1 : MIN_CLOUD_START_MS);
-    const signal = deadline.attemptSignal(timeoutMs);
+    const { signal, abortOrigin, close } = deadline.attemptSignals(timeoutMs);
     diagnostics?.attempt(providerId);
+    const providerOptions = { disableThinking: input.disableThinking,
+      ...(providerId === "openrouter" && input.openRouterMaxOutputTokens
+        ? { openRouterMaxOutputTokens: input.openRouterMaxOutputTokens } : {}),
+      ...(providerId === "openrouter" && diagnostics
+        ? { onLifecycleEvent: (event: import("./types").ProviderLifecycleEvent) => diagnostics.recordProviderLifecycle(event) }
+        : {}) };
     try {
       const result = await (diagnostics
-        ? diagnostics.measure("providerDurationMs", () => provider.generate(input.messages, signal, input.systemInstruction, { disableThinking: input.disableThinking }))
-        : provider.generate(input.messages, signal, input.systemInstruction, { disableThinking: input.disableThinking }));
+        ? diagnostics.measure("providerDurationMs", () => provider.generate(input.messages, signal, input.systemInstruction,
+          providerOptions))
+        : provider.generate(input.messages, signal, input.systemInstruction, providerOptions));
       if (signal.aborted) throw new AIGatewayError("TIMEOUT");
       deadline.assertRemaining();
       return result;
     } catch (error) {
-      throw error instanceof AIGatewayError ? error : providerFailure(error, signal);
+      const safeError = error instanceof AIGatewayError ? error : providerFailure(error, signal);
+      if (diagnostics) {
+        const httpError = error instanceof UpstreamHttpError
+          || (error instanceof OpenAI.APIError && typeof error.status === "number")
+          || error instanceof GeminiApiError;
+        const sdkTimeout = error instanceof OpenAI.APIConnectionTimeoutError
+          || (error instanceof Error && error.name === "TimeoutError");
+        const aborted = abortOrigin();
+        if (error instanceof OpenAI.APIError && typeof error.status === "number") {
+          diagnostics.recordUpstreamError(error.status, error.error);
+        }
+        const origin = aborted
+          ? httpError || sdkTimeout ? "unknown" : aborted
+          : httpError ? "upstream_http" : sdkTimeout ? "sdk_timeout" : "unknown";
+        diagnostics.setFailureOrigin(origin);
+        diagnostics.setFailureKind(aborted
+          ? origin === "unknown" || aborted === "unknown" ? "abort_race_unknown" : aborted
+          : error instanceof ProviderResponseError ? error.failure
+            : httpError ? "upstream_http_error"
+              : sdkTimeout ? "sdk_timeout"
+                : error instanceof OpenAI.APIConnectionError ? "sdk_connection_error"
+                  : error instanceof OpenAI.APIError ? "sdk_api_error"
+                    : error instanceof SyntaxError ? "response_parse_error"
+                      : error instanceof AIGatewayError ? "internal_gateway_error"
+                        : "unexpected_provider_error");
+      }
+      throw safeError;
+    } finally {
+      close();
     }
   }
 
-  if (input.provider !== "auto") return generate(input.provider, PROVIDER_TIMEOUT_MS);
+  if (input.provider !== "auto") {
+    diagnostics?.setFallback("not_evaluated_explicit", "explicit_no_fallback");
+    return generate(input.provider, PROVIDER_TIMEOUT_MS);
+  }
 
   deadline.assertRemaining();
   const route = await (diagnostics
     ? diagnostics.measure("routeDurationMs", () => getAutoRoute({ preference: input.routingPreference, signal: deadline.signal }))
     : getAutoRoute({ preference: input.routingPreference, signal: deadline.signal }));
+  diagnostics?.setFallback(route.length > 1 ? "available" : "unavailable",
+    route.length > 1 ? "auto_candidate_available" : "auto_no_candidate");
   deadline.assertRemaining();
   let lastError: AIGatewayError | undefined;
   for (let index = 0; index < route.length; index += 1) {
@@ -70,7 +113,11 @@ export async function runAiGateway(
     } catch (error) {
       const safeError = error instanceof AIGatewayError ? error : new AIGatewayError("PROVIDER_ERROR");
       lastError = safeError;
+      if (index < route.length - 1 && !["PROVIDER_ERROR", "TIMEOUT"].includes(safeError.code)) {
+        diagnostics?.setFallback("available", "auto_error_ineligible");
+      }
       if (index >= route.length - 1 || !["PROVIDER_ERROR", "TIMEOUT"].includes(safeError.code)) throw safeError;
+      diagnostics?.setFallback("available", "auto_attempted");
       deadline.assertRemaining();
     }
   }
