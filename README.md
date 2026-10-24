@@ -1,31 +1,25 @@
 # Personal AI Assistant
 
-面向大学生和年轻职场人的 Web Personal AI Agent，目标是帮助用户组织学习、工作与个人知识。
+面向大学生和年轻职场人的 Web Personal AI Assistant，帮助用户在一个入口整理个人记忆与知识、使用 AI 对话，并在确认计划后执行受限工具。
 
 ## 在线体验
 
 🌐 **Live Demo：**  
-https://personal-agent-seven-mu.vercel.app
+[打开 PersonalAgent](https://personal-agent-seven-mu.vercel.app) · [GitHub 仓库](https://github.com/dxt000-x/personalAgent)
 
 ### 当前版本
 
-**Personal AI Workspace — Auth、Memory、Knowledge Grounding 与多 Provider AI Gateway**
+**Personal AI Workspace — Auth、Memory、Knowledge Grounding、AI Gateway 与受保护的 Agent Execution**
 
 当前已实现：
 
 - ✅ Next.js Web 应用基础架构
-- ✅ Personal AI Agent Workspace
-- ✅ Dashboard
-- ✅ Agent Execution Timeline UI
-- ✅ Personal Memory UI
-- ✅ Knowledge Base UI
-- ✅ 用户主动启用的知识库辅助 AI 回答
-- ✅ Settings
-- ✅ Supabase 用户注册 / 登录 / 退出
-- ✅ 服务端身份认证与受保护路由
-- ✅ Vercel 公网部署
+- ✅ Supabase 登录认证、受保护路由与个人记忆 CRUD
+- ✅ 多 Provider AI Gateway、Agent Chat 与用户主动启用的知识库关键词检索 / Chat Grounding
+- ✅ Agent Planning、固定 Tool Registry 与需用户确认的受保护执行授权
+- ✅ Dashboard、Memory、Knowledge、Agent、Settings 界面及 Vercel 公网部署
 
-> OpenRouter 在本地及 Vercel 的真实调用已有阶段性人工验收记录。知识库上传、Storage 保存、处理、片段生成、搜索和 Chat Grounding 的 Production 验收已由维护者确认并[归档](docs/releases/b2-knowledge-final.md)；本次文档校准未重新执行生产测试，也不代表全部异常恢复或跨账号写操作均已验收。独立测试项目已通过 A/B 双向检索隔离、ready/deleting 过滤及页面搜索；uploading、processing、failed 的真实过滤仍待验证。AI Gateway 上游 4xx 不可恢复错误的分类修复已随 PR #38 上线，真实上游 4xx 故障场景尚未生产实测。智能记忆候选提取已实现，仍待人工联调；自主 Agent Planning、工具调用与 Local Connector 尚未实现。
+> Production 中 `Plan → Confirm → Execute` 已实际成功运行，当前验证的可执行工具为 `read_current_time`。授权与登录用户、计划和有效期绑定，经数据库原子消费并保留执行审计；既有 Confirm 503 故障的根因仍待脱敏诊断定位。这一成功记录不代表通用自主 Agent、任意工具或本地文件操作。OpenRouter 与本地 Ollama 有真实调用记录，不代表全部 Provider 均已生产实测。知识库的 Production Search 与 Chat Grounding 验收见[归档](docs/releases/b2-knowledge-final.md)；跨账号处理/删除拒绝、部分失败恢复及完整数据库恢复演练仍待完成。本次文档校准未重新运行生产验收。
 
 ## 比赛项目目标
 
@@ -33,15 +27,15 @@ https://personal-agent-seven-mu.vercel.app
 
 ## 当前开发阶段
 
-**Memory-aware Agent 与可选 Knowledge Grounding。** `/memory` 使用 Supabase Postgres 与 authenticated Session 实现手动 CRUD；`/agent` 在服务端按当前登录用户检索有限的 Personal Memory。用户主动开启知识库并提供关键词后，Chat 还会检索该用户的 `ready` 知识片段，将实际选中的有限摘录作为不可信引用资料加入模型上下文；无匹配时不调用模型。数据库 RLS 仍是最终行级边界。Agent 的智能记忆建议默认关闭，启用后仅生成候选，用户确认后才保存。当前采用关键词匹配，不包含 Embedding、Semantic Search 或 Vector RAG。
+**Memory-aware Chat、可选 Knowledge Grounding 与受限 Agent Execution。** `/memory` 使用 Supabase Postgres 与 authenticated Session 实现手动 CRUD；`/agent` 在服务端按当前登录用户检索有限的 Personal Memory。用户主动开启知识库并提供关键词后，Chat 检索该用户的 `ready` 知识片段，将有限摘录作为不可信引用资料加入模型上下文；无匹配时不调用模型。Agent Planning 生成结构化计划，确认后才能使用固定工具。数据库 RLS 与执行授权门禁保护各自的数据及执行边界。智能记忆建议默认关闭，用户确认后才保存。知识库仍采用关键词匹配，不包含 Embedding、Semantic Search 或 Vector RAG。
 
 ## 技术架构概览
 
 ```text
 当前：Browser → Agent Chat (Next.js) → Authenticated AI Gateway ┬→ Session-scoped Memory Retrieval (Supabase + RLS) ─┐
                                                          └→ optional Knowledge Keyword Search (ready chunks + RLS) ─┴→ Safe Context → Rule-based Model Router → OpenRouter / OpenAI / DeepSeek / Gemini / Ollama
-未来：Browser → Next.js Web → FastAPI → Personal Agent → Memory / RAG / Tools
-                                                       └→ Windows Local Connector
+      Browser → Agent Plan → Confirm → user-bound signed authorization → atomic DB consumption + audit → fixed read_current_time tool
+未来：Browser → Next.js Web → FastAPI / Local Connector → advanced Agent / semantic retrieval / device tools
 ```
 
 Supabase 用于认证、Personal Memory、知识库元数据与片段存储；私有 Storage 保存知识库原件。Agent Chat 的 Auto 路由优先选取本地可用的 Ollama；本地不可用时优先考虑已配置的 OpenRouter，再考虑其他云 Provider。云 Provider 只显示配置状态，健康状态保持未知，真实调用失败后才可按规则尝试下一个候选。用户也可以显式选择 Provider，显式选择不触发切换。FastAPI Agent 与 Windows Local Connector 仍为规划。OpenRouter 已完成真实上游验收；OpenAI、DeepSeek 尚无真实成功验收记录，Gemini 仍受上游权限限制。
@@ -54,7 +48,7 @@ docs/         架构与开发流程
 .env.example  不含密钥的环境变量示例
 ```
 
-详细边界见 [架构文档](docs/architecture.md)。
+执行授权只允许服务端固定映射的工具；`read_app_status` 尚不可执行，客户端不能指定 handler、模块或命令。详细边界见 [架构文档](docs/architecture.md)。
 
 ## 本地运行
 
@@ -81,7 +75,7 @@ npm run start
 
 ## Automated Regression Tests
 
-在 `web/` 运行 `npm test`。该命令使用 Vitest 单次执行并退出，覆盖 AI Router、Privacy、显式 Provider、Auto fallback、输入边界、公开错误响应、Memory Context、候选提取与确认交互。测试采用确定性的 fake Provider、fake 配置和受控认证/Memory 替身；不会调用真实 OpenRouter、OpenAI、DeepSeek、Gemini 或 Ollama，也不需要云 API Key、Supabase Secret 或本地 Ollama 服务。`npm run test:watch` 仅供开发时使用。
+在 `web/` 运行 `npm test`。该命令使用 Vitest 单次执行并退出，覆盖 AI Router、Privacy、显式 Provider、Auto fallback、输入边界、公开错误响应、Memory Context、候选提取，以及 Agent Plan、授权与执行的离线回归。测试使用受控 Provider、认证和数据库替身；Mock 通过不能代替真实 Provider、数据库并发或 Production 验收。`npm run test:watch` 仅供开发时使用。
 
 自动回归测试补充独立的真实 Provider 人工集成验收，不替代上游联调。Ollama、OpenRouter、Privacy、Auto 云切换与双用户 Memory 隔离已有阶段性人工验收；OpenAI、DeepSeek 和 Gemini 不因此视为已通过真实调用。
 
@@ -107,13 +101,14 @@ npm run start
 - Supabase 官方 `@supabase/ssr` 浏览器/服务端客户端，Cookie 会话、Proxy 刷新与服务端身份校验。
 - Dashboard / Agent / Memory / Knowledge / Settings 未登录时跳转 `/login`；侧栏展示认证邮箱及退出入口。
 - 统一侧边导航与 Dashboard：今日重点、项目、最近任务、演示记忆与继续任务入口。
-- `/agent`：真实 AI Chat Workspace，可查看 Provider 配置状态、选择模型、发送多轮对话、主动开启 Knowledge Grounding 并指定检索关键词、查看真实来源、查看请求状态、重试和清空会话。
+- `/agent`：真实 AI Chat Workspace，可查看 Provider 配置状态、选择 Provider、发送多轮对话、主动开启 Knowledge Grounding 并指定检索关键词、查看真实来源、查看请求状态、重试和清空会话。实际模型由服务端配置决定。
 - Agent 对话通过 `POST /api/ai/chat` 使用认证后的 Next.js AI Gateway；Ollama `qwen3:8b` 已完成真实本地推理验收。
 - Agent 可选择开启智能记忆建议：聊天成功后单独分析本轮用户消息，展示最多 3 条候选；点击确认后复用 `POST /api/memories` 保存，忽略则不写入。
-- Agent Timeline 显示 Received、Validating、Retrieving Memory、Routing、Generating、Completed；服务端按当前用户生成受限 Memory Context，并在用户开启时加入受限 Knowledge 引用上下文，不执行 Agent Planning 或工具调用。
+- Agent Chat Timeline 显示 Received、Validating、Retrieving Memory、Routing、Generating、Completed；另有 Agent Plan、Confirm、Execute 路径。服务端按当前用户生成受限 Memory / Knowledge Context；执行路径仅允许已确认计划对应的固定工具。
+- `POST /api/agent/plan`、`/confirm`、`/execute`：生成并校验完整计划，签发与用户及 Plan 哈希绑定的短期授权；确认授权先持久化，再经数据库原子消费、审计后执行固定的 `read_current_time`。重复执行拒绝，数据库不可用时失败关闭。Production 的正常链路已有实际成功记录；这不是任意工具执行能力。
 - `/memory`：通过 `GET/POST /api/memories` 与 `GET/PATCH/DELETE /api/memories/[id]` 访问当前用户的 Personal Memory，支持新增、编辑、删除、加载/空/错误状态；服务端从已验证 Session 获取 `user_id`，不接受客户端指定所有权字段。
 - `/knowledge`：当前账号的 PDF、TXT、Markdown 文件列表、直传、服务端正文解析与有序片段、处理状态、删除及已上线的关键词搜索。搜索接口 `POST /api/knowledge/search` 支持可选 `documentId` 精确过滤，只查询当前用户的 ready 片段；Agent Chat 可在用户主动开启并指定关键词后复用此服务端检索，将有限摘录作为不可信资料提供给模型，并返回实际使用的来源。生产 Migration、受限 Writer、三种格式的上传解析与删除、指定文档的 A/B 直接读取隔离已验收；B2 Production Search 与 Chat Grounding 的 PASS 结论见[归档记录](docs/releases/b2-knowledge-final.md)，不是本次重新实测。独立测试项目已实测指定文档 A/B 双向搜索隔离、ready 命中、deleting 排除、不带 `documentId` 的四次交叉搜索与页面流程；夹具已精确清理，响应中的 `documentId` 字段当次未直接捕获核验。uploading、processing、failed 的真实过滤及剩余异常恢复、跨账号写操作仍待验收。
-- `/settings`：模型、自主程度的本地 UI 选择，以及服务商/连接器占位。
+- `/settings`：模型与自主程度的演示 UI，以及服务商/连接器占位；这里的选择尚不改变服务端实际模型。
 - `POST /api/ai/chat`：认证后支持 Auto 或显式选择 OpenRouter、OpenAI、DeepSeek、Gemini、Ollama；验证输入并返回统一的非流式文本结果。Auto 按规则路由并最多尝试两个候选；显式选择不回退。
 - 云端 AI 每用户每日 30 次预占限制已在 Gateway 与迁移文件中实现；目标环境的迁移部署及真实并发验收状态须单独核实，不以代码存在代替数据库验收。
 - `GET /api/ai/providers`：认证后只返回 Provider 名称、类型、配置状态、可用性和模型显示信息，不包含地址或密钥。Ollama 通过短超时模型列表检查；云 Provider 保持健康未知。
@@ -127,9 +122,9 @@ Agent 对话只保存在前端内存，刷新后清空；发送时只传递最�
 
 ## Planned Features
 
-- FastAPI 后端与 Personal Agent。
+- 独立 FastAPI 后端及更高级的自主 Agent 编排；当前受限 Agent Planning / Execution 由 Next.js 实现。
 - 更丰富的 Memory 语义去重、Embedding、Semantic Search 与个人知识 Vector RAG。
-- Agent Planning、Tools 与 Windows Local Connector。
+- 扩展经过逐项安全设计与验收的工具能力；当前仅 `read_current_time` 可执行。
 - Streaming 与更细的 token/费用预算。
 - Windows Local Connector、本地文件与受控命令执行。当前 Next.js 服务端只能访问自身网络可达的 Ollama；部署在 Vercel 时，`127.0.0.1` 指 Vercel 运行环境，不能访问用户电脑上的 Ollama。
 
@@ -178,7 +173,7 @@ OLLAMA_MODEL=qwen3:8b
 
 删除先标记 `deleting` 并使处理代次失效，再通过 Storage API 移除原件，最后删除文档并级联删除片段；Storage 失败时保留可重试状态。确定性的格式/解析失败标记 `failed` 并尝试清理原件；临时错误尽量标记可重试的 `failed` 并保留原件，数据库不可用导致标记失败时可在处理超时后重领。单用户最多 100 个文档、累计声明容量 100 MiB，每 UTC 小时最多初始化 20 次、领取处理 60 次；单文件仍限 4 MiB。未完成的上传可在页面继续处理或删除；长时间卡住的处理在 10 分钟后可重新认领，旧代次不能提交。扫描版、加密版或无文字 PDF 无法提取；本阶段不提供 OCR、Embedding、语义检索或 Vector RAG。自动测试使用假 Supabase/Storage；独立测试项目已通过 TXT/Markdown/PDF 真实上传、A/B 隔离及数据库并发与限额验收。100 MiB 验证的是数据库声明容量，并非实际上传 100 MiB。生产已通过指定测试文档的普通用户直接跨账号片段与原件只读隔离；跨账号处理/删除拒绝、Storage 删除失败及损坏文件残留恢复、完整数据库恢复演练仍待完成。步骤见 [开发文档](docs/development.md)。
 
-### 智能记忆建议（已实现，待人工联调）
+### 智能记忆建议（功能已实现，真实 Provider 联调与验收待完成）
 
 在 Agent 页面主动勾选“智能记忆建议”；默认关闭。聊天回复显示后，页面只把本轮用户消息送往独立的 `POST /api/ai/memory-candidates`，由真实模型判断长期偏好、持续目标、项目或工作学习背景。普通问候、临时问题和不确定事实可返回零候选；最多展示 3 条。只有点击“确认保存”才调用现有 `POST /api/memories`；“忽略”、关闭开关、清空对话或切换账号都不会保存未确认候选。保存后下一轮聊天可按现有 Memory Context 规则检索。
 

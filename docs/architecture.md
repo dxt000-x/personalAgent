@@ -1,6 +1,6 @@
 # Architecture
 
-## Implemented — Memory-aware Agent
+## Implemented — Personal AI Workspace
 
 - Browser → Web：Next.js App Router 提供 Dashboard、Agent、Memory、Knowledge Base 与 Settings UI。
 - `/login`、`/signup` 与 `/auth/callback` 提供 Supabase Email / Password 认证基础。
@@ -21,7 +21,8 @@
 - Memory Context 作为服务端 system/developer instruction 参数传给 Provider；明确将保存内容视为不可信数据，禁止其覆盖系统、安全、认证、隐私或路由规则。Memory 查询失败时不记录原始错误或内容，聊天可继续且 metadata 显示 unavailable；认证失败仍返回 AUTH_REQUIRED。
 - Agent Timeline 展示 Received、Validating、Retrieving Memory、Routing、Generating、Completed；响应仅返回 Memory status/count，不返回 Memory 内容或数据库标识。主动启用 Knowledge 时另返回使用状态及实际注入片段的有限来源元数据。
 - 缺少或无效的公开配置时不创建客户端，认证页显示提示，受保护页面跳转登录；无开发绕过入口。
-- Dashboard 仍展示演示数据；`/memory` 使用真实 Supabase 数据。`/knowledge` 的文件上传、元数据、有序正文片段及关键词搜索已在生产部署，Agent Chat 已支持用户主动启用的 Knowledge Grounding；B2 Production Search 与 Chat Grounding 验收由维护者确认并[归档](releases/b2-knowledge-final.md)，本次校准没有重新执行生产测试。指定测试文档的生产跨账号直接读取片段/原件隔离已验收；跨账号处理/删除拒绝与异常恢复仍待验收。Agent 页面是真实 Chat UI，但不执行 Agent Planning 或工具。
+- Dashboard 仍展示演示数据；`/memory` 使用真实 Supabase 数据。`/knowledge` 的文件上传、元数据、有序正文片段及关键词搜索已在生产部署，Agent Chat 已支持用户主动启用的 Knowledge Grounding；B2 Production Search 与 Chat Grounding 验收由维护者确认并[归档](releases/b2-knowledge-final.md)，本次校准没有重新执行生产测试。指定测试文档的生产跨账号直接读取片段/原件隔离已验收；跨账号处理/删除拒绝、部分失败恢复与完整数据库恢复演练仍待验收。Agent 页面包含真实 Chat，以及需用户确认的受限 Plan / Execute 路径。
+- `POST /api/agent/plan` 生成并验证 1–8 步的完整计划；`POST /api/agent/confirm` 校验用户、计划及 Plan 授权后，先持久化短期执行授权；`POST /api/agent/execute` 验证授权并在工具运行前通过数据库条件更新原子消费。固定 Tool Registry 中只有 `read_current_time` 可执行，`read_app_status` 尚不可执行；客户端不能指定任意 handler、模块、命令或 URL。签名、用户 ID、Plan 哈希、阶段、期限和 JTI 共同限定授权，数据库不可用时失败关闭。执行事件保留 `issued`、`started`、`succeeded` / `failed` 和 `replay_rejected` 等审计状态；Confirm 失败仅记录固定阶段和错误类别，不记录密钥、Plan 或原始异常。
 - Personal Context Layer 当前实现：Authenticated User → Personal Memory UI → Next.js Memory API → Supabase SSR Session → `public.memories` → RLS。API 从已验证 claims 获取用户 ID；请求不接受客户端指定 `user_id`；数据库仅授予 authenticated 必需的 SELECT、受限列 INSERT/UPDATE 与 DELETE 权限。
 - Memory API 提供 `GET/POST /api/memories` 和 `GET/PATCH/DELETE /api/memories/[id]`，强制 private/no-store 响应。SQL 约束类别、重要度和内容长度；POST 省略 `source`，由数据库 `DEFAULT 'manual'` 填充；更新时间由 trigger 维护。
 - 记忆所有权由 SELECT、INSERT、UPDATE、DELETE 四条 authenticated RLS policy 保障。按用户过滤是额外防护，不替代 RLS；跨用户单条访问以 404 安全失败。
@@ -35,13 +36,14 @@
 - `server/`、`connector/` 仅包含占位说明，不提供服务或 API。
 - `.env.example` 提供无密钥配置示例及 Ollama 本地默认值；真实环境配置被 Git 忽略。
 
-Agent Chat 通过认证后的 Gateway 调用 Auto 路由或显式选择的 Provider。OpenRouter 是云 Provider，服务端使用 `OPENROUTER_API_KEY` 与默认模型 `openrouter/free`；本地及 Vercel 真实调用已有阶段性人工验收。默认本地 Ollama 推理使用 `qwen3:8b`，由配置的 Ollama 服务处理，不产生云 API Token 费用；对话状态只保存在浏览器页面内存。OpenAI、DeepSeek 尚无真实成功验收记录，Gemini 仍受上游权限限制。部署在 Vercel 时，`127.0.0.1` 指 Vercel 自身，不能访问用户电脑上的 Ollama；配置 OpenRouter 后，Auto 可在本地 Ollama 不可用时尝试该云 Provider。Windows Local Connector 尚未实现。
+Agent Chat 通过认证后的 Gateway 调用 Auto 路由或显式选择的 Provider。OpenRouter 是云 Provider，服务端使用 `OPENROUTER_API_KEY` 与默认模型 `openrouter/free`；本地及 Vercel 真实调用已有阶段性人工验收。默认本地 Ollama 推理使用 `qwen3:8b`，由配置的 Ollama 服务处理，不产生云 API Token 费用；对话状态只保存在浏览器页面内存。OpenAI、DeepSeek 和 Gemini 不据此视为已通过真实生产调用。部署在 Vercel 时，`127.0.0.1` 指 Vercel 自身，不能访问用户电脑上的 Ollama；配置 OpenRouter 后，Auto 可在本地 Ollama 不可用时尝试该云 Provider。Windows Local Connector 尚未实现。Production 中 `Plan → Confirm → Execute` 与 `read_current_time` 已实际成功运行；既有 Confirm 503 故障仍待定位，成功记录不证明持续可用、通用自主 Agent 或任意工具能力。
 
 ```text
 Browser → Agent Chat (Next.js) → Authenticated AI Gateway ┬→ Session-scoped Memory Retrieval ──────────┐
                                                          └→ optional Knowledge Keyword Search (ready) ─┴→ Safe Context → Rule-based Model Router ┬→ DB quota reservation → cloud Providers
                     ↑                                                                                                                          └→ Ollama (local model)
               Supabase Auth + RLS
+Browser → Agent Plan → Confirm → signed user/Plan-bound authorization → atomic DB consumption + audit → fixed read_current_time tool
 ```
 
 ## Planned — 目标架构
@@ -61,11 +63,11 @@ Browser
 | --- | --- | --- |
 | Browser / Web | 用户交互与结果展示 | Agent Chat 调用 Gateway；Personal Memory 为真实 CRUD；Dashboard 仍含演示数据；Knowledge 文件列表与上传已在生产运行，部分安全与异常恢复待验收 |
 | API | 请求校验、认证、服务端配置边界 | Next.js AI Gateway 已实现；独立 FastAPI 服务 Planned |
-| Personal Agent | 组织任务、协调模型和工具 | Planned |
+| Personal Agent | 组织任务、协调模型和工具 | 受限 Plan / Confirm / Execute 已实现且 `read_current_time` 有 Production 成功记录；通用自主编排 Planned |
 | Models / Model Router | 调用云模型或本地模型 | OpenRouter、OpenAI、DeepSeek、Gemini、Ollama 显式选择与规则 Auto Router 已实现；OpenRouter 上游真实调用已阶段性验收，智能模型评估/质量路由 Planned |
 | Memory / Knowledge | 个人记忆与知识检索 | Manual Memory CRUD/RLS、确定性服务端 Memory Retrieval 与上下文注入、用户确认的智能记忆候选，以及用户主动启用的知识库关键词检索和 Chat Grounding 已实现；Embedding、Semantic Search 与 Vector RAG Planned |
-| Tools | 可授权的外部与本地操作 | Planned |
-| Supabase | 数据持久化、身份与存储支持 | Auth 与 `public.memories` 的用户隔离手动 CRUD 已实现；知识库表、私有 Storage 与受限角色已在独立测试项目及生产部署核验，指定文档的生产跨账号直接读取已通过，跨账号处理/删除等测试仍待完成；`public.ai_daily_usage` 迁移状态另行核实 |
+| Tools | 可授权的外部与本地操作 | 固定 Tool Registry 与 `read_current_time` 已实现并验收；任意工具、本地文件和命令操作未实现 |
+| Supabase | 数据持久化、身份与存储支持 | Auth、Memory、知识库与执行授权存储已实现；执行授权有原子消费和审计，Production 正常链路已验证。知识库跨账号处理/删除及故障恢复验收仍待完成；`public.ai_daily_usage` 迁移状态另行核实 |
 | Local Connector | 连接用户设备上的 Ollama、本地文件与受控命令执行 | Planned，仅目录占位；当前 Ollama 仅能由可访问其服务的 Next.js 服务端调用 |
 
 Supabase 用于 Web 认证、Personal Memory、知识库文档和片段存储，私有 Storage 保存知识库原件。Memory 与 Knowledge 搜索使用现有 SSR Server Client 和经验证的 claims，不建立第二套 Auth 或 service_role 查询通道。FastAPI 仍是未来高级 Agent / Python Tools / RAG 的规划，`server/` 保留占位。认证 Cookie 由官方 SDK 管理，不建立自研 Session 系统。`getSession()` 中未经验证的用户字段不用于服务端授权。
@@ -74,7 +76,7 @@ Supabase 用于 Web 认证、Personal Memory、知识库文档和片段存储，
 
 **Implemented:** Authenticated User → Session-scoped Memory Retrieval + optional Knowledge Keyword Search → Safe Context → AI Gateway → Selected Provider。用户可以手动 CRUD 自己的记忆；Gateway 使用同一 authenticated SSR client 查询当前用户记录，额外按 claims 用户 ID 过滤，同时由 RLS 执行最终隔离。最多 200 条较新 Memory 候选按最新用户消息确定性重排，最终最多 8 条进入不超过 4000 字符的 Memory Context，并受对话剩余输入预算约束。Memory 缺失时不注入上下文且正常聊天；数据库临时失败时 fail-soft 并返回 `memory.status = unavailable`。Knowledge 仅在用户主动开启并提供关键词时检索当前用户的 ready 片段；无匹配不调用模型，有匹配才把实际使用的有限来源加入不可信上下文。
 
-**Planned:** 未经确认的自动保存、Embedding、Semantic Search、Vector Database、Vector RAG、记忆总结与衰减均未实现。智能记忆候选需要用户主动开启并确认保存；当前 Memory 重排与 Knowledge 关键词引用不是完整 RAG。
+**Planned:** 未经确认的自动保存、Embedding、Semantic Search、Vector Database、Vector RAG、记忆总结与衰减均未实现。智能记忆候选需要用户主动开启并确认保存；当前 Memory 重排与 Knowledge 关键词引用不是完整 RAG。Agent 的高级自主编排与本地设备操作同样仍属规划。
 
 ## 配置边界
 
@@ -85,6 +87,7 @@ Supabase 用于 Web 认证、Personal Memory、知识库文档和片段存储，
 ## 调用保护边界
 
 - 所有 AI 调用要求 Supabase 登录，并保留请求体、消息数、单条/总输入、输出长度与超时限制。
+- Agent 执行要求登录、有效签名、用户/Plan 绑定、确认阶段与短期有效期；执行资格由数据库原子消费，重放被拒绝。固定 Registry 限制实际 handler，审计写入失败不恢复已消费授权。离线 Mock 覆盖不能替代真实数据库并发与 Production 运行证据；已记录的成功仅覆盖测试过的工具和请求。
 - Chat 与独立候选提取共用从请求入口起算的 27 秒 Deadline，两条 Route Handler 均声明 30 秒上限；各阶段共享剩余时间。显式 Provider 单次上限 25 秒，Auto 单次上限 12 秒，首候选为可用后继保留 4 秒，剩余不足 2 秒不启动云端调用。客户端取消与总 Deadline 通过 AbortSignal 传到健康检查、Memory 查询、云配额和 Provider。无法取消的底层 SDK 可能继续执行，但迟到结果不得写入响应。
 - AI 路由最多输出一条允许字段限定的阶段耗时日志；记录随机请求标识、阶段时长、Provider、尝试数、Memory 失败粗类别与安全错误码，不记录私密请求内容或身份凭据。Memory 可选查询维持 2 秒 fail-soft，Auth 失败仍单独拒绝。候选提取仅在当前 `qwen3:8b` 模型使用 `think:false`，普通聊天参数不变。
 - Auto 候选顺序固定为：可用 Ollama，然后按 OpenRouter、OpenAI、DeepSeek、Gemini；最多两次调用。仅 `PROVIDER_ERROR` 与 `TIMEOUT` 允许切换。
