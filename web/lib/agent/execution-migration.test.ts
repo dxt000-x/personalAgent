@@ -29,8 +29,9 @@ describe("agent execution audit migration", () => {
     for (const name of ["issue_execution_authorization", "consume_execution_authorization", "finish_execution_authorization"]) {
       expect(sql).toContain(`create function agent_private.${name}`);
       expect(sql).toContain(`grant execute on function agent_private.${name}`);
-      expect(sql).not.toContain(`grant execute on function agent_private.${name}(`);
     }
+    expect(sql).toMatch(/grant execute on function agent_private\.[^(]+\([^;]+to agent_execution_writer/iu);
+    expect(sql).not.toMatch(/grant execute on function agent_private\.[^(]+\([^;]+to authenticated/iu);
     expect(sql).not.toMatch(/(token|secret|plan_content|message_content)\s+(?:text|jsonb)/iu);
   });
 
