@@ -31,7 +31,7 @@ try {
     throw "Expected local database container '$dbContainer' is not running. Check supabase/config.toml project_id."
   }
 
-  Invoke-LocalDatabaseFile $dbContainer (Join-Path $root "supabase/tests/fixtures/agent_execution_retirement_setup.sql") "agent_execution_retirement_setup.sql"
+  Invoke-LocalDatabaseFile $dbContainer (Join-Path $root "supabase/fixtures/agent_execution_retirement_setup.sql") "agent_execution_retirement_setup.sql"
   Invoke-LocalDatabaseFile $dbContainer (Join-Path $root "supabase/migrations/20261105120000_retire_read_app_status_execution.sql") "retire_read_app_status_execution.sql"
   Invoke-Native "supabase" @("test", "db", "--local")
   Write-Host "PASS: local migration, permissions, inheritance, and audit retention checks completed."
