@@ -46,7 +46,7 @@ Set KEEP_SUPABASE_RUNNING=1 to keep the local stack running.
    - writer membership and legacy function definitions remain;
    - both historical authorization rows and all eight events remain unchanged.
 
-The fixture uses synthetic IDs and no production data or credentials.
+The setup fixture lives in `supabase/fixtures/`, outside `supabase/tests/`, so the Supabase pgTAP runner does not execute it as a test. It uses synthetic IDs and no production data or credentials.
 
 ## Safety boundary
 
