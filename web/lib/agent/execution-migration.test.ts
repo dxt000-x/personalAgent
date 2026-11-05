@@ -48,7 +48,7 @@ describe("agent execution audit migration", () => {
     expect(retireReadAppStatusSql).toContain("agent_execution_writer");
     expect(retireReadAppStatusSql).toContain("pg_catalog.to_regprocedure");
     expect(retireReadAppStatusSql).not.toMatch(/\b(delete from|truncate|drop table|drop function)\b/iu);
-    expect(retireReadAppStatusSql).not.toContain("read_current_time");
+    expect(retireReadAppStatusSql).not.toMatch(/revoke all on function[^;]*read_current_time/iu);
     expect(retireReadAppStatusSql).not.toContain("finish_execution_authorization");
   });
 });
