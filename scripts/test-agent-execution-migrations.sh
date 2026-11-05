@@ -22,7 +22,7 @@ if ! docker ps --filter "name=^/${DB_CONTAINER}$" --filter "status=running" --fo
   exit 1
 fi
 
-docker cp supabase/tests/fixtures/agent_execution_retirement_setup.sql "$DB_CONTAINER:/tmp/agent_execution_retirement_setup.sql"
+docker cp supabase/fixtures/agent_execution_retirement_setup.sql "$DB_CONTAINER:/tmp/agent_execution_retirement_setup.sql"
 docker exec "$DB_CONTAINER" psql -U postgres -d postgres -v ON_ERROR_STOP=1 -f /tmp/agent_execution_retirement_setup.sql
 
 docker cp supabase/migrations/20261105120000_retire_read_app_status_execution.sql "$DB_CONTAINER:/tmp/retire_read_app_status_execution.sql"
