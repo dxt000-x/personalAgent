@@ -330,4 +330,34 @@ describe("shared Gateway deadline behavior with fake providers", () => {
       expect(calls.openrouter).toHaveBeenCalledTimes(1);
     } finally { deadline.close(); }
   });
+
+  it("falls back from an upstream 404 in Auto mode and reserves cloud quota once", async () => {
+    calls.ollama.mockRejectedValue(new AIGatewayError("TIMEOUT"));
+    calls.openrouter.mockRejectedValue(new OpenAI.APIError(404, {}, "private model route detail", new Headers()));
+    calls.openai.mockResolvedValue({ text: "fallback response", provider: "openai", model: "fake-openai" });
+    const deadline = new AIRequestDeadline(new AbortController().signal);
+    const diagnostics = new AIRequestDiagnostics("plan");
+    try {
+      const result = await runAiGateway(client, { provider: "auto", routingPreference: "auto", messages },
+        deadline, diagnostics);
+      expect(result).toMatchObject({ provider: "openai", routing: { mode: "auto", reason: "fallback_after_provider_error" } });
+      expect(calls.openrouter).toHaveBeenCalledTimes(1);
+      expect(calls.openai).toHaveBeenCalledTimes(1);
+      expect(reserveCloudAiQuota).toHaveBeenCalledTimes(1);
+      expect(diagnostics.snapshot("SUCCESS")).toMatchObject({ provider: "openai", attemptNumber: 2 });
+      expect(JSON.stringify(diagnostics.snapshot("SUCCESS"))).not.toContain("private model route detail");
+    } finally { deadline.close(); }
+  });
+
+  it("preserves upstream 404 when Auto has no second candidate", async () => {
+    vi.mocked(getProviderStatuses).mockResolvedValue(statuses(false).filter(({ id }) => id === "openrouter"));
+    calls.openrouter.mockRejectedValue(new OpenAI.APIError(404, {}, "private model route detail", new Headers()));
+    const deadline = new AIRequestDeadline(new AbortController().signal);
+    try {
+      await expect(runAiGateway(client, { provider: "auto", routingPreference: "auto", messages }, deadline))
+        .rejects.toMatchObject({ code: "PROVIDER_REQUEST_REJECTED", status: 502 });
+      expect(calls.openrouter).toHaveBeenCalledTimes(1);
+      expect(calls.openai).not.toHaveBeenCalled();
+    } finally { deadline.close(); }
+  });
 });
