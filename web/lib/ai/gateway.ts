@@ -27,7 +27,7 @@ export async function runAiGateway(
   }
   diagnostics?.setRouting(input.provider, input.routingPreference);
   let cloudQuotaReserved = false;
-  async function generate(providerId: ProviderId, timeoutMs: number) {
+  async function generate(providerId: ProviderId, timeoutMs: number, allowAutoNotFoundFallback = false) {
     deadline.assertRemaining(providerId === "ollama" ? 1 : MIN_CLOUD_START_MS);
     const provider = getProvider(providerId);
     // An unconfigured provider fails in the registry before consuming quota.
@@ -55,7 +55,14 @@ export async function runAiGateway(
       deadline.assertRemaining();
       return result;
     } catch (error) {
-      const safeError = error instanceof AIGatewayError ? error : providerFailure(error, signal);
+      const upstreamStatus = typeof error === "object" && error !== null && "status" in error
+        && typeof error.status === "number" ? error.status : undefined;
+      // In Auto mode, a 404 from one provider usually means its model/route has no endpoint.
+      // Try the already-selected next provider, but preserve the rejection for explicit
+      // provider selection and when no fallback candidate exists.
+      const safeError = input.provider === "auto" && allowAutoNotFoundFallback && upstreamStatus === 404
+        ? new AIGatewayError("PROVIDER_ERROR")
+        : error instanceof AIGatewayError ? error : providerFailure(error, signal);
       if (diagnostics) {
         const httpError = error instanceof UpstreamHttpError
           || (error instanceof OpenAI.APIError && typeof error.status === "number")
@@ -107,7 +114,8 @@ export async function runAiGateway(
       const firstAttemptBudget = index === 0 && route.length > 1
         ? Math.max(1, remaining - MIN_FALLBACK_WINDOW_MS)
         : remaining;
-      const result = await generate(candidate.provider, Math.min(AUTO_PROVIDER_TIMEOUT_MS, firstAttemptBudget));
+      const result = await generate(candidate.provider, Math.min(AUTO_PROVIDER_TIMEOUT_MS, firstAttemptBudget),
+        index < route.length - 1);
       const reason: RoutingReason = index > 0 ? "fallback_after_provider_error" : candidate.reason;
       return { ...result, routing: { mode: "auto", reason } };
     } catch (error) {
