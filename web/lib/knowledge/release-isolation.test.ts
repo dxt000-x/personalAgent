@@ -1,0 +1,20 @@
+import { describe,it,expect,vi } from "vitest";
+import { GET } from "@/app/api/knowledge/classifications/route";
+import { POST } from "@/app/api/knowledge/[id]/classification/route";
+import { KNOWLEDGE_CLASSIFICATION_PERSISTENCE_ENABLED } from "./classification-release-policy";
+import { SupabaseKnowledgeReadRepository } from "./read-server";
+import { SupabaseTrainingRepository } from "./training-server";
+import { SupabaseKnowledgeRepository } from "./server";
+import { callKnowledgeTransition } from "./private-db";
+const create=vi.hoisted(()=>vi.fn(()=>{throw Error("AUTH_MUST_NOT_BE_CALLED_FOR_CLOSED_ROUTE");}));
+const pool=vi.hoisted(()=>vi.fn(()=>{throw Error("POOL_MUST_NOT_BE_CALLED");}));
+vi.mock("@/lib/supabase/server",()=>({createClient:create}));
+vi.mock("pg",()=>({Pool:class{constructor(){pool();}}}));
+describe("production classification boundary is closed without config or database",()=>{
+ it("cannot be opened by a user request or environment switch",()=>expect(KNOWLEDGE_CLASSIFICATION_PERSISTENCE_ENABLED).toBe(false));
+ it.each([GET,POST])("direct endpoint access is unavailable before auth/body/DB",async handler=>{const r=await handler();expect(r.status).toBe(503);expect(r.headers.get("Cache-Control")).toBe("private, no-store");expect(await r.json()).toEqual({error:{code:"CLASSIFICATION_STORAGE_REQUIRED"}});expect(create).not.toHaveBeenCalled();expect(pool).not.toHaveBeenCalled();});
+ it("raw saveClassification dispatcher cannot open a pool",async()=>{await expect(callKnowledgeTransition("saveClassification",[])).rejects.toMatchObject({code:"KNOWLEDGE_UNAVAILABLE"});expect(pool).not.toHaveBeenCalled();});
+ it("ingestion hook cannot trigger optional classification",async()=>{const from=vi.fn(()=>{throw Error("UNEXPECTED_DB_READ");});await new SupabaseKnowledgeRepository({from} as never).afterParse();expect(from).not.toHaveBeenCalled();expect(pool).not.toHaveBeenCalled();});
+ it("read repository selects only established columns scoped to user",async()=>{const q={eq:vi.fn(),maybeSingle:vi.fn(async()=>({data:null,error:null}))};q.eq.mockReturnValue(q);const select=vi.fn(()=>q),from=vi.fn(()=>({select}));await new SupabaseKnowledgeReadRepository({from} as never).find("owner","document");expect(from).toHaveBeenCalledWith("knowledge_documents");expect(select).toHaveBeenCalledWith(expect.not.stringContaining("classification"));expect(q.eq.mock.calls).toEqual([["id","document"],["user_id","owner"]]);expect(pool).not.toHaveBeenCalled();});
+ it("training reuses read repository without Writer or classification reads",async()=>{const q={eq:vi.fn(),maybeSingle:vi.fn(async()=>({data:null,error:null}))};q.eq.mockReturnValue(q);const select=vi.fn(()=>q);await new SupabaseTrainingRepository({from:()=>({select})} as never).find("owner","document");expect(select).toHaveBeenCalledWith(expect.not.stringContaining("classification"));expect(pool).not.toHaveBeenCalled();});
+});

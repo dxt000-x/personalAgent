@@ -45,7 +45,7 @@ export async function POST(request: Request): Promise<Response> {
       const plan = parseAgentPlanText(result.text);
       if (!plan) {
         diagnostics.setFailureKind("plan_invalid_output");
-        throw new AIGatewayError("PROVIDER_ERROR");
+        throw new AIGatewayError("PLAN_INVALID_OUTPUT");
       }
       const planAuthorization = issuePlanAuthorization(userId, plan);
       if (!planAuthorization) throw new AIGatewayError("EXECUTION_UNAVAILABLE");

@@ -1,0 +1,26 @@
+import { beforeEach,describe,it,expect,vi } from "vitest";
+import { GET,POST } from "./route";
+import { requireKnowledgeSearchContext } from "@/lib/knowledge/read-server";
+import { trainingCatalog } from "@/lib/knowledge/training-server";
+import { runAiGateway } from "@/lib/ai/gateway";
+import { KnowledgeError } from "@/lib/knowledge/errors";
+import { buildTrainingPack } from "@/lib/knowledge/training";
+import { trainingDoc as doc,trainingOwner as owner,trainingChunks as chunks } from "@/lib/knowledge/training-fixtures";
+const repo=vi.hoisted(()=>({find:vi.fn(),chunks:vi.fn()}));
+vi.mock("@/lib/knowledge/read-server",async original=>({...await original<typeof import("@/lib/knowledge/read-server")>(),requireKnowledgeSearchContext:vi.fn()}));
+vi.mock("@/lib/knowledge/training-server",()=>({SupabaseTrainingRepository:class{find=repo.find;chunks=repo.chunks;},trainingCatalog:vi.fn()}));
+vi.mock("@/lib/ai/gateway",()=>({runAiGateway:vi.fn()}));
+const request=(body:unknown,origin="http://localhost:3000")=>new Request("http://localhost:3000/api/knowledge/training",{method:"POST",headers:{"Content-Type":"application/json",Origin:origin},body:JSON.stringify(body)});
+beforeEach(()=>{vi.resetAllMocks();vi.mocked(requireKnowledgeSearchContext).mockResolvedValue({userId:owner,client:{} as never});repo.find.mockResolvedValue({...doc});repo.chunks.mockResolvedValue([...chunks]);vi.mocked(trainingCatalog).mockResolvedValue({ownerId:owner,items:[],nextOffset:null});});
+describe("training API isolated mock context",()=>{
+ it("requires authentication",async()=>{vi.mocked(requireKnowledgeSearchContext).mockRejectedValue(new KnowledgeError("AUTH_REQUIRED"));expect((await POST(request({documentId:doc.id,useLocalAi:false}))).status).toBe(401);expect(repo.chunks).not.toHaveBeenCalled();});
+ it("rejects cross-origin before private content",async()=>{expect((await POST(request({documentId:doc.id,useLocalAi:false},"https://evil.invalid"))).status).toBe(400);expect(repo.find).not.toHaveBeenCalled();});
+ it.each([{documentId:"bad",useLocalAi:false},{documentId:doc.id,useLocalAi:false,userId:"other"},{documentId:doc.id,useLocalAi:false,provider:"openai"},{documentId:doc.id,useLocalAi:"yes"}])("rejects arbitrary parameters %j",async body=>{expect((await POST(request(body))).status).toBe(400);expect(repo.chunks).not.toHaveBeenCalled();});
+ it("rule generation has no model request or classification write",async()=>{const r=await POST(request({documentId:doc.id,useLocalAi:false}));expect(r.status).toBe(200);expect(r.headers.get("Cache-Control")).toBe("private, no-store");const p=(await r.json()).pack;expect(p.ownerId).toBe(owner);expect(p.points.length).toBeGreaterThan(0);expect(runAiGateway).not.toHaveBeenCalled();expect(repo.find).toHaveBeenCalledWith(owner,doc.id);});
+ it("wrong owner is denied before source access",async()=>{repo.find.mockResolvedValue({...doc,user_id:"other"});expect((await POST(request({documentId:doc.id,useLocalAi:false}))).status).toBe(404);expect(repo.chunks).not.toHaveBeenCalled();});
+ it("only existing local privacy gateway is used",async()=>{const ids=buildTrainingPack(doc,chunks).points.map(p=>p.id);vi.mocked(runAiGateway).mockResolvedValue({text:JSON.stringify(ids),provider:"ollama",model:"synthetic"});const r=await POST(request({documentId:doc.id,useLocalAi:true}));expect((await r.json()).pack.engine).toBe("ollama");expect(runAiGateway).toHaveBeenCalledWith(expect.anything(),expect.objectContaining({provider:"ollama",routingPreference:"privacy"}),expect.anything());});
+ it("AI failure degrades without leaking error text",async()=>{vi.mocked(runAiGateway).mockRejectedValue(Error("SECRET"));const r=await POST(request({documentId:doc.id,useLocalAi:true}));const body=await r.json();expect(body.pack.aiFallback).toBe(true);expect(JSON.stringify(body)).not.toContain("SECRET");});
+ it("foreign provider result cannot be presented as local AI",async()=>{vi.mocked(runAiGateway).mockResolvedValue({text:"[]",provider:"openai",model:"synthetic"});const r=await POST(request({documentId:doc.id,useLocalAi:true}));expect((await r.json()).pack.aiFallback).toBe(true);});
+ it("empty catalog is a usable empty state",async()=>{const r=await GET(new Request("http://localhost:3000/api/knowledge/training"));expect(await r.json()).toEqual({ownerId:owner,items:[],nextOffset:null});expect(trainingCatalog).toHaveBeenCalledWith(expect.anything(),owner,0);});
+ it("pagination and invalid offset are explicit",async()=>{await GET(new Request("http://localhost:3000/api/knowledge/training?offset=10"));expect(trainingCatalog).toHaveBeenCalledWith(expect.anything(),owner,10);expect((await GET(new Request("http://localhost:3000/api/knowledge/training?offset=-1"))).status).toBe(400);});
+});

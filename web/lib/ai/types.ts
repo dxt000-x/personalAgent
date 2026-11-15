@@ -29,7 +29,10 @@ export type AIUsage = {
   totalTokens?: number;
 };
 
+export type CloudQuotaSnapshot = { remainingCount: number; usageDate?: string; resetAt?: string };
+
 export type AIChatResult = {
+  quota?: CloudQuotaSnapshot;
   text: string;
   provider: ProviderId;
   model: string;

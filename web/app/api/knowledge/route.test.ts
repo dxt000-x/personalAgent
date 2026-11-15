@@ -195,3 +195,26 @@ describe("knowledge API security and upload lifecycle", () => {
     );
   });
 });
+
+// Server snapshots inform the UI; they do not replace the database claim gate.
+it("returns only server-computed recovery actions in authenticated list snapshots", async () => {
+  const now = Date.parse("2026-11-08T12:00:00Z");
+  const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+  try {
+    const repository = fakeRepository();
+    repository.list.mockResolvedValue([
+      { ...document, status: "uploading", processing_action: "recover" },
+      { ...document, status: "processing", updated_at: "2026-11-08T11:50:00Z" },
+      { ...document, status: "processing", updated_at: "2026-11-08T11:49:59.999Z" },
+      { ...document, status: "failed", failure_kind: "temporary" },
+      { ...document, status: "deleting" },
+    ] as KnowledgeDocument[]);
+    vi.mocked(requireKnowledgeContext).mockResolvedValue({ userId: userA, repository });
+    const response = await GET(request("/api/knowledge", "GET"));
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.documents.map((row: KnowledgeDocument) => row.processing_action))
+      .toEqual([null, null, "recover", "retry", null]);
+    expect(repository.claim).not.toHaveBeenCalled();
+  } finally { clock.mockRestore(); }
+});

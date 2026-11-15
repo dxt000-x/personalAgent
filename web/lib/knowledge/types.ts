@@ -14,6 +14,8 @@ export type KnowledgeStatus = "uploading" | "processing" | "ready" | "failed" | 
 export type KnowledgeFailureKind = "invalid_file" | "temporary" | null;
 
 export type KnowledgeDocument = {
+  // Server-computed list snapshot, never an execution authorization.
+  processing_action?: "retry" | "recover" | null;
   id: string;
   user_id: string;
   file_name: string;

@@ -1,8 +1,10 @@
 "use client";
 
+import { useI18n } from "@/components/i18n-provider";
+
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { unconfiguredMessage } from "@/lib/supabase/config";
 
@@ -15,8 +17,10 @@ export function AuthForm({
   configured: boolean;
   confirmationFailed?: boolean;
 }) {
+  const { t, errorText } = useI18n();
   const router = useRouter();
   const isSignup = mode === "signup";
+  useEffect(() => { document.title = `${t(isSignup ? "创建账号" : "欢迎回来")} · PersonalAgent`; }, [t, isSignup]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(
     confirmationFailed
@@ -100,33 +104,29 @@ export function AuthForm({
       </Link>
       <section className="panel">
         <p className="text-xs font-semibold tracking-widest text-teal-700">
-          YOUR PERSONAL WORKSPACE
-        </p>
+          {t("YOUR PERSONAL WORKSPACE")}</p>
         <h1 className="mt-3 text-2xl font-semibold">
-          {isSignup ? "创建账号" : "欢迎回来"}
+          {isSignup ? t("创建账号") : t("欢迎回来")}
         </h1>
         <p className="mt-2 mb-6 text-sm leading-6 text-slate-500">
           {isSignup
-            ? "开启你的个人 AI 工作空间。"
-            : "登录后继续你的学习与工作任务。"}
+            ? t("开启你的个人 AI 工作空间。")
+            : t("登录后继续你的学习与工作任务。")}
         </p>
         {!configured && (
           <div
             role="status"
             className="mb-5 rounded-xl border border-amber-100 bg-amber-50 p-4 text-sm leading-6 text-amber-800"
           >
-            <p>{unconfiguredMessage}</p>
+            <p>{t(unconfiguredMessage)}</p>
             <p className="mt-2 text-xs">
-              在 web/.env.local 配置 Supabase URL 与 publishable key，然后重启 Web
-              服务。
-            </p>
+              {t("在 web/.env.local 配置 Supabase URL 与 publishable key，然后重启 Web 服务。")}</p>
           </div>
         )}
         <form onSubmit={submit} aria-busy={loading} className="space-y-4">
           <div>
             <label htmlFor="email" className="mb-2 block text-sm font-medium">
-              Email · 邮箱
-            </label>
+              {t("Email · 邮箱")}</label>
             <input
               id="email"
               name="email"
@@ -144,8 +144,7 @@ export function AuthForm({
               htmlFor="password"
               className="mb-2 block text-sm font-medium"
             >
-              Password · 密码
-            </label>
+              {t("Password · 密码")}</label>
             <input
               id="password"
               name="password"
@@ -159,8 +158,7 @@ export function AuthForm({
             />
             {isSignup && (
               <p className="mt-2 text-xs text-slate-400">
-                至少 8 个字符，还需满足 Supabase 项目的密码策略。
-              </p>
+                {t("至少 8 个字符，还需满足 Supabase 项目的密码策略。")}</p>
             )}
           </div>
           {isSignup && (
@@ -169,8 +167,7 @@ export function AuthForm({
                 htmlFor="confirm-password"
                 className="mb-2 block text-sm font-medium"
               >
-                Confirm Password · 确认密码
-              </label>
+                {t("Confirm Password · 确认密码")}</label>
               <input
                 id="confirm-password"
                 name="confirmPassword"
@@ -189,7 +186,7 @@ export function AuthForm({
               role="alert"
               className="rounded-xl bg-red-50 p-3 text-sm leading-6 text-red-700"
             >
-              {error}
+              {errorText(error)}
             </p>
           )}
           {message && (
@@ -197,7 +194,7 @@ export function AuthForm({
               role="status"
               className="rounded-xl bg-teal-50 p-3 text-sm leading-6 text-teal-800"
             >
-              {message}
+              {t(message)}
             </p>
           )}
           <button
@@ -207,26 +204,25 @@ export function AuthForm({
           >
             {loading
               ? isSignup
-                ? "注册中…"
-                : "登录中…"
+                ? t("注册中…")
+                : t("登录中…")
               : isSignup
-                ? "Signup · 注册"
-                : "Login · 登录"}
+                ? t("Signup · 注册")
+                : t("Login · 登录")}
           </button>
         </form>
         <p className="mt-6 text-center text-sm text-slate-500">
-          {isSignup ? "已有账号？" : "还没有账号？"}
+          {isSignup ? t("已有账号？") : t("还没有账号？")}
           <Link
             href={isSignup ? "/login" : "/signup"}
             className="ml-2 font-medium text-teal-700 hover:underline"
           >
-            {isSignup ? "前往登录" : "创建账号"}
+            {isSignup ? t("前往登录") : t("创建账号")}
           </Link>
         </p>
       </section>
       <p className="mt-5 text-center text-xs leading-6 text-slate-400">
-        账号认证使用 Supabase Auth。工作空间内容仍为 UI 演示。
-      </p>
+        {t("账号认证使用 Supabase Auth。工作空间内容仍为 UI 演示。")}</p>
     </div>
   );
 }

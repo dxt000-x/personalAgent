@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { AgentWorkspace } from "./agent-workspace";
+import { I18nProvider, LanguageSwitcher } from "./i18n-provider";
 
 const statuses = [
   { id: "ollama", type: "local", configured: true, availability: "available", model: "fake-ollama" },
@@ -83,6 +84,42 @@ beforeEach(() => {
 });
 
 describe("explicit Agent Planning", () => {
+  it.each([
+    ["EXECUTION_UNAVAILABLE", "计划授权或执行服务暂时不可用", "Plan authorization or execution is unavailable"],
+    ["PLAN_INVALID_OUTPUT", "模型返回的计划格式无效", "The model returned an invalid plan format"],
+    ["REPLAY_REJECTED", "执行授权已使用", "This execution authorization has already been used"],
+    ["PROVIDER_ERROR", "模型服务暂时不可用", "The model service is unavailable"],
+  ])("preserves %s and translates it without retrying", async (code, zh, en) => {
+    localStorage.clear();
+    vi.spyOn(navigator, "languages", "get").mockReturnValue(["zh-CN"]);
+    planResponse = Promise.resolve({ ok: false, json: async () => ({ error: { code, message: "private server detail" } }) } as Response);
+    render(<I18nProvider userId="round81-test"><LanguageSwitcher /><AgentWorkspace /></I18nProvider>);
+    const input = screen.getByRole("textbox", { name: "发送消息" });
+    await waitFor(() => expect((input as HTMLTextAreaElement).disabled).toBe(false));
+    fireEvent.change(input, { target: { value: "制定学习计划" } });
+    fireEvent.click(screen.getByRole("button", { name: "制定计划" }));
+    const region = await screen.findByRole("region", { name: "任务计划" });
+    expect(within(region).getByRole("alert").textContent).toContain(zh);
+    fireEvent.change(screen.getByLabelText("界面语言"), { target: { value: "en" } });
+    expect(within(region).getByRole("alert").textContent).toContain(en);
+    expect(region.textContent).not.toContain("private server detail");
+    expect(planCalls()).toHaveLength(1);
+    expect(chatCalls()).toHaveLength(0);
+    expect(confirmCalls()).toHaveLength(0);
+    expect(executeCalls()).toHaveLength(0);
+  });
+
+  it("rejects a successful response with malformed JSON as plan output, without retry", async () => {
+    planResponse = Promise.resolve(new Response("private output", { status: 200 }));
+    const input = await setup();
+    fireEvent.change(input, { target: { value: "制定学习计划" } });
+    fireEvent.click(screen.getByRole("button", { name: "制定计划" }));
+    const region = await screen.findByRole("region", { name: "任务计划" });
+    expect(within(region).getByRole("alert").textContent).toContain("模型返回的计划格式无效");
+    expect(region.textContent).not.toContain("private output");
+    expect(planCalls()).toHaveLength(1);
+    expect(confirmCalls()).toHaveLength(0);
+  });
   it("does not request a plan for an empty or overlong task", async () => {
     const input = await setup();
     const button = screen.getByRole("button", { name: "制定计划" }) as HTMLButtonElement;
@@ -134,7 +171,7 @@ describe("explicit Agent Planning", () => {
     expect(JSON.parse(String(confirmCalls()[0][1]?.body))).toEqual({ planAuthorization: "signed-plan-token", plan: validPlan });
     expect(JSON.parse(String(executeCalls()[0][1]?.body))).toEqual({ authorization: "confirmed-token" });
     expect(await within(region).findByText("计划已确认。只读工具执行成功。")).toBeTruthy();
-    expect(within(region).getByText("当前 UTC 时间：2026-10-16T00:00:00.000Z")).toBeTruthy();
+    expect(region.querySelector("time")?.getAttribute("datetime")).toBe("2026-10-16T00:00:00.000Z");
     expect(chatCalls()).toHaveLength(0);
   });
 
@@ -230,7 +267,7 @@ describe("explicit Agent Planning", () => {
     fireEvent.change(input, { target: { value: "制定学习计划" } });
     fireEvent.click(screen.getByRole("button", { name: "制定计划" }));
     const region = await screen.findByRole("region", { name: "任务计划" });
-    expect(within(region).getByRole("alert").textContent).toContain("模型服务暂时不可用");
+    expect(within(region).getByRole("alert").textContent).toContain("模型返回的计划格式无效");
     expect(region.textContent).not.toContain("secret");
   });
 
@@ -546,7 +583,7 @@ describe("opt-in memory candidate workflow", () => {
   it("omits Auto Privacy preference for explicit Provider in both chat and extraction", async () => {
     const input = await enableSuggestions();
     fireEvent.change(screen.getByLabelText("自动路由偏好"), { target: { value: "privacy" } });
-    fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "ollama" } });
+    fireEvent.change(screen.getByLabelText("模型服务"), { target: { value: "ollama" } });
     expect(screen.getByText(/Privacy 自动路由偏好不生效/)).toBeTruthy();
     await sendMessage(input);
     await waitFor(() => expect(candidateCalls()).toHaveLength(1));
@@ -712,4 +749,32 @@ describe("Agent chat composer", () => {
     expect(await screen.findByText("今日云端 AI 使用次数已达到上限，请于下一个 UTC 日期重置后再试。")).toBeTruthy();
     expect(chatCalls()).toHaveLength(1);
   });
+  it("shows a server-confirmed quota balance above 29", async () => {
+    const day = new Date().toISOString().slice(0, 10);
+    const resetAt = new Date(Date.parse(`${day}T00:00:00Z`) + 86400000).toISOString();
+    chatResponse = Promise.resolve(fakeResponse({ quota: { remainingCount: 99, usageDate: day, resetAt } }));
+    const input = await setup();
+    fireEvent.change(input, { target: { value: "额度余额" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(await screen.findByText(/本 UTC 日剩余 99 次/)).toBeTruthy();
+  });
+
+  it("removes immediate retry on exhaustion but leaves provider selection usable", async () => {
+    chatResponse = Promise.resolve({ ok: false, json: async () => ({ error: { code: "CLOUD_QUOTA_EXCEEDED" } }) } as Response);
+    const input = await setup();
+    fireEvent.change(input, { target: { value: "额度耗尽" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await screen.findByText(/今日云端 AI 使用次数已达到上限/);
+    expect(screen.queryByRole("button", { name: "重试" })).toBeNull();
+    expect((screen.getByLabelText("模型服务") as HTMLSelectElement).disabled).toBe(false);
+  });
+
+  it("retains retry for quota service unavailability", async () => {
+    chatResponse = Promise.resolve({ ok: false, json: async () => ({ error: { code: "QUOTA_UNAVAILABLE" } }) } as Response);
+    const input = await setup();
+    fireEvent.change(input, { target: { value: "临时错误" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(await screen.findByRole("button", { name: "重试" })).toBeTruthy();
+  });
+
 });

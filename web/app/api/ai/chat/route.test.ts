@@ -369,10 +369,19 @@ describe("POST /api/ai/chat with fake providers", () => {
     expect(calls.openai).toHaveBeenCalledTimes(1);
   });
 
-  it.each([400, 401, 403, 404, 422, 429])("does not fall back or reserve twice after upstream HTTP %i", async (status) => {
+  it.each([400, 401, 403, 404, 422, 429])("uses the approved Auto policy without reserving twice after upstream HTTP %i", async (status) => {
     vi.mocked(getProviderStatuses).mockResolvedValue(statuses(false));
     calls.openrouter.mockRejectedValue({ status, message: "sk-test-secret-do-not-leak" });
     const { response, body } = await responseFor();
+    if (status === 404) {
+      expect(response.status).toBe(200);
+      expect(body.provider).toBe("openai");
+      expect(calls.openrouter).toHaveBeenCalledTimes(1);
+      expect(calls.openai).toHaveBeenCalledTimes(1);
+      expect(reserveCloudAiQuota).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(body)).not.toContain("sk-test-secret-do-not-leak");
+      return;
+    }
     expect(response.status).toBe(status === 429 ? 429 : 502);
     expect(body.error.code).toBe(status === 429 ? "RATE_LIMITED"
       : status === 401 || status === 403 ? "PROVIDER_AUTH_FAILED" : "PROVIDER_REQUEST_REJECTED");

@@ -1,0 +1,380 @@
+{
+  "round": "81-unified-supplement",
+  "baseCommit": "1cb9c687f9cf6ed761cbd191d0fe034ee33d61fc",
+  "composition": "VERIFIED_AGENT_BASE_PLUS_REVIEWED_FRONTEND_AND_PLAN_ERRORS",
+  "files": [
+    {
+      "path": "web/app/(auth)/layout.tsx",
+      "sha256": "85d7e210b6aaf8e084e5193f291e18bab541d4a48d7be54650c5b4ac517d32f4",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/app/(workspace)/layout.tsx",
+      "sha256": "0ec08ef95ec54527fafac8533feb40f3fec2acc940f5bf825d4ef40d5aec70c3",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/app/(workspace)/page.tsx",
+      "sha256": "20a5aa92d6ae8c6edbda9a07b73faf15556c2d066b3b233dc59e5363ecc31aa8",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/app/(workspace)/settings/page.tsx",
+      "sha256": "fc498063b6151b61ccda311ed7ba7d0bed82c1deb515dff3636623f42ff9f2bd",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/app/(workspace)/training/page.tsx",
+      "sha256": "4ad3ed4ef02eefc4a0203883fda94bd327478fc1b032efa0d421db166cfc6926",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/app/api/agent/plan/route.test.ts",
+      "sha256": "cbb9a70930df4e38950a45e592c94a4a4529c2a7d3c12a0abab4b7bfd338e632",
+      "kind": "test"
+    },
+    {
+      "path": "web/app/api/agent/plan/route.ts",
+      "sha256": "0d4000a1654bdb6f97b7cf03d0cb95a2cb5911fd618140f262eac74d0c28ecc0",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/app/api/ai/chat/route.test.ts",
+      "sha256": "d03ae2d1bde72210776f8482f3871ee3eafeba98c5f70633c845434de60f8ad2",
+      "kind": "test"
+    },
+    {
+      "path": "web/app/api/knowledge/[id]/classification/route.ts",
+      "sha256": "1c9a2e800d79d4e466f91b9177ef046d2682e6f4662e5810d1cc4a02d6fe4d76",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/app/api/knowledge/classifications/route.ts",
+      "sha256": "08e9075b46991d753474b2dada690e94b58ca5278453446a007e20622e162d9a",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/app/api/knowledge/route.test.ts",
+      "sha256": "0f58d433ab946c1d63934f9d475dc67c31d01fff267d6cce38e578bf5d40ec69",
+      "kind": "test"
+    },
+    {
+      "path": "web/app/api/knowledge/route.ts",
+      "sha256": "d123d707228b5173bc2d332d7c690cbed4994ec177683ab6bcd1226a54184eea",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/app/api/knowledge/training/route.test.ts",
+      "sha256": "a6b3c29cabec688b56ddb9cc4c607643e35520e1089a0f2a0356e94fe8b37e39",
+      "kind": "test"
+    },
+    {
+      "path": "web/app/api/knowledge/training/route.ts",
+      "sha256": "e6d0f50b38bfa03b045498cb74982a3ffe777ec93d75d76b7ce1a82558699137",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/app/globals.css",
+      "sha256": "1d43d72705b8e25eead986ee097138e9f5388e0d4ebdb75c26d0660ff3ccc7e5",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/components/account-menu.tsx",
+      "sha256": "4bf1cfd99ce1462d988ed2a72b5455b401cd3aece8e21872ccf09bcf62f8e948",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/components/agent-message.tsx",
+      "sha256": "73c0fdd3a7668c2accdafd1fc15f56aed1b36dc74ba20f05ee2bc3facda8506c",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/components/agent-provider-selector.tsx",
+      "sha256": "d26baa528c058343a53f9988b900944c3476b1b51416a4d63fb6bcf6578ee244",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/components/agent-step.tsx",
+      "sha256": "1775f518ad88fdbce56f61d88387074637e58fbee505558cc0bdd05d95bb5257",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/components/agent-timeline.tsx",
+      "sha256": "cd9252efdfffda7a9e5a1890e44f6de449b48a569dae4c34e595ac9453762afc",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/components/agent-workspace.test.tsx",
+      "sha256": "fb11907bf2c1e096f1e6cf7daa7f06f0151fc99421415d357059d085d1f93e15",
+      "kind": "test"
+    },
+    {
+      "path": "web/components/agent-workspace.tsx",
+      "sha256": "d1ae326dc476720099298acb37b8bccc75efba822177ec2318a10713a48c7255",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/components/app-sidebar.test.tsx",
+      "sha256": "dd34ccd0296cc04438521671551784431cacf217a5c0454e26644a09fc6930fc",
+      "kind": "test"
+    },
+    {
+      "path": "web/components/app-sidebar.tsx",
+      "sha256": "bdde3fd6e00e03aa673fc9f4afb80c560ae6a98bba9002d8f596f5d1b52d4748",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/components/auth-form.tsx",
+      "sha256": "80fec41dac488a3fb884c8011af29ed7809f003a278374dd25752b20449baca7",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/components/dashboard-card.tsx",
+      "sha256": "ff785af45a223508ff3b1181a71ec2bb2e1ae31dde4417e3f5e56c799652af9e",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/components/dashboard.test.tsx",
+      "sha256": "1ff69ef82c32195b0f61c118c8c3f60e93cce23e7851db99cb17ad7cea9f1c25",
+      "kind": "test"
+    },
+    {
+      "path": "web/components/i18n-provider.test.tsx",
+      "sha256": "ff9cb65a8e6775c49f7313c09a96f00eabd6e3aa5c212b0b307518af3fa6d01b",
+      "kind": "test"
+    },
+    {
+      "path": "web/components/i18n-provider.tsx",
+      "sha256": "472bc9086d66ab6f292a2dc001c4f1a918f28f8bf6ee57ee826e121dbf58c637",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/components/knowledge-file-row.tsx",
+      "sha256": "9638f7f0a764747fd044c9b1c051fa03ea5a57a26b567ecf106ed4e1460b3425",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/components/knowledge-responsive.test.tsx",
+      "sha256": "1ced8ef075fffb27abf72ff596f40a6050d0e78d0a06c3b991c289d46e4ad0a7",
+      "kind": "test"
+    },
+    {
+      "path": "web/components/knowledge-search.tsx",
+      "sha256": "b5046e4e18f48c69689b70dc98f6b7278085c0240aa8867d2d4d35e88523da76",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/components/knowledge-training.test.tsx",
+      "sha256": "5e2a9a964e6ce135325591767bd6b0b927679b17ba6ca31a36cf68a0187756cf",
+      "kind": "test"
+    },
+    {
+      "path": "web/components/knowledge-training.tsx",
+      "sha256": "209ccbcfb0c982337ac7440794c6658bc3439c004ea41aafc90519453f4b568b",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/components/knowledge-workspace.test.tsx",
+      "sha256": "aabcd388ab8531ffca8f2966627bfc17ae5c95ce77ec20637747cca0dc04a5e3",
+      "kind": "test"
+    },
+    {
+      "path": "web/components/knowledge-workspace.tsx",
+      "sha256": "6ebe1ce29af25f35892ca8ecebadd8295c8bdcd0706d1b1072c335bcab54446e",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/components/memory-workspace.test.tsx",
+      "sha256": "0ad1da02238aa66fa18b7a4414ebfd228ed89ba12b7c2240e5dfa30a885c653a",
+      "kind": "test"
+    },
+    {
+      "path": "web/components/memory-workspace.tsx",
+      "sha256": "ee97f6111f0b9d4bede4959a88dbd80df1c5bae53468c1ce91613c99ab4b33f0",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/components/page-header.tsx",
+      "sha256": "87274e03ff78ca9d11dd91b7b96462e48a0ba3710bc4b480986f2ab204d6de7b",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/components/settings-panel.test.tsx",
+      "sha256": "9dbce3237104793606b5b43667a72338b349fa1a6fde969f7f73cf6ef7a97c42",
+      "kind": "test"
+    },
+    {
+      "path": "web/components/settings-panel.tsx",
+      "sha256": "9a6d256265a08120316cf14c97ce4c6ef9a7716bee92474015304205a7e86027",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/components/workspace-i18n.test.tsx",
+      "sha256": "f7bb94ae80c3c624f7e032cb2750d5989bc05ed4ec928a9f5eaaaf35e82adeb1",
+      "kind": "test"
+    },
+    {
+      "path": "web/lib/ai/__tests__/errors.test.ts",
+      "sha256": "d2f8035690295bc42d3dd2cf856d968b13ec67519574ee316ca5242b096cb50b",
+      "kind": "test"
+    },
+    {
+      "path": "web/lib/ai/__tests__/gateway-timeout.test.ts",
+      "sha256": "51da18e48e17eeb543a46084d12409b55239d0bcecf4896dbe85be1fe759b48d",
+      "kind": "test"
+    },
+    {
+      "path": "web/lib/ai/__tests__/retired-openrouter-model.test.ts",
+      "sha256": "1a504dc2c1a3387f7cf4bada5c077fa29966cf6878646c597b898603b9092507",
+      "kind": "test"
+    },
+    {
+      "path": "web/lib/ai/errors.ts",
+      "sha256": "2ea05f834415ab37adb2ada4f585ecd2d524d069dd1d70e5acc99d6ca14e6284",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/lib/ai/provider-registry.ts",
+      "sha256": "cb88d8f56ccb09adacf4fec30d9008a456bf64128e5e479667583cd902eacb79",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/lib/ai/types.ts",
+      "sha256": "f5bfa4a055fb454109ecba4b040f00b5e7304a199e95fc72ea65f5f24e09e698",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/lib/i18n/core.test.ts",
+      "sha256": "52bd4f32fe64627cc174f8afdac22f90ad877bdf3acc1b1ffbc297808ed5eb6a",
+      "kind": "test"
+    },
+    {
+      "path": "web/lib/i18n/core.ts",
+      "sha256": "337470a70380b20ebd1cab059cdacd07051be155c97fceb1cc561d1b60b4224e",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/lib/i18n/messages.ts",
+      "sha256": "c9754cb63932ad6a3cd44958745a1130f35588085d42a66563d5590c3b7370e7",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/lib/knowledge/actions.test.ts",
+      "sha256": "5092ac87cdfddda4c4f539c2a29532531c17f80b0937e318640398cdecf89042",
+      "kind": "test"
+    },
+    {
+      "path": "web/lib/knowledge/actions.ts",
+      "sha256": "4bcd5cd2bdbd89c3391ce7d3f7298f634799089b3a3d1d10326a9b0c6259216f",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/lib/knowledge/classification-release-policy.ts",
+      "sha256": "7df9a464ec32c12e923886393c5a5900af08cde2132b5277d57ba8f963677034",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/lib/knowledge/classification-types.ts",
+      "sha256": "eaabd042a96a7055d6d25163dee8a7c91a77c460a87577a38d3920b5494fe264",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/lib/knowledge/classification.ts",
+      "sha256": "8bebb948986d50fedba0d8168f8fc47e8b783e588053062847811ff8b5fdfbc2",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/lib/knowledge/private-db.ts",
+      "sha256": "06504d8bd0046c2129770381cb2631e8933cea765d3aa81ab05e20e50d333122",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/lib/knowledge/read-server.ts",
+      "sha256": "aec2896df5f2d5dc3535a6e947aa7a7af61cbbfeef2f382e24be0c79ccabbc93",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/lib/knowledge/release-isolation.test.ts",
+      "sha256": "9358c00daf6f1831b4bd4b99ca89f60212b01c91ffad6d701a88ab6c262c5184",
+      "kind": "test"
+    },
+    {
+      "path": "web/lib/knowledge/server.ts",
+      "sha256": "952130582849081169bf773e8898a39e874de0ae5b318a3d1e84690ccef32dd7",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/lib/knowledge/training-fixtures.ts",
+      "sha256": "71afe563b2fe42e6250f098ecc7385428500111e359c56451a66605a7f2805b7",
+      "kind": "test"
+    },
+    {
+      "path": "web/lib/knowledge/training-server.test.ts",
+      "sha256": "9ddeee211304129e80db64bfcf23b46bbf4bafbb22b81c41ee267b8ca63ae56b",
+      "kind": "test"
+    },
+    {
+      "path": "web/lib/knowledge/training-server.ts",
+      "sha256": "5fffc307f1e454965e85fe7a4a25f27569e1be6b6ae8576f882e378ef042223c",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/lib/knowledge/training-types.ts",
+      "sha256": "a3a95722ece3e33e72d9235798fb0a2528ab8e97abd5debf6ce11a9319403086",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/lib/knowledge/training.test.ts",
+      "sha256": "f4f2154043357875bd5ac8b431573932688c729ee7d9b94bd8bd2d36ef325244",
+      "kind": "test"
+    },
+    {
+      "path": "web/lib/knowledge/training.ts",
+      "sha256": "a63722bfe99292438a7b6c0d34a44c8822f43863f4f2eb1e4ad9a99a4b47c858",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/lib/knowledge/types.ts",
+      "sha256": "96c035db6585c78c708752aec6c6f6408b03e1b85b359420d47aec26bbd637ef",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/scripts/check-i18n-coverage.mjs",
+      "sha256": "628fbfdc209bc381b94571bb80a24027fe761e3507237005d5b72699664115a4",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/scripts/final-unified-release.test.mjs",
+      "sha256": "a79d39660b77f9a55dc785539d8dbd8e61fcd83a8ef5f7abd89d54cca92dd814",
+      "kind": "test"
+    },
+    {
+      "path": "web/scripts/i18n-coverage.test.mjs",
+      "sha256": "e77ccba32b715a0455c14e0d48fd4e07b7de704a2334caf5a841b115d1a49634",
+      "kind": "test"
+    },
+    {
+      "path": "web/scripts/round78-release-audit.mjs",
+      "sha256": "245b7a8e42c4398366fc8117b1d5af73f9e53f5b3ae9d654d147a425ff647927",
+      "kind": "runtime"
+    },
+    {
+      "path": "web/scripts/round78-release-isolation.test.mjs",
+      "sha256": "93240cd3df17f5d17a5dcffc096604264fa536a339878dc13a95e56f9f88ff82",
+      "kind": "test"
+    }
+  ],
+  "excludedWorkingTreeFiles": [
+    "web/components/knowledge-classification-manager.tsx",
+    "web/components/knowledge-classification-manager.test.tsx",
+    "web/lib/knowledge/classification-server.ts",
+    "web/lib/knowledge/classification-service.ts",
+    "web/lib/knowledge/classification-http.ts",
+    "web/lib/knowledge/classification-disabled-handlers.ts",
+    "web/lib/knowledge/classification-server.test.ts",
+    "web/lib/knowledge/classification-interleaving.test.ts",
+    "web/lib/knowledge/classification-server-closed.test.ts",
+    "web/app/api/knowledge/classifications/route.test.ts"
+  ],
+  "historicalManifestUnchanged": true
+}

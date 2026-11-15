@@ -40,8 +40,8 @@ function knowledgePool(): Pool {
   }
 }
 
-type Operation = "ready" | "claim" | "complete" | "fail" | "markDeleting" | "finishDeleting";
-const sql: Record<Operation, string> = {
+type Operation = "ready" | "claim" | "complete" | "fail" | "markDeleting" | "finishDeleting" | "saveClassification";
+const sql: Record<Exclude<Operation, "saveClassification">, string> = {
   ready: "select has_function_privilege(current_user, to_regprocedure('knowledge_private.complete_knowledge_document(uuid,uuid,integer,jsonb)'), 'EXECUTE') as value",
   claim: "select knowledge_private.claim_knowledge_document($1::uuid, $2::uuid) as value",
   complete: "select knowledge_private.complete_knowledge_document($1::uuid, $2::uuid, $3::integer, $4::jsonb) as value",
@@ -53,6 +53,8 @@ const sql: Record<Operation, string> = {
 export async function callKnowledgeTransition<T extends boolean | number>(
   operation: Operation, parameters: unknown[],
 ): Promise<T> {
+  // A second, non-configurable boundary even if a caller bypasses the closed HTTP routes.
+  if (operation === "saveClassification") throw new KnowledgeError("KNOWLEDGE_UNAVAILABLE");
   try {
     const result = await knowledgePool().query(sql[operation], parameters);
     const value: unknown = result.rows[0]?.value;

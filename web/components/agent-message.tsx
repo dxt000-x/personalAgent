@@ -1,3 +1,7 @@
+"use client";
+
+import { useI18n } from "@/components/i18n-provider";
+
 import type { MemoryUsage, ProviderId } from "@/lib/ai/types";
 import type { KnowledgeSearchResult } from "@/lib/knowledge/search-types";
 
@@ -20,10 +24,11 @@ const providerNames: Record<ProviderId, string> = {
 };
 
 export function AgentMessage({ message }: { message: AgentChatMessage }) {
+  const { t, number: formatNumber } = useI18n();
   if (message.role === "user") {
     return (
       <div className="ml-auto max-w-[90%] rounded-2xl rounded-tr-sm bg-slate-100 px-4 py-3 sm:max-w-[80%]">
-        <p className="mb-1 text-xs text-slate-400">你</p>
+        <p className="mb-1 text-xs text-slate-400">{t("你")}</p>
         <p className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-800">{message.content}</p>
       </div>
     );
@@ -43,23 +48,23 @@ export function AgentMessage({ message }: { message: AgentChatMessage }) {
           {message.memory && (
             <span className="text-xs text-slate-400">
               {message.memory.status === "used"
-                ? `使用 ${message.memory.count} 条个人记忆`
+                ? t("使用 {0} 条个人记忆", {0: (message.memory.count)})
                 : message.memory.status === "unavailable"
-                  ? "Memory unavailable · 未注入记忆"
+                  ? t("Memory unavailable · 未注入记忆")
                   : message.memory.status === "omitted"
-                    ? "本次未注入记忆"
-                    : "未使用个人记忆"}
+                    ? t("本次未注入记忆")
+                    : t("未使用个人记忆")}
             </span>
           )}
         </div>
         <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-7 text-slate-700">{message.content}</p>
         {message.sources && message.sources.length > 0 && (
-          <section className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3" aria-label="知识库来源">
-            <p className="text-xs font-semibold text-slate-700">本次使用的知识库来源</p>
+          <section className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3" aria-label={t("知识库来源")}>
+            <p className="text-xs font-semibold text-slate-700">{t("本次使用的知识库来源")}</p>
             <ul className="mt-2 space-y-2">
               {message.sources.map((source) => (
                 <li key={`${source.documentId}:${source.chunkIndex}`} className="text-xs text-slate-600">
-                  <p className="font-medium break-all">{source.fileName} · 片段 {source.chunkIndex + 1}</p>
+                  <p className="font-medium break-all">{source.fileName} {" "}{t("· 片段")}{" "}{formatNumber(source.chunkIndex + 1)}</p>
                   <p className="mt-1 whitespace-pre-wrap break-words">{source.snippet}</p>
                 </li>
               ))}

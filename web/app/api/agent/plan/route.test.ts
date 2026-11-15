@@ -254,14 +254,16 @@ describe("POST /api/agent/plan", () => {
       const response = await POST(request());
       const body = await response.json();
       expect(response.status).toBe(502);
-      expect(body.error.code).toBe("PROVIDER_ERROR");
+      expect(body.error.code).toBe("PLAN_INVALID_OUTPUT");
       expect(JSON.stringify(body)).not.toContain(text);
       expect(body.plan).toBeUndefined();
       expect(log).toHaveBeenCalledTimes(1);
       expect(JSON.parse(log.mock.calls[0][0] as string)).toMatchObject({
-        finalErrorCode: "PROVIDER_ERROR", failureKind: "plan_invalid_output",
+        finalErrorCode: "PLAN_INVALID_OUTPUT", failureKind: "plan_invalid_output",
       });
       expect(log.mock.calls[0][0]).not.toContain(text);
+      expect(runAiGateway).toHaveBeenCalledTimes(1);
+      expect(issuePlanAuthorization).not.toHaveBeenCalled();
     },
   );
 

@@ -1,11 +1,14 @@
 "use client";
 
+import { useI18n } from "@/components/i18n-provider";
+
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { unconfiguredMessage } from "@/lib/supabase/config";
 
 export function AccountMenu({ email }: { email: string }) {
+  const { t, errorText } = useI18n();
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -56,9 +59,9 @@ export function AccountMenu({ email }: { email: string }) {
         </span>
         <div className="min-w-0">
           <p className="truncate text-sm font-semibold" title={email}>
-            {email}
+            {email === "已登录用户" ? t("已登录用户") : email}
           </p>
-          <p className="text-xs text-slate-400">已登录 · Supabase Auth</p>
+          <p className="text-xs text-slate-400">{t("已登录 · Supabase Auth")}</p>
         </div>
       </div>
       <button
@@ -66,11 +69,11 @@ export function AccountMenu({ email }: { email: string }) {
         disabled={loading}
         className="button-secondary mt-3 w-full"
       >
-        {loading ? "退出中…" : "Logout · 退出登录"}
+        {loading ? t("退出中…") : t("Logout · 退出登录")}
       </button>
       {error && (
         <p role="alert" className="mt-2 text-xs leading-5 text-red-700">
-          {error}
+          {errorText(error)}
         </p>
       )}
     </div>

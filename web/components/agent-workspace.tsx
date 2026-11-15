@@ -1,5 +1,7 @@
 "use client";
 
+import { useI18n } from "@/components/i18n-provider";
+
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import Link from "next/link";
 import { PageHeader } from "./page-header";
@@ -28,6 +30,9 @@ type GatewayErrorCode =
   | "PROVIDER_AUTH_FAILED"
   | "PROVIDER_REQUEST_REJECTED"
   | "PROVIDER_ERROR"
+  | "PLAN_INVALID_OUTPUT"
+  | "EXECUTION_UNAVAILABLE"
+  | "REPLAY_REJECTED"
   | "RATE_LIMITED"
   | "CLOUD_QUOTA_EXCEEDED"
   | "QUOTA_UNAVAILABLE"
@@ -63,6 +68,9 @@ const errorMessages: Record<GatewayErrorCode, string> = {
   PROVIDER_AUTH_FAILED: "模型服务认证或权限校验失败，请检查服务配置。",
   PROVIDER_REQUEST_REJECTED: "模型服务拒绝了本次请求，请检查模型配置后重试。",
   PROVIDER_ERROR: "模型服务暂时不可用。请检查 Provider 服务状态后重试。",
+  PLAN_INVALID_OUTPUT: "模型返回的计划格式无效，未生成可执行计划。",
+  EXECUTION_UNAVAILABLE: "计划授权或执行服务暂时不可用，请检查服务端执行配置。",
+  REPLAY_REJECTED: "执行授权已使用，请重新确认计划。",
   RATE_LIMITED: "请求过于频繁，请稍后重试。",
   CLOUD_QUOTA_EXCEEDED: "今日云端 AI 使用次数已达到上限，请于下一个 UTC 日期重置后再试。",
   QUOTA_UNAVAILABLE: "云端 AI 使用额度暂时无法核验，请稍后重试。",
@@ -79,6 +87,9 @@ const gatewayErrorCodes = new Set<GatewayErrorCode>([
   "PROVIDER_AUTH_FAILED",
   "PROVIDER_REQUEST_REJECTED",
   "PROVIDER_ERROR",
+  "PLAN_INVALID_OUTPUT",
+  "EXECUTION_UNAVAILABLE",
+  "REPLAY_REJECTED",
   "RATE_LIMITED",
   "CLOUD_QUOTA_EXCEEDED",
   "QUOTA_UNAVAILABLE",
@@ -176,6 +187,7 @@ export function AgentWorkspace({ sessionKey = "default" }: { sessionKey?: string
 }
 
 function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
+  const { t, number: formatNumber } = useI18n();
   const [messages, setMessages] = useState<AgentChatMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
@@ -184,6 +196,21 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
   const [providersLoading, setProvidersLoading] = useState(true);
   const [providersError, setProvidersError] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [quota, setQuota] = useState<import("@/lib/ai/types").CloudQuotaSnapshot | null>(null);
+  useEffect(() => {
+    if (!quota?.resetAt) return;
+    const delay = Date.parse(quota.resetAt) - Date.now();
+    const timer = setTimeout(() => setQuota(null), Math.max(0, Math.min(delay, 86_400_000)));
+    return () => clearTimeout(timer);
+  }, [quota]);
+  function readQuota(body: unknown) {
+    const value = body && typeof body === "object" ? (body as { quota?: import("@/lib/ai/types").CloudQuotaSnapshot }).quota : null;
+    if (!value || !Number.isInteger(value.remainingCount) || value.remainingCount < 0 || value.remainingCount > 99
+      || value.usageDate !== new Date().toISOString().slice(0, 10)
+      || !value.resetAt || !Number.isFinite(Date.parse(value.resetAt)) || Date.parse(value.resetAt) <= Date.now()) { setQuota(null); return; }
+    setQuota((previous) => previous && previous.usageDate === value.usageDate
+      && previous.remainingCount < value.remainingCount ? previous : value);
+  }
   const [errorCode, setErrorCode] = useState<GatewayErrorCode | null>(null);
   const [knowledgeEnabled, setKnowledgeEnabled] = useState(false);
   const [knowledgeQuery, setKnowledgeQuery] = useState("");
@@ -279,6 +306,7 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
         }),
       });
       const body: unknown = await response.json();
+      if (mounted.current && !controller.signal.aborted && generation === candidateGeneration.current) readQuota(body);
       if (!response.ok || typeof body !== "object" || body === null || !Array.isArray((body as { candidates?: unknown }).candidates)) {
         throw new Error("candidate extraction failed");
       }
@@ -325,7 +353,7 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
         return;
       }
       if (contents.some((content) => isPossibleMemoryDuplicate(content, candidate.content))
-        && !window.confirm("可能已有相近记忆，仍要保存这条候选吗？")) {
+        && !window.confirm(t("可能已有相近记忆，仍要保存这条候选吗？"))) {
         setCandidates((current) => current.map((entry) => entry.id === candidate.id ? { ...entry, status: "pending" } : entry));
         return;
       }
@@ -390,6 +418,7 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
       });
       if (!stillCurrent()) return;
       const body: unknown = await response.json();
+      if (mounted.current && !controller.signal.aborted && stillCurrent()) readQuota(body);
       if (!stillCurrent()) return;
       if (!response.ok) {
         const error = typeof body === "object" && body !== null
@@ -451,7 +480,7 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
       if (!stillCurrent()) return;
       const code = asGatewayErrorCode(error instanceof Error ? error.message : undefined);
       setErrorCode(code);
-      setRetryRequest(request);
+      setRetryRequest(code === "CLOUD_QUOTA_EXCEEDED" ? null : request);
       setTimeline({ state: "error", code });
     } finally {
       if (generation === chatGeneration.current && mounted.current) {
@@ -517,7 +546,13 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
         }),
       });
       if (!stillCurrent()) return;
-      const body: unknown = await response.json();
+      let body: unknown;
+      try { body = await response.json(); }
+      catch {
+        if (stillCurrent()) setPlanning({ status: "error", code: response.ok ? "PLAN_INVALID_OUTPUT" : "PROVIDER_ERROR" });
+        return;
+      }
+      if (mounted.current && !controller.signal.aborted && stillCurrent()) readQuota(body);
       if (!stillCurrent()) return;
       if (!response.ok) {
         const error = typeof body === "object" && body !== null
@@ -531,7 +566,7 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
       const plan = rawPlan && typeof rawPlan === "object" ? parseAgentPlanText(JSON.stringify(rawPlan)) : null;
       setPlanning(plan ? { status: "pending", plan,
         planAuthorization: typeof planAuthorization === "string" && planAuthorization ? planAuthorization : null,
-      } : { status: "error", code: "PROVIDER_ERROR" });
+      } : { status: "error", code: "PLAN_INVALID_OUTPUT" });
     } catch {
       if (stillCurrent()) setPlanning({ status: "error", code: "PROVIDER_ERROR" });
     } finally {
@@ -652,16 +687,16 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
         eyebrow="PERSONAL AI · CHAT WORKSPACE"
         title="Agent 工作空间"
         description="选择模型，与 Personal AI Assistant 开始一段真实对话。"
-        action={<span className="badge">AI Gateway · 实时请求</span>}
+        action={<span className="badge">{t("AI Gateway · 实时请求")}</span>}
       />
 
       <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
         <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
           <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-100 px-5 py-5 sm:px-6">
             <div>
-              <p className="text-xs text-slate-400">当前会话 · 仅保存在本页面内存</p>
-              <h2 className="mt-1 font-semibold">Personal AI Chat</h2>
-              <p className="mt-1 text-xs text-slate-400">刷新页面后，对话内容会清空。</p>
+              <p className="text-xs text-slate-400">{t("当前会话 · 仅保存在本页面内存")}</p>
+              <h2 className="mt-1 font-semibold">{t("Personal AI Chat")}</h2>
+              <p className="mt-1 text-xs text-slate-400">{t("刷新页面后，对话内容会清空。")}</p>
             </div>
             <button
               type="button"
@@ -669,10 +704,13 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
               disabled={isSending}
               onClick={clearConversation}
             >
-              清空对话
-            </button>
+              {t("清空对话")}</button>
           </div>
 
+          <p aria-live="polite" aria-label={t("云端额度")} className="px-5 py-2 text-xs text-slate-500">
+            {quota ? t("云端额度：本 UTC 日剩余 {0} 次（最近一次服务器确认）", {0: (quota.remainingCount)})
+              : t("云端额度：尚未核验；本地 Ollama 不消耗云端额度。")}
+          </p>
           <div className="border-b border-slate-100 px-5 py-4 sm:px-6">
             <AgentProviderSelector
               providers={providers}
@@ -693,42 +731,37 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
                 setMemorySuggestionsEnabled(event.target.checked);
                 if (!event.target.checked) resetCandidates();
               }} />
-              智能记忆建议
-            </label>
-            <p className="mt-1 text-xs leading-5 text-slate-500">默认关闭。开启后，每次成功回复会额外分析本轮消息；云端模型会多消耗一次云端使用额度。候选仅在你确认后保存。</p>
+              {t("智能记忆建议")}</label>
+            <p className="mt-1 text-xs leading-5 text-slate-500">{t("默认关闭。开启后，每次成功回复会额外分析本轮消息；云端模型会多消耗一次云端使用额度。候选仅在你确认后保存。")}</p>
           </div>
 
           <div className="border-b border-slate-100 px-5 py-4 sm:px-6">
             <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
               <input type="checkbox" checked={knowledgeEnabled} disabled={isSending || !!retryRequest}
                 onChange={(event) => { setKnowledgeEnabled(event.target.checked); setKnowledgeNoMatch(false); }} />
-              使用我的知识库
-            </label>
-            <p className="mt-1 text-xs leading-5 text-slate-500">仅检索当前账号已就绪的文档。Auto 可能将本次检索片段发给最终选中的云模型；Privacy 只使用本地 Ollama。</p>
+              {t("使用我的知识库")}</label>
+            <p className="mt-1 text-xs leading-5 text-slate-500">{t("仅检索当前账号已就绪的文档。Auto 可能将本次检索片段发给最终选中的云模型；Privacy 只使用本地 Ollama。")}</p>
             {knowledgeEnabled && (
-              <label className="mt-3 block text-xs text-slate-600">检索关键词
-                <input type="text" value={knowledgeQuery} maxLength={MAX_SEARCH_QUERY_CHARS}
+              <label className="mt-3 block text-xs text-slate-600">{t("检索关键词")}<input type="text" value={knowledgeQuery} maxLength={MAX_SEARCH_QUERY_CHARS}
                   disabled={isSending || !!retryRequest} onChange={(event) => setKnowledgeQuery(event.target.value)}
-                  className="mt-1 w-full rounded-lg border border-slate-200 p-2 text-sm" placeholder="输入关键词" />
+                  className="mt-1 w-full rounded-lg border border-slate-200 p-2 text-sm" placeholder={t("输入关键词")} />
               </label>
             )}
           </div>
 
           <div
             className="flex min-h-[360px] max-h-[65vh] flex-col gap-5 overflow-y-auto p-5 sm:min-h-[440px] sm:p-6"
-            aria-label="对话消息"
+            aria-label={t("对话消息")}
             aria-live="polite"
           >
             {messages.length === 0 ? (
               <div className="m-auto max-w-md py-10 text-center">
                 <span className="mx-auto flex size-12 items-center justify-center rounded-2xl bg-teal-50 text-xl text-teal-800" aria-hidden="true">✦</span>
-                <h3 className="mt-4 font-semibold">从你现在要做的事开始</h3>
+                <h3 className="mt-4 font-semibold">{t("从你现在要做的事开始")}</h3>
                 <p className="mt-2 text-sm leading-6 text-slate-500">
-                  输入问题后，消息会通过已登录的 AI Gateway 发送给当前选择的模型。
-                </p>
+                  {t("输入问题后，消息会通过已登录的 AI Gateway 发送给当前选择的模型。")}</p>
                 <p className="mt-3 text-xs leading-5 text-slate-400">
-                  可在服务端安全使用当前账号的 Personal Memory；仅在主动开启知识库后检索文档，不执行工具。
-                </p>
+                  {t("可在服务端安全使用当前账号的 Personal Memory；仅在主动开启知识库后检索文档，不执行工具。")}</p>
               </div>
             ) : messages.map((message) => (
               <AgentMessage key={message.id} message={message} />
@@ -738,98 +771,95 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
               <div className="flex items-start gap-3" role="status" aria-live="polite">
                 <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-teal-50 text-teal-800" aria-hidden="true">✦</span>
                 <div className="rounded-2xl rounded-tl-sm bg-slate-50 px-4 py-3 text-sm text-slate-500">
-                  AI 正在响应…
-                </div>
+                  {t("AI 正在响应…")}</div>
               </div>
             )}
 
             {errorCode && (
               <div className="rounded-xl border border-red-200 bg-red-50 p-4" role="alert">
-                <p className="text-sm font-medium text-red-800">{errorMessages[errorCode]}</p>
+                <p className="text-sm font-medium text-red-800">{t(errorMessages[errorCode])}</p>
                 <div className="mt-3 flex flex-wrap gap-2">
                   {errorCode === "AUTH_REQUIRED" ? (
-                    <Link href="/login" className="button-secondary">重新登录</Link>
-                  ) : (
+                    <Link href="/login" className="button-secondary">{t("重新登录")}</Link>
+                  ) : errorCode !== "CLOUD_QUOTA_EXCEEDED" && (
                     <button type="button" className="button-secondary" disabled={isSending} onClick={retry}>
-                      重试
-                    </button>
+                      {t("重试")}</button>
                   )}
                   <button type="button" className="button-secondary" disabled={isSending} onClick={clearConversation}>
-                    清空对话
-                  </button>
+                    {t("清空对话")}</button>
                 </div>
               </div>
             )}
-            {knowledgeNoMatch && <p role="status" className="rounded-xl bg-amber-50 p-4 text-sm text-amber-800">没有找到相关知识库片段，请修改关键词。本次没有调用 AI 模型。</p>}
+            {knowledgeNoMatch && <p role="status" className="rounded-xl bg-amber-50 p-4 text-sm text-amber-800">{t("没有找到相关知识库片段，请修改关键词。本次没有调用 AI 模型。")}</p>}
           </div>
 
           {planning.status !== "idle" && (
-            <section className="border-t border-slate-100 p-5 sm:p-6" aria-label="任务计划">
-              <h3 className="text-sm font-semibold text-slate-800">任务计划</h3>
+            <section className="border-t border-slate-100 p-5 sm:p-6" aria-label={t("任务计划")}>
+              <h3 className="text-sm font-semibold text-slate-800">{t("任务计划")}</h3>
               {planning.status === "generating" && (
-                <p className="mt-3 text-sm text-slate-500" role="status">正在制定计划…</p>
+                <p className="mt-3 text-sm text-slate-500" role="status">{t("正在制定计划…")}</p>
               )}
               {(planning.status === "pending" || planning.status === "executing" || planning.status === "completed") && (
                 <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
-                  {planning.status === "pending" && <p className="mb-2 text-xs font-medium text-amber-700">计划待确认，不会自动执行。</p>}
-                  {planning.status === "pending" && <p className="mb-2 text-xs text-slate-500">确认后仅演示读取当前 UTC 时间；计划步骤仍保持待执行。</p>}
-                  {planning.status === "pending" && !planning.planAuthorization && <p className="mb-2 text-xs text-amber-700">当前环境未配置执行授权，仍可查看或取消计划。</p>}
+                  {planning.status === "pending" && <p className="mb-2 text-xs font-medium text-amber-700">{t("计划待确认，不会自动执行。")}</p>}
+                  {planning.status === "pending" && <p className="mb-2 text-xs text-slate-500">{t("确认后仅演示读取当前 UTC 时间；计划步骤仍保持待执行。")}</p>}
+                  {planning.status === "pending" && !planning.planAuthorization && <p className="mb-2 text-xs text-amber-700">{t("当前环境未配置执行授权，仍可查看或取消计划。")}</p>}
                   <p className="text-sm font-medium text-slate-800">{planning.plan.goal}</p>
                   <ol className="mt-3 list-decimal space-y-3 pl-5">
                     {planning.plan.steps.map((step) => (
                       <li key={step.id} className="text-sm text-slate-700">
-                        <p className="font-medium">{step.title} <span className="text-xs font-normal text-slate-400">待执行</span></p>
-                        <p className="mt-1 whitespace-pre-wrap break-words text-xs leading-5 text-slate-500">{step.description}</p>
+                        <p className="font-medium">{t(step.title)} <span className="text-xs font-normal text-slate-400">{t("待执行")}</span></p>
+                        <p className="mt-1 whitespace-pre-wrap break-words text-xs leading-5 text-slate-500">{t(step.description)}</p>
                       </li>
                     ))}
                   </ol>
                   {planning.status === "pending" ? (
                     <div className="mt-4 flex gap-2">
                       <button type="button" className="button-primary" disabled={!planning.planAuthorization}
-                        onClick={() => { if (planning.planAuthorization) void confirmPlan(planning.plan, planning.planAuthorization); }}>确认计划</button>
-                      <button type="button" className="button-secondary" onClick={cancelPlan}>取消</button>
+                        onClick={() => { if (planning.planAuthorization) void confirmPlan(planning.plan, planning.planAuthorization); }}>{t("确认计划")}</button>
+                      <button type="button" className="button-secondary" onClick={cancelPlan}>{t("取消")}</button>
                     </div>
                   ) : planning.status === "executing"
-                    ? <p className="mt-4 text-xs font-medium text-teal-700" role="status">计划已确认，正在执行只读工具…</p>
+                    ? <p className="mt-4 text-xs font-medium text-teal-700" role="status">{t("计划已确认，正在执行只读工具…")}</p>
                     : <div className="mt-4 text-xs font-medium text-teal-700" role="status">
-                      <p>计划已确认。只读工具执行成功。</p>
-                      <p>使用的 Tool：read_current_time</p>
-                      <p>当前 UTC 时间：{planning.iso}</p>
+                      <p>{t("计划已确认。只读工具执行成功。")}</p>
+                      <p>{t("使用的 Tool：read_current_time")}</p>
+                      <p>{t("当前 UTC 时间：")}<UtcTime value={planning.iso} /></p>
                     </div>}
                 </div>
               )}
-              {planning.status === "cancelled" && <p className="mt-3 text-sm text-slate-500" role="status">计划已取消。</p>}
+              {planning.status === "cancelled" && <p className="mt-3 text-sm text-slate-500" role="status">{t("计划已取消。")}</p>}
               {planning.status === "error" && (
                 <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-4" role="alert">
                   <p className="text-sm text-red-800">{planning.phase === "execution" && planning.code !== "AUTH_REQUIRED"
-                    ? "计划执行失败，请稍后重试。" : errorMessages[planning.code]}</p>
-                  {planning.code === "AUTH_REQUIRED" && <Link href="/login" className="mt-3 inline-block text-sm text-red-800 underline">重新登录</Link>}
+                    ? t("计划执行失败，请稍后重试。") : t(errorMessages[planning.code])}</p>
+                  {planning.code === "AUTH_REQUIRED" && <Link href="/login" className="mt-3 inline-block text-sm text-red-800 underline">{t("重新登录")}</Link>}
                 </div>
               )}
             </section>
           )}
 
           {(extractingCandidates || candidateError || candidates.length > 0) && (
-            <section className="border-t border-slate-100 p-5 sm:p-6" aria-label="智能记忆候选">
+            <section className="border-t border-slate-100 p-5 sm:p-6" aria-label={t("智能记忆候选")}>
               <div className="flex items-center justify-between gap-3">
-                <h3 className="text-sm font-semibold">智能记忆建议</h3>
-                <Link href="/memory" className="text-xs font-medium text-teal-700 hover:text-teal-900">管理个人记忆</Link>
+                <h3 className="text-sm font-semibold">{t("智能记忆建议")}</h3>
+                <Link href="/memory" className="text-xs font-medium text-teal-700 hover:text-teal-900">{t("管理个人记忆")}</Link>
               </div>
-              {extractingCandidates && <p className="mt-2 text-xs text-slate-500" role="status">正在分析本轮消息…</p>}
-              {candidateError && <p className="mt-2 text-xs text-amber-700">本次记忆建议未生成，聊天回复不受影响。</p>}
+              {extractingCandidates && <p className="mt-2 text-xs text-slate-500" role="status">{t("正在分析本轮消息…")}</p>}
+              {candidateError && <p className="mt-2 text-xs text-amber-700">{t("本次记忆建议未生成，聊天回复不受影响。")}</p>}
               <div className="mt-3 space-y-3">
                 {candidates.map((candidate) => (
                   <div key={candidate.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
                     <p className="text-sm text-slate-800">{candidate.content}</p>
                     <p className="mt-1 text-xs text-slate-500">{candidate.reason}</p>
                     <div className="mt-3 flex gap-2">
-                      {candidate.status === "saved" ? <span className="text-xs text-teal-700">已保存到 Personal Memory</span> : candidate.status === "duplicate" ? <span className="text-xs text-amber-700">已有相同记忆，未重复保存。</span> : (
+                      {candidate.status === "saved" ? <span className="text-xs text-teal-700">{t("已保存到 Personal Memory")}</span> : candidate.status === "duplicate" ? <span className="text-xs text-amber-700">{t("已有相同记忆，未重复保存。")}</span> : (
                         <>
                           <button type="button" className="button-primary" disabled={candidate.status === "saving"} onClick={() => void saveCandidate(candidate)}>
-                            {candidate.status === "saving" ? "保存中…" : candidate.status === "error" ? "重试保存" : "确认保存"}
+                            {candidate.status === "saving" ? t("保存中…") : candidate.status === "error" ? t("重试保存") : t("确认保存")}
                           </button>
-                          <button type="button" className="button-secondary" disabled={candidate.status === "saving"} onClick={() => setCandidates((current) => current.filter((entry) => entry.id !== candidate.id))}>忽略</button>
-                          {candidate.status === "error" && <span className="self-center text-xs text-red-700">保存失败，可重试。</span>}
+                          <button type="button" className="button-secondary" disabled={candidate.status === "saving"} onClick={() => setCandidates((current) => current.filter((entry) => entry.id !== candidate.id))}>{t("忽略")}</button>
+                          {candidate.status === "error" && <span className="self-center text-xs text-red-700">{t("保存失败，可重试。")}</span>}
                         </>
                       )}
                     </div>
@@ -841,8 +871,7 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
 
           <form onSubmit={submit} className="border-t border-slate-100 p-5 sm:p-6">
             <label htmlFor="agent-message" className="mb-2 block text-xs font-medium text-slate-500">
-              发送消息
-            </label>
+              {t("发送消息")}</label>
             <textarea
               id="agent-message"
               value={draft}
@@ -851,33 +880,32 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
               maxLength={MAX_MESSAGE_CHARACTERS}
               rows={3}
               disabled={isSending || !!retryRequest || providersLoading || providersError}
-              placeholder="输入你想讨论的问题…"
+              placeholder={t("输入你想讨论的问题…")}
               aria-describedby="agent-message-hint"
               className="w-full resize-y rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm leading-6 disabled:opacity-60"
             />
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
               <p id="agent-message-hint" className="text-xs text-slate-400">
-                Enter 发送 · Shift+Enter 换行 · 最多 {MAX_MESSAGE_CHARACTERS} 字符 · 最近 {MAX_MESSAGES} 条消息作为上下文 · {draft.length}/{MAX_MESSAGE_CHARACTERS}
+                {t("Enter 发送 · Shift+Enter 换行 · 最多")}{MAX_MESSAGE_CHARACTERS} {" "}{t("字符 · 最近")}{" "}{MAX_MESSAGES} {" "}{t("条消息作为上下文 ·")}{" "}{formatNumber(draft.length)}/{MAX_MESSAGE_CHARACTERS}
               </p>
               <div className="flex gap-2">
                 <button type="button" disabled={!canPlan} className="button-secondary" onClick={() => void createPlan()}>
-                  {planning.status === "generating" ? "正在制定计划…" : "制定计划"}
+                  {planning.status === "generating" ? t("正在制定计划…") : t("制定计划")}
                 </button>
                 <button type="submit" disabled={!canSend} className="button-primary">
-                  {isSending ? "AI 正在响应…" : "发送消息 ↑"}
+                  {isSending ? t("AI 正在响应…") : t("发送消息 ↑")}
                 </button>
               </div>
             </div>
             {draft.trim().length > MAX_PLAN_TASK_CHARS && (
-              <p className="mt-3 text-xs text-amber-700">制定计划的任务最多 {MAX_PLAN_TASK_CHARS} 字符。</p>
+              <p className="mt-3 text-xs text-amber-700">{t("制定计划的任务最多")}{" "}{MAX_PLAN_TASK_CHARS} {" "}{t("字符。")}</p>
             )}
             {!providersLoading && !providersError && selectedProvider !== "auto" && !selectedStatus?.configured && (
               <p className="mt-3 text-xs text-amber-700">
-                {providerLabels[selectedProvider]} 尚未配置。请切换到可用 Provider。
-              </p>
+                {providerLabels[selectedProvider]} {t("尚未配置。请切换到可用 Provider。")}</p>
             )}
             {draft.trim().length > MAX_MESSAGE_CHARACTERS && (
-              <p className="mt-3 text-xs text-red-700">单条消息超过 Gateway 限制，请缩短后发送。</p>
+              <p className="mt-3 text-xs text-red-700">{t("单条消息超过 Gateway 限制，请缩短后发送。")}</p>
             )}
           </form>
         </section>
@@ -889,18 +917,23 @@ function AgentWorkspaceSession({ sessionKey }: { sessionKey: string }) {
             model={selectedStatus?.model}
           />
           <section className="panel">
-            <h2 className="text-sm font-semibold">当前能力边界</h2>
+            <h2 className="text-sm font-semibold">{t("当前能力边界")}</h2>
             <ul className="mt-3 space-y-2 text-xs leading-5 text-slate-500">
-              <li>✓ 通过 AI Gateway 调用所选 Provider</li>
-              <li>✓ 当前页面内存中的多轮对话</li>
-              <li>✓ Memory Context 在服务端按账号隔离并限制注入数量</li>
-              <li>✓ 可主动开启知识库关键词辅助回答，并显示实际来源</li>
-              <li>○ 语义 RAG 与工具执行尚未接入</li>
-              <li>○ Local Connector 尚未实现</li>
+              <li>{t("✓ 通过 AI Gateway 调用所选 Provider")}</li>
+              <li>{t("✓ 当前页面内存中的多轮对话")}</li>
+              <li>{t("✓ Memory Context 在服务端按账号隔离并限制注入数量")}</li>
+              <li>{t("✓ 可主动开启知识库关键词辅助回答，并显示实际来源")}</li>
+              <li>{t("○ 语义 RAG 与工具执行尚未接入")}</li>
+              <li>{t("○ Local Connector 尚未实现")}</li>
             </ul>
           </section>
         </div>
       </div>
     </>
   );
+}
+
+function UtcTime({ value }: { value: string }) {
+  const { date } = useI18n();
+  return <time dateTime={value}>{date(value, { dateStyle: "full", timeStyle: "long", timeZone: "UTC" })}</time>;
 }

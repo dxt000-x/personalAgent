@@ -8,6 +8,7 @@ export type AIErrorCode =
   | "PROVIDER_AUTH_FAILED"
   | "PROVIDER_REQUEST_REJECTED"
   | "PROVIDER_ERROR"
+  | "PLAN_INVALID_OUTPUT"
   | "RATE_LIMITED"
   | "CLOUD_QUOTA_EXCEEDED"
   | "QUOTA_UNAVAILABLE"
@@ -25,6 +26,7 @@ const errorDetails: Record<AIErrorCode, { status: number; message: string }> = {
   PROVIDER_AUTH_FAILED: { status: 502, message: "模型服务认证或权限校验失败，请检查服务配置。" },
   PROVIDER_REQUEST_REJECTED: { status: 502, message: "模型服务拒绝了本次请求，请检查模型配置后重试。" },
   PROVIDER_ERROR: { status: 502, message: "模型服务暂时不可用。" },
+  PLAN_INVALID_OUTPUT: { status: 502, message: "模型返回的计划格式无效，未生成可执行计划。" },
   RATE_LIMITED: { status: 429, message: "模型服务请求过于频繁，请稍后重试。" },
   CLOUD_QUOTA_EXCEEDED: { status: 429, message: "今日云端 AI 使用次数已达到上限，请于下一个 UTC 日期重置后再试。" },
   QUOTA_UNAVAILABLE: { status: 503, message: "云端 AI 使用额度暂时无法核验，请稍后重试。" },
@@ -37,6 +39,7 @@ const errorDetails: Record<AIErrorCode, { status: number; message: string }> = {
 
 export class AIGatewayError extends Error {
   readonly status: number;
+  quota?: import("./types").CloudQuotaSnapshot;
 
   constructor(readonly code: AIErrorCode, status?: number) {
     super(errorDetails[code].message);

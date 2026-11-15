@@ -7,7 +7,7 @@ export default function SettingsPage() {
       <PageHeader
         eyebrow="MAKE IT PERSONAL"
         title="Settings · 设置"
-        description="配置未来的模型、Agent 自主程度与本地能力。当前仅为 UI 演示。"
+        description="查看模型服务配置状态，了解实际能力与设置预览的边界。"
       />
       <SettingsPanel />
     </>

@@ -14,6 +14,7 @@ describe("public AI errors", () => {
     ["PROVIDER_AUTH_FAILED", 502],
     ["PROVIDER_REQUEST_REJECTED", 502],
     ["PROVIDER_ERROR", 502],
+    ["PLAN_INVALID_OUTPUT", 502],
     ["RATE_LIMITED", 429],
     ["CLOUD_QUOTA_EXCEEDED", 429],
     ["QUOTA_UNAVAILABLE", 503],

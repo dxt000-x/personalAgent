@@ -1,3 +1,4 @@
+import { withKnowledgeActions } from "@/lib/knowledge/actions";
 import { KnowledgeError, knowledgeErrorResponse } from "@/lib/knowledge/errors";
 import { assertKnowledgeOrigin, privateKnowledgeJson, requireKnowledgeContext } from "@/lib/knowledge/server";
 import { readSmallJson, validateUploadInput } from "@/lib/knowledge/validation";
@@ -11,7 +12,9 @@ export async function GET(request: Request): Promise<Response> {
     const rawOffset = new URL(request.url).searchParams.get("offset") ?? "0";
     if (!/^(0|[1-9][0-9]{0,5})$/u.test(rawOffset)) throw new KnowledgeError("INVALID_REQUEST");
     const offset = Number(rawOffset);
-    return privateKnowledgeJson({ documents: await repository.list(userId, offset) });
+    const documents = await repository.list(userId, offset);
+    const now = Date.now();
+    return privateKnowledgeJson({ documents: documents.map((document) => withKnowledgeActions(document, now)) });
   } catch (error) { return knowledgeErrorResponse(error); }
 }
 

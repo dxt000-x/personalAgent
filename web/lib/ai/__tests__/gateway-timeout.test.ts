@@ -332,6 +332,7 @@ describe("shared Gateway deadline behavior with fake providers", () => {
   });
 
   it("falls back from an upstream 404 in Auto mode and reserves cloud quota once", async () => {
+    vi.mocked(getProviderStatuses).mockResolvedValue(statuses(false));
     calls.ollama.mockRejectedValue(new AIGatewayError("TIMEOUT"));
     calls.openrouter.mockRejectedValue(new OpenAI.APIError(404, {}, "private model route detail", new Headers()));
     calls.openai.mockResolvedValue({ text: "fallback response", provider: "openai", model: "fake-openai" });

@@ -18,6 +18,13 @@ const defaultModels: Record<ProviderId, string> = {
 };
 
 const defaultOllamaBaseUrl = "http://127.0.0.1:11434";
+/** Retired on 2026-11-13; keep the existing free OpenRouter route, never a paid/provider fallback. */
+export function resolveOpenRouterModel(configuredModel: string | undefined): string {
+  const model = configuredModel?.trim() || defaultModels.openrouter;
+  return model === "liquid/lfm-2.5-2.6b" || model === "liquid/lfm-2.5-2.6b:free"
+    ? defaultModels.openrouter : model;
+}
+
 const providerIds: ProviderId[] = ["openai", "deepseek", "gemini", "ollama", "openrouter"];
 const providerTypes = { openai: "cloud", deepseek: "cloud", gemini: "cloud", ollama: "local", openrouter: "cloud" } as const;
 
@@ -44,7 +51,8 @@ function getProviderConfig(id: ProviderId) {
   };
   return {
     key: env[id].key?.trim() ?? "",
-    model: env[id].model?.trim() || defaultModels[id],
+    model: id === "openrouter" ? resolveOpenRouterModel(env[id].model)
+      : env[id].model?.trim() || defaultModels[id],
   };
 }
 

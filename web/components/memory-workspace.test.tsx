@@ -122,4 +122,30 @@ describe("Memory management workspace", () => {
     expect(screen.queryByText("账号 A 记忆")).toBeNull();
     expect(await screen.findByText("0 / 200 条")).toBeTruthy();
   });
+  it("filters loaded records without additional API calls", async () => {
+    fetchMock.mockResolvedValue(json({memories:[memory("a","我喜欢 TypeScript"),{...memory("b","准备比赛"),category:"goal"}]}));
+    render(<MemoryWorkspace/>);await screen.findByText("2 / 200 条");
+    fireEvent.change(screen.getByLabelText("搜索记忆"),{target:{value:"typescript"}});
+    expect(screen.getByText("我喜欢 TypeScript")).toBeTruthy();expect(screen.queryByText("准备比赛")).toBeNull();
+    fireEvent.change(screen.getByLabelText("按类别筛选"),{target:{value:"goal"}});expect(screen.getByText("没有匹配的记忆，请调整关键词或类别。")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button",{name:"清除筛选"}));expect(screen.getByText("准备比赛")).toBeTruthy();expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+  it("protects unsaved edit cancellation", async () => {
+    fetchMock.mockResolvedValue(json({memories:[memory("a","原文")]}));const confirm=vi.spyOn(window,"confirm").mockReturnValue(false);
+    render(<MemoryWorkspace/>);await screen.findByText("原文");fireEvent.click(screen.getByRole("button",{name:"编辑"}));
+    const form=screen.getByRole("heading",{name:"编辑个人记忆"}).closest("form")!;
+    fireEvent.change(within(form).getByRole("textbox",{name:"内容"}),{target:{value:"未保存草稿"}});fireEvent.click(within(form).getByRole("button",{name:"取消"}));
+    expect(confirm).toHaveBeenCalledWith("放弃未保存的修改吗？");expect(within(form).getByRole("textbox",{name:"内容"})).toHaveProperty("value","未保存草稿");
+    expect(screen.getByLabelText("搜索记忆")).toHaveProperty("disabled",true);confirm.mockReturnValue(true);fireEvent.click(within(form).getByRole("button",{name:"取消"}));
+    expect(screen.queryByRole("heading",{name:"编辑个人记忆"})).toBeNull();expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+  it("does not delete after confirmation is cancelled", async()=>{
+    vi.spyOn(window,"confirm").mockReturnValue(false);fetchMock.mockResolvedValue(json({memories:[memory("a","保留记忆")]}));render(<MemoryWorkspace/>);
+    await screen.findByText("保留记忆");fireEvent.click(screen.getByRole("button",{name:"删除"}));expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+  it("requires login instead of retry on expired sessions", async()=>{
+    fetchMock.mockResolvedValue(json({error:{code:"AUTH_REQUIRED"}},401));render(<MemoryWorkspace/>);
+    await screen.findByRole("link",{name:"重新登录"});expect(screen.queryByRole("button",{name:"重试"})).toBeNull();
+  });
+
 });

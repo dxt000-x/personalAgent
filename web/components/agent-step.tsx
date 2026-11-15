@@ -1,3 +1,7 @@
+"use client";
+
+import { useI18n } from "@/components/i18n-provider";
+
 export type StepStatus = "pending" | "running" | "success" | "error";
 export type ExecutionStep = {
   title: string;
@@ -26,6 +30,7 @@ export function AgentStep({
   step: ExecutionStep;
   last: boolean;
 }) {
+  const { t } = useI18n();
   const appearance = appearances[step.status];
   return (
     <li className="relative flex gap-3 pb-6 last:pb-0">
@@ -43,15 +48,15 @@ export function AgentStep({
       </span>
       <div className="min-w-0 flex-1 pt-1">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-xs font-semibold">{step.title}</p>
+          <p className="text-xs font-semibold">{t(step.title)}</p>
           <span
             className={`rounded-full px-2 py-0.5 text-[10px] ${appearance.color}`}
           >
-            {appearance.label}
+            {t(appearance.label)}
           </span>
         </div>
         <p className="mt-2 text-xs leading-5 text-slate-400">
-          {step.description}
+          {t(step.description)}
         </p>
       </div>
     </li>
