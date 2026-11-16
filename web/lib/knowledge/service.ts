@@ -16,6 +16,16 @@ export interface KnowledgeRepository {
   finishDeleting(userId: string, documentId: string): Promise<boolean>;
 }
 
+type ProcessingStage = "KNOWLEDGE_PROCESS_STATUS_REJECTED" | "KNOWLEDGE_PROCESS_CLAIM_ZERO"
+  | "KNOWLEDGE_PROCESS_CLAIM_REJECTED" | "KNOWLEDGE_PROCESS_CLAIM_ACQUIRED"
+  | "KNOWLEDGE_PROCESS_COMPLETE_REJECTED" | "KNOWLEDGE_PROCESS_READY";
+
+function recordProcessingStage(stage: ProcessingStage): void {
+  // Fixed codes only: no identities, document contents, paths or database errors.
+  // Observability must never change claim, cleanup or concurrency behavior.
+  try { console.info(stage); } catch { /* preserve the original processing result */ }
+}
+
 export async function processKnowledgeDocument(
   repository: KnowledgeRepository, userId: string, documentId: string,
 ): Promise<KnowledgeDocument> {
@@ -24,22 +34,30 @@ export async function processKnowledgeDocument(
   if (document.status === "ready") return document;
   if (document.status === "deleting" ||
       (document.status === "failed" && document.failure_kind !== "temporary")) {
+    recordProcessingStage("KNOWLEDGE_PROCESS_STATUS_REJECTED");
     throw new KnowledgeError("DOCUMENT_BUSY");
   }
   const generation = await repository.claim(userId, documentId);
   if (generation === -2) throw new KnowledgeError("PROCESS_RATE_LIMITED");
   if (generation === -1) throw new KnowledgeError("FILE_NOT_UPLOADED");
-  if (generation < 1) throw new KnowledgeError("DOCUMENT_BUSY");
+  if (generation < 1) {
+    recordProcessingStage(generation === 0
+      ? "KNOWLEDGE_PROCESS_CLAIM_ZERO" : "KNOWLEDGE_PROCESS_CLAIM_REJECTED");
+    throw new KnowledgeError("DOCUMENT_BUSY");
+  }
+  recordProcessingStage("KNOWLEDGE_PROCESS_CLAIM_ACQUIRED");
 
   try {
     const bytes = await repository.read(document.storage_path);
     if (bytes.byteLength !== document.byte_size) throw new KnowledgeError("INVALID_FILE_CONTENT");
     const chunks = await parseDocument(bytes, document.file_type);
     if (!await repository.complete(userId, documentId, generation, chunks)) {
+      recordProcessingStage("KNOWLEDGE_PROCESS_COMPLETE_REJECTED");
       throw new KnowledgeError("DOCUMENT_BUSY");
     }
     const ready = await repository.find(userId, documentId);
     if (!ready) throw new KnowledgeError("KNOWLEDGE_UNAVAILABLE");
+    recordProcessingStage("KNOWLEDGE_PROCESS_READY");
     return ready;
   } catch (error) {
     const invalidFile = error instanceof KnowledgeError && [

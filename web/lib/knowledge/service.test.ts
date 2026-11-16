@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { readFile } from "node:fs/promises";
 import { deleteKnowledgeDocument, processKnowledgeDocument, type KnowledgeRepository } from "./service";
 import { KnowledgeError } from "./errors";
@@ -284,5 +284,65 @@ describe("knowledge ingestion and cleanup", () => {
     await repo.remove(repo.documents.get(id)!.storage_path);
     expect(await repo.finishDeleting(userA, id)).toBe(true);
     expect(repo.chunks.size).toBe(0);
+  });
+});
+
+
+describe("fixed-code processing diagnostics", () => {
+  afterEach(() => vi.restoreAllMocks());
+  it("distinguishes initial status rejection without claiming", async () => {
+    const repo = new FakeRepository();
+    repo.documents.get(id)!.status = "deleting";
+    const claim = vi.spyOn(repo, "claim");
+    const log = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    await expect(processKnowledgeDocument(repo, userA, id)).rejects.toMatchObject({ code: "DOCUMENT_BUSY" });
+    expect(claim).not.toHaveBeenCalled();
+    expect(log.mock.calls).toEqual([["KNOWLEDGE_PROCESS_STATUS_REJECTED"]]);
+  });
+  it("distinguishes claim zero without reading or completing", async () => {
+    const repo = new FakeRepository();
+    vi.spyOn(repo, "claim").mockResolvedValue(0);
+    const read = vi.spyOn(repo, "read"), complete = vi.spyOn(repo, "complete");
+    const log = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    await expect(processKnowledgeDocument(repo, userA, id)).rejects.toMatchObject({ code: "DOCUMENT_BUSY" });
+    expect(log.mock.calls).toEqual([["KNOWLEDGE_PROCESS_CLAIM_ZERO"]]);
+    expect(read).not.toHaveBeenCalled();
+    expect(complete).not.toHaveBeenCalled();
+    expect(repo.documents.get(id)!.status).toBe("uploading");
+  });
+  it("distinguishes complete rejection while retaining safe temporary failure recovery", async () => {
+    const repo = new FakeRepository(); repo.failComplete = true;
+    const log = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    await expect(processKnowledgeDocument(repo, userA, id)).rejects.toMatchObject({ code: "DOCUMENT_BUSY" });
+    expect(log.mock.calls).toEqual([["KNOWLEDGE_PROCESS_CLAIM_ACQUIRED"], ["KNOWLEDGE_PROCESS_COMPLETE_REJECTED"]]);
+    expect(repo.documents.get(id)!.failure_kind).toBe("temporary");
+    expect(repo.objects.size).toBe(1);
+    repo.failComplete = false;
+    expect((await processKnowledgeDocument(repo, userA, id)).status).toBe("ready");
+  });
+  it("logs only fixed codes on success and does not process a ready document twice", async () => {
+    const repo = new FakeRepository();
+    const log = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const claim = vi.spyOn(repo, "claim");
+    await processKnowledgeDocument(repo, userA, id);
+    await processKnowledgeDocument(repo, userA, id);
+    expect(claim).toHaveBeenCalledOnce();
+    expect(log.mock.calls).toEqual([["KNOWLEDGE_PROCESS_CLAIM_ACQUIRED"], ["KNOWLEDGE_PROCESS_READY"]]);
+    const output = JSON.stringify(log.mock.calls);
+    for (const sensitive of [userA, id, "notes.txt", "source.txt"]) expect(output).not.toContain(sensitive);
+  });
+  it("does not turn missing Storage or rate limits into busy diagnostics", async () => {
+    const log = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const missing = new FakeRepository(); missing.objects.clear();
+    await expect(processKnowledgeDocument(missing, userA, id)).rejects.toMatchObject({ code: "FILE_NOT_UPLOADED" });
+    const limited = new FakeRepository(); limited.rateLimited = true;
+    await expect(processKnowledgeDocument(limited, userA, id)).rejects.toMatchObject({ code: "PROCESS_RATE_LIMITED" });
+    expect(log).not.toHaveBeenCalled();
+  });
+  it("diagnostic sink failure cannot change processing or cleanup", async () => {
+    vi.spyOn(console, "info").mockImplementation(() => { throw Error("sink unavailable"); });
+    const repo = new FakeRepository();
+    expect((await processKnowledgeDocument(repo, userA, id)).status).toBe("ready");
+    expect(repo.removed).toBe(0);
   });
 });
